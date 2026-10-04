@@ -142,6 +142,21 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
             Assert.DoesNotContain("..hidden", text, StringComparison.Ordinal);
             Assert.False(text.EndsWith(".\r\n", StringComparison.Ordinal));
             Assert.True(session.IsReusable);
+            Assert.NotEqual(0, result.CommandStartedTimestamp);
+            Assert.Equal(result.CommandStartedTimestamp, session.ArticleCommandStartedTimestamp);
+            await session.DisposeAsync();
+        }
+
+        [Fact]
+        public async Task Article_before_connect_does_not_start_the_command_timer()
+        {
+            var session = CreateSession();
+
+            using var result = await session.DownloadArticleAsync("<a@b>", CancellationToken.None);
+
+            Assert.Equal(ArticleRetrievalKind.ProviderFailure, result.Kind);
+            Assert.Equal(0, result.CommandStartedTimestamp);
+            Assert.Equal(0, session.ArticleCommandStartedTimestamp);
             await session.DisposeAsync();
         }
 

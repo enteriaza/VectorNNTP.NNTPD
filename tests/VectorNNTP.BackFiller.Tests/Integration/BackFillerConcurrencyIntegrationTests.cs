@@ -25,7 +25,7 @@ namespace VectorNNTP.BackFiller.Tests.Integration
                 TimeSpan.FromSeconds(2),
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<NntpProviderRegistry>.Instance);
             var downHandler = new ProviderArticleWorkHandler(
-                new NntpArticleRetriever(downRegistry, Microsoft.Extensions.Logging.Abstractions.NullLogger<NntpArticleRetriever>.Instance),
+                new NntpArticleRetriever(downRegistry),
                 harness.Retention);
             var downPipeline = new ArticleWorkDeliveryPipeline(downHandler, harness.Publisher, 1024);
             var providerFailure = await downPipeline.ProcessAsync(

@@ -1,4 +1,7 @@
+using System.Diagnostics;
+using System.Globalization;
 using System.Text;
+using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.Common.Configuration;
@@ -35,6 +38,24 @@ namespace VectorNNTP.BackFiller.ArticleWork
 
         /// <summary>Server id used with <see cref="NntpSharedConfiguration.DnsSuffix"/> for this article's FQDN. Zero keeps the injected parser.</summary>
         private readonly int _serverId;
+
+        /// <summary>Logger for the single article-processing Information event.</summary>
+        private readonly ILogger<ProviderArticleWorkHandler> _logger;
+
+        /// <summary>Log outcome when the article was retrieved and accepted.</summary>
+        private const string OutcomeFound = "Found";
+
+        /// <summary>Log outcome when the provider reports that the article does not exist.</summary>
+        private const string OutcomeNotFound = "NotFound";
+
+        /// <summary>Log outcome when the retrieved article fails validation.</summary>
+        private const string OutcomeValidationFailed = "ValidationFailed";
+
+        /// <summary>Log outcome for transport and every other terminal failure.</summary>
+        private const string OutcomeFailed = "Failed";
+
+        /// <summary>Placeholder already used by Article Work logs when an identity was not resolved.</summary>
+        private const string UnresolvedIdentity = "(none)";
 
         /// <summary>Initializes the handler with the test-host Path identity <c>backfiller.test</c>.</summary>
         /// <param name="retriever">NNTP ARTICLE retriever.</param>
@@ -80,12 +101,14 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// <param name="parser">CanonicalV1 parser used when <paramref name="serverId"/> is outside the accepted range.</param>
         /// <param name="sharedConfiguration">Published <c>nntpsharedconfig</c>. Captured once per article.</param>
         /// <param name="serverId">BackFiller server id combined with <c>dnssuffix</c> for the Path hop and retained endpoint.</param>
+        /// <param name="logger">Article-processing logger. Null uses <see cref="NullLogger{T}.Instance"/>.</param>
         public ProviderArticleWorkHandler(
             INntpArticleRetriever retriever,
             IArticleRetentionAuthority retention,
             NntpArticleParser parser,
             INntpSharedConfigurationCatalogue? sharedConfiguration,
-            int serverId)
+            int serverId,
+            ILogger<ProviderArticleWorkHandler>? logger = null)
         {
             ArgumentNullException.ThrowIfNull(retriever);
             ArgumentNullException.ThrowIfNull(retention);
@@ -95,6 +118,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
             _parser = parser;
             _sharedConfiguration = sharedConfiguration;
             _serverId = serverId;
+            _logger = logger ?? NullLogger<ProviderArticleWorkHandler>.Instance;
         }
 
         /// <summary>Gets the last retrieval classification (tests).</summary>
@@ -160,6 +184,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
             if (cancellationToken.IsCancellationRequested)
             {
                 LastKind = ArticleRetrievalKind.Cancelled;
+                LogArticleProcessed(item, OutcomeFailed, string.Empty, commandStartedTimestamp: 0);
                 return new ArticleWorkHandlerResult(ArticleWorkOutcome.Cancelled, null);
             }
 
@@ -203,10 +228,16 @@ namespace VectorNNTP.BackFiller.ArticleWork
                         cancellationToken)
                     .ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (Exception ex)
             {
-                LastKind = ArticleRetrievalKind.Cancelled;
-                return new ArticleWorkHandlerResult(ArticleWorkOutcome.Cancelled, null);
+                LogArticleProcessed(item, OutcomeFailed, string.Empty, CommandTimestamp(ex));
+                if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                {
+                    LastKind = ArticleRetrievalKind.Cancelled;
+                    return new ArticleWorkHandlerResult(ArticleWorkOutcome.Cancelled, null);
+                }
+
+                throw;
             }
 
             using (retrieval)
@@ -214,12 +245,16 @@ namespace VectorNNTP.BackFiller.ArticleWork
                 LastKind = retrieval.Kind;
                 if (retrieval.Kind != ArticleRetrievalKind.ArticleRetrieved)
                 {
-                    return MapRetrieval(retrieval);
+                    var mapped = MapRetrieval(retrieval);
+                    var (outcome, reason) = RetrievalLog(retrieval);
+                    LogArticleProcessed(item, outcome, reason, retrieval.CommandStartedTimestamp);
+                    return mapped;
                 }
 
                 if (!consumed)
                 {
                     LastRetentionKind = ArticleRetentionKind.InvalidPayload;
+                    LogArticleProcessed(item, OutcomeFailed, string.Empty, retrieval.CommandStartedTimestamp);
                     return new ArticleWorkHandlerResult(
                         ArticleWorkOutcome.RetentionRejected,
                         "Retrieved article payload could not be transferred into retention.");
@@ -227,23 +262,33 @@ namespace VectorNNTP.BackFiller.ArticleWork
 
                 if (!created.IsAccepted)
                 {
-                    if (created.ParseFailure != NntpArticleParseFailureCode.None)
-                    {
-                        return MapParseFailure(created.ParseFailure);
-                    }
-
-                    return new ArticleWorkHandlerResult(
-                        ArticleWorkOutcome.InvalidArticle,
-                        created.MaterializeFailure.ToString());
+                    var rejected = created.ParseFailure != NntpArticleParseFailureCode.None
+                        ? MapParseFailure(created.ParseFailure)
+                        : new ArticleWorkHandlerResult(
+                            ArticleWorkOutcome.InvalidArticle,
+                            created.MaterializeFailure.ToString());
+                    LogArticleProcessed(
+                        item,
+                        OutcomeValidationFailed,
+                        rejected.Error ?? string.Empty,
+                        retrieval.CommandStartedTimestamp);
+                    return rejected;
                 }
 
                 var record = created.Record;
                 if (!NntpArticleIdentity.MatchesRequest(record.MessageId, item.Request.MessageId))
                 {
+                    LogArticleProcessed(
+                        item,
+                        OutcomeValidationFailed,
+                        "MessageIdMismatch",
+                        retrieval.CommandStartedTimestamp);
                     return new ArticleWorkHandlerResult(
                         ArticleWorkOutcome.InvalidArticle,
                         "MessageIdMismatch");
                 }
+
+                LogArticleProcessed(item, OutcomeFound, string.Empty, retrieval.CommandStartedTimestamp);
 
                 if (!System.Runtime.InteropServices.MemoryMarshal.TryGetArray(record.ArtData, out var segment)
                     || segment.Array is null
@@ -286,6 +331,81 @@ namespace VectorNNTP.BackFiller.ArticleWork
                     VatpPort: null,
                     ArticleId: null);
             }
+        }
+
+        /// <summary>
+        /// Writes one article-processing Information event. Does not include the article body.
+        /// </summary>
+        /// <param name="item">Work item whose Message-ID and backbone are logged.</param>
+        /// <param name="outcome">Terminal processing outcome.</param>
+        /// <param name="reason">Validation failure reason. Empty for every other outcome.</param>
+        /// <param name="commandStartedTimestamp">ARTICLE send timestamp. Zero when the command was not sent.</param>
+        private void LogArticleProcessed(
+            ArticleWorkItem item,
+            string outcome,
+            string reason,
+            long commandStartedTimestamp)
+        {
+            ArticleWorkLogMessages.ArticleProcessed(
+                _logger,
+                DisplayIdentity(item.Request.MessageId),
+                DisplayIdentity(item.Request.Backbone),
+                outcome,
+                reason,
+                FormatElapsed(commandStartedTimestamp));
+        }
+
+        /// <summary>Maps a non-retrieved download to the article-processing outcome and validation reason.</summary>
+        /// <param name="retrieval">Download that is not <see cref="ArticleRetrievalKind.ArticleRetrieved"/>.</param>
+        /// <returns>
+        /// <c>NotFound</c> for a miss, <c>ValidationFailed</c> with <see cref="ArticleRetrievalResult.Reason"/> for an invalid article,
+        /// and <c>Failed</c> for every other kind.
+        /// </returns>
+        private static (string Outcome, string Reason) RetrievalLog(ArticleRetrievalResult retrieval)
+        {
+            return retrieval.Kind switch
+            {
+                ArticleRetrievalKind.ArticleNotFound => (OutcomeNotFound, string.Empty),
+                ArticleRetrievalKind.InvalidArticle => (OutcomeValidationFailed, retrieval.Reason),
+                _ => (OutcomeFailed, string.Empty),
+            };
+        }
+
+        /// <summary>Reads the ARTICLE send timestamp stored on <paramref name="exception"/>.</summary>
+        /// <param name="exception">Exception from retrieval.</param>
+        /// <returns>The stored timestamp, or zero when ARTICLE was not sent.</returns>
+        private static long CommandTimestamp(Exception exception)
+        {
+            return exception.Data[ArticleRetrievalResult.CommandStartedTimestampKey] is long timestamp
+                ? timestamp
+                : 0L;
+        }
+
+        /// <summary>Formats elapsed seconds from an ARTICLE send timestamp as <c>0.000</c>.</summary>
+        /// <param name="commandStartedTimestamp">Timestamp from <see cref="Stopwatch.GetTimestamp"/>. Zero formats as <c>0.000</c>.</param>
+        /// <returns>Invariant three-decimal seconds.</returns>
+        private static string FormatElapsed(long commandStartedTimestamp)
+        {
+            if (commandStartedTimestamp == 0)
+            {
+                return "0.000";
+            }
+
+            var seconds = Stopwatch.GetElapsedTime(commandStartedTimestamp).TotalSeconds;
+            if (double.IsNaN(seconds) || seconds < 0)
+            {
+                seconds = 0;
+            }
+
+            return seconds.ToString("0.000", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>Uses the request identity, or the Article Work <c>(none)</c> placeholder when it is missing.</summary>
+        /// <param name="value">Message-ID or backbone from the request.</param>
+        /// <returns><paramref name="value"/> when it contains a non-whitespace character; otherwise <c>(none)</c>.</returns>
+        private static string DisplayIdentity(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? UnresolvedIdentity : value;
         }
 
         /// <summary>Maps a parse-failure code to a terminal invalid-article result.</summary>

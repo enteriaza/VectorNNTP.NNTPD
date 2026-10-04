@@ -29,19 +29,13 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <summary>Registry whose pools supply backbone-scoped sessions.</summary>
         private readonly NntpProviderRegistry _registry;
 
-        /// <summary>Logger passed to <see cref="NntpLogMessages.RetrievalFailed"/>.</summary>
-        private readonly ILogger<NntpArticleRetriever> _logger;
-
-        /// <summary>Stores the registry and logger used for each retrieval.</summary>
+        /// <summary>Stores the registry used for each retrieval.</summary>
         /// <param name="registry">Pool registry. Lookups use <see cref="ArticleWorkRequest.Backbone"/>.</param>
-        /// <param name="logger">Logger for non-success download results.</param>
-        /// <exception cref="ArgumentNullException"><paramref name="registry"/> or <paramref name="logger"/> is null.</exception>
-        public NntpArticleRetriever(NntpProviderRegistry registry, ILogger<NntpArticleRetriever> logger)
+        /// <exception cref="ArgumentNullException"><paramref name="registry"/> is null.</exception>
+        public NntpArticleRetriever(NntpProviderRegistry registry)
         {
             ArgumentNullException.ThrowIfNull(registry);
-            ArgumentNullException.ThrowIfNull(logger);
             _registry = registry;
-            _logger = logger;
         }
 
         /// <summary>
@@ -69,8 +63,7 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <remarks>
         /// A download result with <see cref="ArticleRetrievalResult.SessionReusable"/> false is marked with
         /// <see cref="NntpSessionLease.Retire"/> before the lease is disposed.
-        /// Kinds other than <see cref="ArticleRetrievalKind.ArticleRetrieved"/> from download are logged with
-        /// <see cref="NntpLogMessages.RetrievalFailed"/>. Results returned before download are not.
+        /// This method does not write the article-processing Information event. The handler logs that once.
         /// Other acquisition exceptions, including a disposed pool and cancellation that is not
         /// <paramref name="cancellationToken"/>, propagate.
         /// </remarks>
@@ -120,29 +113,41 @@ namespace VectorNNTP.BackFiller.Nntp
 
             await using (lease)
             {
-                var result = await lease.Session
-                    .DownloadArticleAsync(
-                        item.Request.MessageId,
-                        cancellationToken,
-                        consumePayload,
-                        maxArticleBytes)
-                    .ConfigureAwait(false);
-                if (!result.SessionReusable)
+                try
                 {
-                    lease.Retire();
-                }
+                    var result = await lease.Session
+                        .DownloadArticleAsync(
+                            item.Request.MessageId,
+                            cancellationToken,
+                            consumePayload,
+                            maxArticleBytes)
+                        .ConfigureAwait(false);
+                    if (!result.SessionReusable)
+                    {
+                        lease.Retire();
+                    }
 
-                if (result.Kind != ArticleRetrievalKind.ArticleRetrieved)
+                    return result;
+                }
+                catch (Exception ex)
                 {
-                    NntpLogMessages.RetrievalFailed(
-                        _logger,
-                        item.Request.Backbone,
-                        result.Kind,
-                        result.StatusCode,
-                        result.Reason);
+                    RememberCommandTimestamp(ex, lease.Session.ArticleCommandStartedTimestamp);
+                    throw;
                 }
+            }
+        }
 
-                return result;
+        /// <summary>
+        /// Copies a non-zero ARTICLE send timestamp onto <paramref name="exception"/> when download did not return a result.
+        /// </summary>
+        /// <param name="exception">Exception propagating from <see cref="NntpProviderSession.DownloadArticleAsync"/>.</param>
+        /// <param name="commandStartedTimestamp">Session timestamp. Zero means ARTICLE was not sent.</param>
+        private static void RememberCommandTimestamp(Exception exception, long commandStartedTimestamp)
+        {
+            if (commandStartedTimestamp != 0
+                && exception.Data[ArticleRetrievalResult.CommandStartedTimestampKey] is not long)
+            {
+                exception.Data[ArticleRetrievalResult.CommandStartedTimestampKey] = commandStartedTimestamp;
             }
         }
     }

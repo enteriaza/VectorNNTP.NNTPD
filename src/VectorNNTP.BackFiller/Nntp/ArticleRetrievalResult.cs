@@ -17,6 +17,16 @@ namespace VectorNNTP.BackFiller.Nntp
         RetrievedArticle? Article,
         bool SessionReusable) : IDisposable
     {
+        /// <summary>
+        /// <see cref="System.Diagnostics.Stopwatch"/> timestamp key stored on an exception that leaves download after ARTICLE was sent.
+        /// </summary>
+        internal const string CommandStartedTimestampKey = "VectorNNTP.BackFiller.ArticleCommandStartedTimestamp";
+
+        /// <summary>
+        /// <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> captured immediately before ARTICLE was written.
+        /// Zero when the command was not sent.
+        /// </summary>
+        internal long CommandStartedTimestamp { get; set; }
         /// <summary>Disposes the owned <see cref="Article"/> when one is present.</summary>
         public void Dispose()
         {

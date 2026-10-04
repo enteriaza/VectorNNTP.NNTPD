@@ -317,5 +317,26 @@ namespace VectorNNTP.BackFiller.ArticleWork
             string backbone,
             string queue,
             string reason);
+
+        /// <summary>
+        /// Writes the single Information event for one processed ARTICLE after validation or a terminal outcome.
+        /// </summary>
+        /// <param name="logger">Logger that receives the event.</param>
+        /// <param name="messageId">Request Message-ID, or <c>(none)</c> when it was not resolved.</param>
+        /// <param name="backbone">Request backbone, or <c>(none)</c> when it was not resolved.</param>
+        /// <param name="outcome"><c>Found</c>, <c>NotFound</c>, <c>ValidationFailed</c>, or <c>Failed</c>.</param>
+        /// <param name="reason">Validation failure reason. Empty when <paramref name="outcome"/> is not <c>ValidationFailed</c>.</param>
+        /// <param name="elapsed">Elapsed seconds from the ARTICLE send, formatted <c>0.000</c>. <c>0.000</c> when ARTICLE was not sent.</param>
+        [LoggerMessage(
+            EventId = 5321,
+            Level = LogLevel.Information,
+            Message = "Article processed messageId={MessageId} backbone={Backbone} outcome={Outcome} reason={Reason} elapsed={Elapsed} s")]
+        internal static partial void ArticleProcessed(
+            ILogger logger,
+            string messageId,
+            string backbone,
+            string outcome,
+            string reason,
+            string elapsed);
     }
 }

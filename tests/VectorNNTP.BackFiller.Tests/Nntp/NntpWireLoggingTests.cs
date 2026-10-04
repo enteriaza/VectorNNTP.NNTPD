@@ -120,6 +120,14 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
             Assert.Equal(
                 1,
                 logger.Messages.Count(static message => message.Contains("RX: ARTICLE payload complete", StringComparison.Ordinal)));
+            Assert.Contains(
+                logger.Entries,
+                static entry => entry.Level == LogLevel.Debug
+                    && entry.Message.Contains("TX: ARTICLE <wire-log@example.invalid>", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                logger.Entries,
+                static entry => entry.Level == LogLevel.Information
+                    && entry.Message.Contains("Article processed", StringComparison.Ordinal));
             Assert.All(
                 logger.Entries.Where(static entry => entry.Message.Contains("ARTICLE", StringComparison.Ordinal)),
                 static entry => Assert.Equal(LogLevel.Debug, entry.Level));

@@ -218,7 +218,7 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
                 TimeSpan.FromSeconds(2),
                 NullLogger<NntpProviderRegistry>.Instance);
             var handler = new ProviderArticleWorkHandler(
-                new NntpArticleRetriever(registry, NullLogger<NntpArticleRetriever>.Instance),
+                new NntpArticleRetriever(registry),
                 CreateRetention(maxBytes: 1));
             var publisher = new RecordingArticleWorkResponsePublisher();
             var pipeline = new ArticleWorkDeliveryPipeline(handler, publisher, 1024);
@@ -250,8 +250,7 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
                         factory,
                         NntpSessionOptions.Default,
                         TimeSpan.FromSeconds(2),
-                        NullLogger<NntpProviderRegistry>.Instance),
-                    NullLogger<NntpArticleRetriever>.Instance),
+                        NullLogger<NntpProviderRegistry>.Instance)),
                 CreateRetention(maxBytes: 1024));
             var publisher = new RecordingArticleWorkResponsePublisher();
             var pipeline = new ArticleWorkDeliveryPipeline(handler, publisher, 1024);
@@ -287,7 +286,7 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
                 TimeSpan.FromSeconds(2),
                 NullLogger<NntpProviderRegistry>.Instance);
             var handler = new ProviderArticleWorkHandler(
-                new NntpArticleRetriever(registry, NullLogger<NntpArticleRetriever>.Instance),
+                new NntpArticleRetriever(registry),
                 CreateRetention(maxBytes: 1024 * 1024));
             var publisher = new RecordingArticleWorkResponsePublisher();
             return (handler, publisher, new ArticleWorkDeliveryPipeline(handler, publisher, 1024));

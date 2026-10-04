@@ -131,7 +131,7 @@ namespace VectorNNTP.BackFiller.Tests.Fixtures
                 Options.Create(new AcmeCloudflareOptions()),
                 NullLogger<ProviderAccountConfigurationService>.Instance);
             var handler = new ProviderArticleWorkHandler(
-                new NntpArticleRetriever(registry, NullLogger<NntpArticleRetriever>.Instance),
+                new NntpArticleRetriever(registry),
                 retention,
                 new NntpArticleParser(runtime.Fqdn));
 

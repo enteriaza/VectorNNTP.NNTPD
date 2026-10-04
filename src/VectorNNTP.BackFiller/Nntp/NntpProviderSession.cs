@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using VectorNNTP.Common.Articles;
@@ -43,6 +44,12 @@ namespace VectorNNTP.BackFiller.Nntp
 
         /// <summary>Set when a command failure must keep the session out of the idle pool. Sticky for the session lifetime.</summary>
         private bool _unhealthy;
+
+        /// <summary>
+        /// <see cref="Stopwatch.GetTimestamp"/> taken immediately before ARTICLE bytes are written.
+        /// Zero until that write is attempted, and reset to zero at the start of each download.
+        /// </summary>
+        internal long ArticleCommandStartedTimestamp { get; private set; }
 
         /// <summary>Initializes a session that is not yet connected.</summary>
         /// <param name="provider">Upstream provider identity and capacity.</param>
@@ -217,6 +224,7 @@ namespace VectorNNTP.BackFiller.Nntp
             Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult>? consumePayload = null,
             int maxArticleBytes = 0)
         {
+            ArticleCommandStartedTimestamp = 0;
             if (maxArticleBytes <= 0)
             {
                 maxArticleBytes = _options.MaxArticleBytes;
@@ -225,20 +233,20 @@ namespace VectorNNTP.BackFiller.Nntp
             ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
             if (_reader is null || _stream is null || State is NntpSessionState.Closed or NntpSessionState.Retiring)
             {
-                return ArticleRetrievalResult.Failed(
+                return WithCommandTimestamp(ArticleRetrievalResult.Failed(
                     ArticleRetrievalKind.ProviderFailure,
                     null,
                     "NNTP session is not ready.",
-                    sessionReusable: false);
+                    sessionReusable: false));
             }
 
             if (!NntpProtocolIo.TryEncodeAscii(messageId, out var messageIdBytes))
             {
-                return ArticleRetrievalResult.Failed(
+                return WithCommandTimestamp(ArticleRetrievalResult.Failed(
                     ArticleRetrievalKind.ProviderFailure,
                     null,
                     "Message-ID is not ASCII and cannot be sent on the NNTP wire.",
-                    sessionReusable: true);
+                    sessionReusable: true));
             }
 
             await _busy.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -254,6 +262,7 @@ namespace VectorNNTP.BackFiller.Nntp
                     NntpProtocolIo.ArticlePrefix.CopyTo(command.AsSpan());
                     messageIdBytes.CopyTo(command.AsSpan(NntpProtocolIo.ArticlePrefix.Length));
                     NntpProtocolIo.Crlf.CopyTo(command.AsSpan(NntpProtocolIo.ArticlePrefix.Length + messageIdBytes.Length));
+                    ArticleCommandStartedTimestamp = Stopwatch.GetTimestamp();
                     await WriteCommandAsync(
                             "ARTICLE " + messageId,
                             command.AsMemory(0, commandLength),
@@ -310,15 +319,15 @@ namespace VectorNNTP.BackFiller.Nntp
                         if (payload.Length == 0 || !NntpProtocolIo.HasHeaderBodySeparator(payload))
                         {
                             State = NntpSessionState.Ready;
-                            return ArticleRetrievalResult.Failed(
+                            return WithCommandTimestamp(ArticleRetrievalResult.Failed(
                                 ArticleRetrievalKind.InvalidArticle,
                                 code,
                                 "ARTICLE payload is missing a header/body separator.",
-                                sessionReusable: true);
+                                sessionReusable: true));
                         }
 
                         State = NntpSessionState.Ready;
-                        return ArticleRetrievalResult.Retrieved(code, text, new RetrievedArticle(payload));
+                        return WithCommandTimestamp(ArticleRetrievalResult.Retrieved(code, text, new RetrievedArticle(payload)));
                     }
 
                     var accepted = false;
@@ -370,25 +379,25 @@ namespace VectorNNTP.BackFiller.Nntp
                     if (!accepted)
                     {
                         State = NntpSessionState.Ready;
-                        return ArticleRetrievalResult.Failed(
+                        return WithCommandTimestamp(ArticleRetrievalResult.Failed(
                             ArticleRetrievalKind.InvalidArticle,
                             code,
                             "ARTICLE payload is missing a header/body separator.",
-                            sessionReusable: true);
+                            sessionReusable: true));
                     }
 
                     State = NntpSessionState.Ready;
-                    return ArticleRetrievalResult.Retrieved(code, text);
+                    return WithCommandTimestamp(ArticleRetrievalResult.Retrieved(code, text));
                 }
 
                 if (code == NntpStatusCode.NoArticleWithMessageId)
                 {
                     State = NntpSessionState.Ready;
-                    return ArticleRetrievalResult.Failed(
+                    return WithCommandTimestamp(ArticleRetrievalResult.Failed(
                         ArticleRetrievalKind.ArticleNotFound,
                         code,
                         text,
-                        sessionReusable: true);
+                        sessionReusable: true));
                 }
 
                 if (NntpStatusCode.IsAuthenticationFailure(code))
@@ -431,7 +440,11 @@ namespace VectorNNTP.BackFiller.Nntp
                 _ = _busy.Release();
             }
 
-            consumerError?.Throw();
+            if (consumerError is not null)
+            {
+                RememberCommandTimestamp(consumerError.SourceException);
+                consumerError.Throw();
+            }
 
             throw new InvalidOperationException("ARTICLE download ended without a result.");
         }
@@ -936,7 +949,31 @@ namespace VectorNNTP.BackFiller.Nntp
         {
             _unhealthy = true;
             State = NntpSessionState.Retiring;
-            return ArticleRetrievalResult.Failed(kind, code, reason, sessionReusable: false);
+            return WithCommandTimestamp(ArticleRetrievalResult.Failed(kind, code, reason, sessionReusable: false));
+        }
+
+        /// <summary>
+        /// Copies <see cref="ArticleCommandStartedTimestamp"/> onto <paramref name="result"/>.
+        /// Zero means ARTICLE was not sent.
+        /// </summary>
+        /// <param name="result">Retrieval result about to be returned.</param>
+        /// <returns>The same result, with the command timestamp stored.</returns>
+        private ArticleRetrievalResult WithCommandTimestamp(ArticleRetrievalResult result)
+        {
+            result.CommandStartedTimestamp = ArticleCommandStartedTimestamp;
+            return result;
+        }
+
+        /// <summary>
+        /// Stores <see cref="ArticleCommandStartedTimestamp"/> on <paramref name="exception"/> when ARTICLE was sent.
+        /// </summary>
+        /// <param name="exception">Exception that leaves <see cref="DownloadArticleAsync"/> after the command timestamp is known.</param>
+        private void RememberCommandTimestamp(Exception exception)
+        {
+            if (ArticleCommandStartedTimestamp != 0)
+            {
+                exception.Data[ArticleRetrievalResult.CommandStartedTimestampKey] = ArticleCommandStartedTimestamp;
+            }
         }
 
         /// <summary>Records whether <paramref name="reusable"/> may return to the pool and returns the matching failure.</summary>

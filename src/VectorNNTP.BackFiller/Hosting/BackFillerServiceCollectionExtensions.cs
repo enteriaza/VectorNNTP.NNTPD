@@ -248,7 +248,8 @@ namespace VectorNNTP.BackFiller.Hosting
                 provider.GetRequiredService<IArticleRetentionAuthority>(),
                 provider.GetRequiredService<NntpArticleParser>(),
                 provider.GetRequiredService<INntpSharedConfigurationCatalogue>(),
-                provider.GetRequiredService<BackFillerRuntimeOptions>().ServerId));
+                provider.GetRequiredService<BackFillerRuntimeOptions>().ServerId,
+                provider.GetRequiredService<ILogger<ProviderArticleWorkHandler>>()));
             builder.Services.AddSingleton(static provider => new ArticleWorkResponsePublisher(
                 provider.GetRequiredService<IRabbitMqService>(),
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),

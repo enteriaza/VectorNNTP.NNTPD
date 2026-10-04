@@ -35,10 +35,8 @@ namespace VectorNNTP.BackFiller.Nntp
         internal static partial void SessionRetired(ILogger logger, string Backbone, string Reason);
 
         /// <summary>
-        /// Written when <see cref="NntpProviderSession.DownloadArticleAsync"/> returns a kind other than
-        /// <see cref="ArticleRetrievalKind.ArticleRetrieved"/>.
-        /// Results returned before download are not logged: already-canceled acquisition, a missing pool,
-        /// and <see cref="NntpProviderConnectException"/>.
+        /// Defined for a non-success download. The article retriever does not call it.
+        /// Article completion is one Information event from <c>ProviderArticleWorkHandler</c>.
         /// </summary>
         /// <param name="logger">Logger that receives the warning.</param>
         /// <param name="Backbone">Work-item backbone (<see cref="VectorNNTP.BackFiller.ArticleWork.ArticleWorkRequest.Backbone"/>).</param>
