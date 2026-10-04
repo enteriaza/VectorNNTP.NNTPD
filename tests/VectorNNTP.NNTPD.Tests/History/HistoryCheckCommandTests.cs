@@ -53,7 +53,7 @@ public sealed class HistoryCheckCommandTests
     }
 
     [Fact]
-    public async Task MemoryHit_Returns438_AndDoesNotQueryRedis()
+    public async Task MemoryHit_Returns431_AndDoesNotQueryRedis()
     {
         var redis = new FakeRedisService();
         var history = CreateHistory(redis);
@@ -66,7 +66,7 @@ public sealed class HistoryCheckCommandTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientLineAsync("CHECK <i.am.an.article.you.will.want@example.com>");
-        Assert.Equal("438 <i.am.an.article.you.will.want@example.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal("431 <i.am.an.article.you.will.want@example.com>", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -75,7 +75,7 @@ public sealed class HistoryCheckCommandTests
     }
 
     [Fact]
-    public async Task RedisHit_Returns438_Not238_AndDoesNotWriteRedis()
+    public async Task RedisHit_Returns431_Not238_AndDoesNotWriteRedis()
     {
         var redis = new FakeRedisService();
         redis.Database.Seed(HistoryRedisKeys.Create(HistoryDigest.FromMessageId(WantedId)));
@@ -87,7 +87,7 @@ public sealed class HistoryCheckCommandTests
         _ = await duplex.ReadClientLineAsync();
 
         await duplex.WriteClientLineAsync("CHECK <i.am.an.article.you.will.want@example.com>");
-        Assert.Equal("438 <i.am.an.article.you.will.want@example.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal("431 <i.am.an.article.you.will.want@example.com>", await duplex.ReadClientLineAsync());
         Assert.True(history.ContainsLocal(HistoryDigest.FromMessageId(WantedId)));
         Assert.Equal(0, redis.Database.SetCount);
 
@@ -239,7 +239,7 @@ public sealed class HistoryCheckCommandTests
         Assert.Equal(1, history.Writes.Count);
 
         await duplex.WriteClientLineAsync("CHECK <i.am.an.article.you.will.want@example.com>");
-        Assert.Equal("438 <i.am.an.article.you.will.want@example.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal("431 <i.am.an.article.you.will.want@example.com>", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();

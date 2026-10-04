@@ -112,7 +112,11 @@ public sealed class TransitPeerPolicy
     /// <summary>Gets the Send newsfeeds expression. Inbound acceptance does not apply it.</summary>
     public NewsfeedsPattern Patterns { get; }
 
-    /// <summary>Gets whether duplicate offers should later be deferred.</summary>
+    /// <summary>
+    /// Gets whether a History hit on CHECK and IHAVE is deferred
+    /// (<c>431</c>/<c>436</c>) instead of rejected (<c>438</c>/<c>435</c>).
+    /// TAKETHIS does not read this value.
+    /// </summary>
     public bool DeferOnDuplicate { get; }
 
     /// <summary>

@@ -95,8 +95,8 @@ public sealed class TransitPeerOptions
     /// (<c>431</c>/<c>436</c>) rather than rejected (<c>438</c>/<c>435</c>).
     /// </summary>
     /// <remarks>
-    /// Default is <see langword="true"/>. Stored only; this host does not implement
-    /// duplicate history in this change.
+    /// Default is <see langword="true"/>. CHECK and IHAVE apply it when History
+    /// already contains the Message-ID. TAKETHIS does not.
     /// </remarks>
     public bool DeferOnDuplicate { get; set; } = true;
 

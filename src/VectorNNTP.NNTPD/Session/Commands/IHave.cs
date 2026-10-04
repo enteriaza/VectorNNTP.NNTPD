@@ -21,8 +21,11 @@ namespace VectorNNTP.NNTPD.Session.Commands;
 /// the connection's Receive article-type mask and newsgroup expression are applied.
 /// The command
 /// Message-ID is used for History and is not matched against the article
-/// Message-ID (RFC 3977 §6.3.2 permits a mismatch). Incomplete articles that
-/// cannot become CanonicalV1 are rejected with 437 after 335.
+/// Message-ID (RFC 3977 §6.3.2 permits a mismatch). A History hit before
+/// <c>335</c> is <c>436 Transfer not possible; try again later</c> when the
+/// connection's <c>DeferOnDuplicate</c> is true, and <c>435 Article not wanted</c>
+/// otherwise. Neither response reads an article. TAKETHIS does not read that flag.
+/// Incomplete articles that cannot become CanonicalV1 are rejected with 437 after 335.
 /// </remarks>
 internal static class IHave
 {
@@ -42,14 +45,15 @@ internal static class IHave
 
         if (peek == HistoryLookupResult.Seen)
         {
+            var defer = Check.DeferOnDuplicate(context.Session);
             await NntpCommandReply.WriteAsync(
                     context,
                     Logger,
-                    NntpResponses.IhaveNotWanted,
-                    NntpResponseStatus.IhaveNotWanted,
+                    defer ? NntpResponses.IhaveTryLater : NntpResponses.IhaveNotWanted,
+                    defer ? NntpResponseStatus.IhaveTryLater : NntpResponseStatus.IhaveNotWanted,
                     cancellationToken)
                 .ConfigureAwait(false);
-            context.CompletionDetail = "not wanted";
+            context.CompletionDetail = defer ? "deferred duplicate" : "not wanted";
             return;
         }
 

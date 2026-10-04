@@ -12,11 +12,20 @@ internal static class NntpCommandStatusText
     /// Formats the CHECK status line from the lookup result and Message-ID octets.
     /// Call only after <see cref="ILogger.IsEnabled"/>.
     /// </summary>
-    internal static string FormatCheck(HistoryLookupResult result, ReadOnlySpan<byte> messageId)
+    /// <param name="result">History lookup that selected the CHECK reply. It is not rewritten.</param>
+    /// <param name="messageId">Message-ID octets already accepted for the command.</param>
+    /// <param name="deferOnDuplicate">
+    /// Connection <c>DeferOnDuplicate</c>. When <see langword="true"/>, a seen identifier is logged as 431.
+    /// </param>
+    internal static string FormatCheck(
+        HistoryLookupResult result,
+        ReadOnlySpan<byte> messageId,
+        bool deferOnDuplicate = false)
     {
         var id = Encoding.ASCII.GetString(messageId);
         return result switch
         {
+            HistoryLookupResult.Seen when deferOnDuplicate => "431 " + id,
             HistoryLookupResult.Seen => "438 " + id,
             HistoryLookupResult.Unavailable => "431 " + id,
             _ => "238 " + id + " send article to be transferred",

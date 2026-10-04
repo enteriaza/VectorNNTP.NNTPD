@@ -391,7 +391,8 @@ internal sealed class CheckPipeline
 
     private async ValueTask EmitOccupiedAsync(Slot slot, CancellationToken cancellationToken)
     {
-        var owned = Check.Compose(slot.Result, slot.MessageId);
+        var deferOnDuplicate = Check.DeferOnDuplicate(_session);
+        var owned = Check.Compose(slot.Result, slot.MessageId, deferOnDuplicate);
         if (BeforeEnqueueProbe is { } probe)
         {
             await probe().ConfigureAwait(false);
@@ -414,7 +415,7 @@ internal sealed class CheckPipeline
                 _session,
                 "CHECK",
                 System.Diagnostics.Stopwatch.GetElapsedTime(slot.StartedTimestamp),
-                statusLine: NntpCommandStatusText.FormatCheck(slot.Result, slot.MessageId));
+                statusLine: NntpCommandStatusText.FormatCheck(slot.Result, slot.MessageId, deferOnDuplicate));
         }
     }
 

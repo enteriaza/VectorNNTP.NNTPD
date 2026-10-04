@@ -83,7 +83,7 @@ public sealed class CheckPipelineTests
 
         blockA.TrySetResult();
         Assert.Equal("238 <a@example.com> send article to be transferred", await duplex.ReadClientLineAsync());
-        Assert.Equal("438 <b@example.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal("431 <b@example.com>", await duplex.ReadClientLineAsync());
         blockC.TrySetResult();
         Assert.Equal("238 <c@example.com> send article to be transferred", await duplex.ReadClientLineAsync());
 
@@ -119,7 +119,7 @@ public sealed class CheckPipelineTests
 
         blockA.TrySetResult();
         Assert.Equal("238 <a@example.com> send article to be transferred", await duplex.ReadClientLineAsync());
-        Assert.Equal("438 <b@example.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal("431 <b@example.com>", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();
@@ -345,7 +345,7 @@ public sealed class CheckPipelineTests
         Assert.Null(duplex.TryReadClientLine());
         enqueue.TrySetResult();
         Assert.Equal("238 <a@example.com> send article to be transferred", await duplex.ReadClientLineAsync());
-        Assert.Equal("438 <b@example.com>", await duplex.ReadClientLineAsync());
+        Assert.Equal("431 <b@example.com>", await duplex.ReadClientLineAsync());
 
         await duplex.WriteClientLineAsync("QUIT");
         _ = await duplex.ReadClientLineAsync();

@@ -652,12 +652,12 @@ Message-ID bytes → BLAKE3 (32 bytes) → Redis key = "nntpd:hist:" || digest
 
 The digest is not hex-encoded. Redis keys stay binary. Local memory and Redis both expire markers after `Nntpd:HistoryTime` (default two hours). Redis uses native key TTL.
 
-Local HistoryDB is a hard-capped `ConcurrentDictionary` (1,048,576 entries). CHECK never walks the dictionary: hits are one-key lookups, inserts use an `Interlocked` counter, and expired entries are removed on that key's lookup or by `HistoryMaintenanceService` off the request path. When the cap is reached, new digests are not inserted (no false `438`); Redis remains authoritative until maintenance frees a slot.
+Local HistoryDB is a hard-capped `ConcurrentDictionary` (1,048,576 entries). CHECK never walks the dictionary: hits are one-key lookups, inserts use an `Interlocked` counter, and expired entries are removed on that key's lookup or by `HistoryMaintenanceService` off the request path. When the cap is reached, new digests are not inserted (no false History hit); Redis remains authoritative until maintenance frees a slot.
 
 CHECK lookup order (RFC 4644 §2.4):
 
-1. Local HistoryDB hit → `438` immediately (no Redis).
-2. Local miss, Redis hit → `438`; warm local memory. No Redis write.
+1. Local HistoryDB hit → `Seen` immediately (no Redis). The connection replies `431 <message-id>` when its captured `DeferOnDuplicate` is true, otherwise `438 <message-id>`.
+2. Local miss, Redis hit → the same `Seen` reply; warm local memory. No Redis write.
 3. Double miss → `238`. CHECK does not insert locally or enqueue a Redis write. Presence is recorded only by `Remember` after a successful IHAVE or TAKETHIS accept.
 4. Redis infrastructure failure (timeout, disconnect, error) → `431`. A Redis error is not a HistoryDB miss and must not become a false `238`. After a failure, `RedisService` enters a short cooldown: further CHECK misses return `431` without calling Redis until one recovery probe succeeds.
 
