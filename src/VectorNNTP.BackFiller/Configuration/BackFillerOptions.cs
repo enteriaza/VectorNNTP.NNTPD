@@ -105,7 +105,7 @@ namespace VectorNNTP.BackFiller.Configuration
         /// <remarks>
         /// Required. Binds from <c>BackFiller:CloudFlareZoneId</c> only.
         /// </remarks>
-        public string CloudFlareZoneId { get; init; } = string.Empty;
+        public string CloudFlareZoneId { get; set; } = string.Empty;
 
         /// <summary>
         /// Gets the generated FQDN <c>backfiller{ServerId:00}.{DnsSuffix}</c>.
@@ -144,12 +144,12 @@ namespace VectorNNTP.BackFiller.Configuration
         /// Gets or sets the ACME directory URL.
         /// </summary>
         /// <remarks>Absolute HTTPS URL. The default is Let's Encrypt staging.</remarks>
-        public string AcmeDirectoryUrl { get; init; } = DefaultAcmeDirectoryUrl;
+        public string AcmeDirectoryUrl { get; set; } = DefaultAcmeDirectoryUrl;
 
         /// <summary>
         /// Gets or sets how many days before expiry a certificate is due for renewal.
         /// </summary>
-        public int AcmeRenewalThresholdDays { get; init; } = DefaultAcmeRenewalThresholdDays;
+        public int AcmeRenewalThresholdDays { get; set; } = DefaultAcmeRenewalThresholdDays;
 
         /// <summary>
         /// Gets or sets the ACME account and certificate state directory.
