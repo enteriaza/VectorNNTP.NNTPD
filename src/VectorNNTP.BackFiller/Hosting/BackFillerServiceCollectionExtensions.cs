@@ -11,6 +11,8 @@ using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Hosting;
+using VectorNNTP.Common.NntpDb;
+using VectorNNTP.BackFiller.NntpDb;
 using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.Acme;
 using VectorNNTP.Common.Cloudflare;
@@ -156,15 +158,26 @@ namespace VectorNNTP.BackFiller.Hosting
             builder.Services.AddSingleton<IHostedService>(static sp =>
                 new RabbitMqServiceHostedAdapter(sp.GetRequiredService<RabbitMqService>()));
 
-            builder.Services.TryAddSingleton<IProviderAccountSource, MySqlProviderAccountSource>();
+            builder.Services.AddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
+            builder.Services.AddSingleton<NntpDbService>();
+            builder.Services.AddSingleton<IHostedService>(static provider =>
+                new NntpDbServiceHostedAdapter(provider.GetRequiredService<NntpDbService>()));
+            builder.Services.TryAddSingleton<IProviderAccountSource>(static provider =>
+                new MySqlProviderAccountSource(
+                    provider.GetRequiredService<NntpDbService>(),
+                    provider.GetRequiredService<BackFillerRuntimeOptions>().ServerId));
+            builder.Services.TryAddSingleton<IBackFillerSharedConfigurationSource, NntpDbSharedConfigurationSource>();
             builder.Services.AddSingleton<ProviderConfigurationCatalog>();
             builder.Services.TryAddSingleton<IBackFillerProviderCatalog>(static provider =>
                 provider.GetRequiredService<ProviderConfigurationCatalog>());
             builder.Services.AddSingleton(static provider => new ProviderAccountConfigurationService(
                 provider.GetRequiredService<IProviderAccountSource>(),
+                provider.GetRequiredService<IBackFillerSharedConfigurationSource>(),
                 provider.GetRequiredService<NntpProviderRegistry>(),
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),
                 provider.GetRequiredService<ILogger<ProviderAccountConfigurationService>>()));
+            builder.Services.AddSingleton<INntpSharedConfigurationCatalogue>(static provider =>
+                provider.GetRequiredService<ProviderAccountConfigurationService>());
             builder.Services.TryAddSingleton<INntpTransportFactory, TcpNntpTransportFactory>();
             builder.Services.AddSingleton<BackboneUsableCapacityState>();
             builder.Services.AddSingleton<IBackboneUsableCapacityProvider>(static provider =>
@@ -212,7 +225,11 @@ namespace VectorNNTP.BackFiller.Hosting
                 provider.GetRequiredService<ArticleRetentionSweepService>());
             builder.Services.TryAddSingleton(static provider =>
                 new NntpArticleParser(provider.GetRequiredService<BackFillerRuntimeOptions>().Fqdn));
-            builder.Services.TryAddSingleton<IArticleWorkHandler, ProviderArticleWorkHandler>();
+            builder.Services.AddSingleton<IArticleWorkHandler>(static provider => new ProviderArticleWorkHandler(
+                provider.GetRequiredService<INntpArticleRetriever>(),
+                provider.GetRequiredService<IArticleRetentionAuthority>(),
+                provider.GetRequiredService<NntpArticleParser>(),
+                provider.GetRequiredService<INntpSharedConfigurationCatalogue>()));
             builder.Services.AddSingleton(static provider => new ArticleWorkResponsePublisher(
                 provider.GetRequiredService<IRabbitMqService>(),
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),

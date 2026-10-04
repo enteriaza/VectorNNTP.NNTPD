@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.Framing;
 
@@ -217,8 +218,13 @@ public sealed class NntpCommandDispatcher
         {
             try
             {
+                NntpArticlePolicyCapture.Capture(
+                    session,
+                    session.ArticleIngestion.MaxArticleBytes,
+                    out var maxArticleBytes,
+                    out _);
                 _ = await NntpMultilineDataReader
-                    .ReadArticleAsync(session.Connection.Input, session.ArticleIngestion.MaxArticleBytes, cancellationToken)
+                    .ReadArticleAsync(session.Connection.Input, maxArticleBytes, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (

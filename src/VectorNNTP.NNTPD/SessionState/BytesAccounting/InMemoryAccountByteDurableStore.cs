@@ -1,3 +1,4 @@
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.SessionState.BytesAccounting;
@@ -5,7 +6,7 @@ namespace VectorNNTP.NNTPD.SessionState.BytesAccounting;
 /// <summary>In-memory durable remaining quota for tests. Shared across trackers as one MySQL.</summary>
 internal sealed class InMemoryAccountByteDurableStore : IAccountByteDurableStore
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly Dictionary<string, AccountRow> _accounts = new(StringComparer.Ordinal);
 
     /// <summary>When set, consume/query fail as if MySQL were down.</summary>
@@ -94,10 +95,8 @@ internal sealed class InMemoryAccountByteDurableStore : IAccountByteDurableStore
         }
     }
 
-    private sealed class AccountRow
+    private sealed class AccountRow(long remaining)
     {
-        public AccountRow(long remaining) => Remaining = remaining;
-
-        public long Remaining { get; set; }
+        public long Remaining { get; set; } = remaining;
     }
 }

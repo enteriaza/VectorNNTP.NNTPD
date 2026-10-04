@@ -7,6 +7,6 @@ public interface INntpUserRecordStore
     /// Returns the account snapshot, or <see langword="null"/> when no row exists.
     /// Disabled accounts are still returned; enablement is enforced by the validator.
     /// </summary>
-    /// <exception cref="NntpDb.NntpDbUnavailableException">Backend failure. Must not be mapped to invalid credentials.</exception>
+    /// <exception cref="VectorNNTP.Common.NntpDb.NntpDbUnavailableException">Backend failure. Must not be mapped to invalid credentials.</exception>
     ValueTask<NntpUserRecord?> TryGetUserAsync(string accountName, CancellationToken cancellationToken = default);
 }

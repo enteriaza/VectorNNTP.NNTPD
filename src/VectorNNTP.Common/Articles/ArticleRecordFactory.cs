@@ -49,16 +49,42 @@ namespace VectorNNTP.Common.Articles
             NntpArticleParser parser,
             ReadOnlyMemory<byte> destuffedArticle,
             ArticlePathMode pathMode)
+            => TryCreate(
+                parser,
+                destuffedArticle,
+                pathMode,
+                ArticleResourceLimits.MaxArticleBytes,
+                ArticlePathCanonicalizer.OrganizationalTrackerHost);
+
+        /// <summary>
+        /// Parses and materializes an article with one captured size limit and Path tracker.
+        /// </summary>
+        /// <param name="parser">Common article parser. Its local identity is the application FQDN.</param>
+        /// <param name="destuffedArticle">Unstuffed article bytes. Not retained after success.</param>
+        /// <param name="pathMode"><see cref="ArticlePathMode.Traverse"/> prepends the parser FQDN.</param>
+        /// <param name="maxArticleBytes">Article-size boundary captured for this operation.</param>
+        /// <param name="organizationalTrackerHost">Path tracker captured with <paramref name="maxArticleBytes"/>.</param>
+        /// <returns>Accepted record, or a failure classification.</returns>
+        internal static ArticleRecordCreateResult TryCreate(
+            NntpArticleParser parser,
+            ReadOnlyMemory<byte> destuffedArticle,
+            ArticlePathMode pathMode,
+            int maxArticleBytes,
+            ReadOnlySpan<byte> organizationalTrackerHost)
         {
             ArgumentNullException.ThrowIfNull(parser);
 
-            var parse = parser.Parse(destuffedArticle);
+            var parse = parser.Parse(destuffedArticle, maxArticleBytes, organizationalTrackerHost);
             if (!parse.IsAccepted)
             {
                 return ArticleRecordCreateResult.RejectedParse(parse.FailureCode);
             }
 
-            var materialize = NntpArticleCanonicalMaterializer.Materialize(in parse, pathMode);
+            var materialize = NntpArticleCanonicalMaterializer.Materialize(
+                in parse,
+                pathMode,
+                maxArticleBytes,
+                organizationalTrackerHost);
             if (!materialize.IsAccepted || materialize.ArticleBytes is null)
             {
                 return ArticleRecordCreateResult.RejectedMaterialize(materialize.FailureCode);

@@ -1,4 +1,6 @@
+using System.Text;
 using VectorNNTP.BackFiller.Nntp;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
@@ -26,6 +28,9 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// <summary>Parser used to build the CanonicalV1 record from the retrieved article bytes.</summary>
         private readonly NntpArticleParser _parser;
 
+        /// <summary>Published shared configuration. Null in tests that do not load <c>nntpsharedconfig</c>.</summary>
+        private readonly INntpSharedConfigurationCatalogue? _sharedConfiguration;
+
         /// <summary>Initializes the handler with the test-host Path identity <c>backfiller.test</c>.</summary>
         /// <param name="retriever">NNTP ARTICLE retriever.</param>
         /// <param name="retention">Canonical retention authority.</param>
@@ -46,6 +51,20 @@ namespace VectorNNTP.BackFiller.ArticleWork
             INntpArticleRetriever retriever,
             IArticleRetentionAuthority retention,
             NntpArticleParser parser)
+            : this(retriever, retention, parser, sharedConfiguration: null)
+        {
+        }
+
+        /// <summary>Initializes the handler with an optional shared-configuration catalogue.</summary>
+        /// <param name="retriever">NNTP ARTICLE retriever.</param>
+        /// <param name="retention">Canonical retention authority.</param>
+        /// <param name="parser">CanonicalV1 parser. Its local identity remains the application hop.</param>
+        /// <param name="sharedConfiguration">Published <c>nntpsharedconfig</c>. Captured once per article.</param>
+        public ProviderArticleWorkHandler(
+            INntpArticleRetriever retriever,
+            IArticleRetentionAuthority retention,
+            NntpArticleParser parser,
+            INntpSharedConfigurationCatalogue? sharedConfiguration)
         {
             ArgumentNullException.ThrowIfNull(retriever);
             ArgumentNullException.ThrowIfNull(retention);
@@ -53,6 +72,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
             _retriever = retriever;
             _retention = retention;
             _parser = parser;
+            _sharedConfiguration = sharedConfiguration;
         }
 
         /// <summary>Gets the last retrieval classification (tests).</summary>
@@ -121,13 +141,30 @@ namespace VectorNNTP.BackFiller.ArticleWork
             ArticleRetrievalResult retrieval;
             ArticleRecordCreateResult created = default;
             var consumed = false;
+            var maxArticleBytes = Nntp.ArticleResourceLimits.MaxArticleBytes;
+            byte[]? siteNameUtf8 = null;
+            if (_sharedConfiguration is not null)
+            {
+                var shared = _sharedConfiguration.Current;
+                maxArticleBytes = shared.MaxArticleBytes;
+                siteNameUtf8 = Encoding.UTF8.GetBytes(shared.SiteName);
+            }
+
             try
             {
                 retrieval = await _retriever.RetrieveAsync(
                         item,
+                        maxArticleBytes,
                         memory =>
                         {
-                            created = ArticleRecordFactory.TryCreate(_parser, memory, ArticlePathMode.Traverse);
+                            created = siteNameUtf8 is null
+                                ? ArticleRecordFactory.TryCreate(_parser, memory, ArticlePathMode.Traverse)
+                                : ArticleRecordFactory.TryCreate(
+                                    _parser,
+                                    memory,
+                                    ArticlePathMode.Traverse,
+                                    maxArticleBytes,
+                                    siteNameUtf8);
                             consumed = true;
                             return created;
                         },

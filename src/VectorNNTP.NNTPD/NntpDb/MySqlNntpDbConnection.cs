@@ -2,6 +2,7 @@ using System.Data;
 using System.Globalization;
 using MySqlConnector;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Moderation;
@@ -10,40 +11,49 @@ using VectorNNTP.NNTPD.SessionState;
 
 namespace VectorNNTP.NNTPD.NntpDb;
 
-/// <summary>MySqlConnector-backed logical connection. Dispose returns it to the provider pool.</summary>
+/// <summary>NNTPD queries over a shared logical session. Dispose returns it to the provider pool.</summary>
 internal sealed class MySqlNntpDbConnection : INntpDbConnection
 {
-    private readonly MySqlConnection _connection;
+    private readonly INntpDbSession _session;
 
-    /// <summary>Initializes a new instance wrapping an already-open connection.</summary>
+    /// <summary>Initializes a new instance wrapping an already-open provider connection.</summary>
+    /// <param name="connection">Open connection. This instance owns its disposal.</param>
     public MySqlNntpDbConnection(MySqlConnection connection)
+        : this(new MySqlNntpDbSession(connection))
     {
-        ArgumentNullException.ThrowIfNull(connection);
-        _connection = connection;
+    }
+
+    /// <summary>Initializes a new instance wrapping a shared session.</summary>
+    /// <param name="session">Open session. This instance owns its disposal.</param>
+    public MySqlNntpDbConnection(INntpDbSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        _session = session;
     }
 
     /// <inheritdoc />
-    public async ValueTask<int> SelectOneAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            await using var command = _connection.CreateCommand();
-            command.CommandText = "SELECT 1";
-            var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            return ConvertSelectOneScalar(result);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException and not NntpDbUnavailableException)
-        {
-            throw new NntpDbUnavailableException("MySQL health query SELECT 1 failed.", ex);
-        }
-    }
+    public ValueTask<int> SelectOneAsync(CancellationToken cancellationToken) =>
+        _session.SelectOneAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public MySqlCommand CreateCommand() => _session.CreateCommand();
+
+    /// <inheritdoc />
+    public ValueTask<MySqlTransaction> BeginTransactionAsync(CancellationToken cancellationToken) =>
+        _session.BeginTransactionAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public ValueTask<MySqlTransaction> BeginTransactionAsync(
+        IsolationLevel isolationLevel,
+        CancellationToken cancellationToken) =>
+        _session.BeginTransactionAsync(isolationLevel, cancellationToken);
 
     /// <inheritdoc />
     public async ValueTask<IReadOnlyList<NntpGroupRow>> QueryNewsgroupsAsync(CancellationToken cancellationToken)
     {
         try
         {
-            await using var command = _connection.CreateCommand();
+            await using var command = _session.CreateCommand();
             command.CommandText = NntpGroupQueries.SelectNewsgroups;
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             var rows = new List<NntpGroupRow>();
@@ -72,7 +82,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
         try
         {
-            await using var command = _connection.CreateCommand();
+            await using var command = _session.CreateCommand();
             command.CommandText = NntpUserQueries.SelectUserByName;
             command.Parameters.AddWithValue("@account_name", accountName);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -95,7 +105,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     {
         try
         {
-            await using var command = _connection.CreateCommand();
+            await using var command = _session.CreateCommand();
             command.CommandText = NntpModeratorQueries.SelectEnabledModerators;
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             var rows = new List<NntpModeratorRow>();
@@ -118,7 +128,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     {
         try
         {
-            await using var transaction = await _connection
+            await using var transaction = await _session
                 .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
                 .ConfigureAwait(false);
             try
@@ -224,7 +234,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         ArgumentNullException.ThrowIfNull(evidence);
         try
         {
-            await using var command = _connection.CreateCommand();
+            await using var command = _session.CreateCommand();
             command.CommandText = NntpPostFilterQueries.InsertRejection;
             command.Parameters.AddWithValue("@rejected_utc", evidence.RejectedUtc.UtcDateTime);
             command.Parameters.AddWithValue("@revision", evidence.PolicyRevision);
@@ -271,7 +281,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         try
         {
-            await using var transaction = await _connection
+            await using var transaction = await _session
                 .BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
             try
@@ -290,7 +300,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
 
                 var current = ClampNonNegative(locked.Value.Remaining);
                 var consumed = bytes > current ? current : bytes;
-                await using (var update = _connection.CreateCommand())
+                await using (var update = _session.CreateCommand())
                 {
                     update.Transaction = transaction;
                     update.CommandText = NntpUserQueries.ConsumeAccountBytes;
@@ -354,7 +364,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     }
 
     /// <inheritdoc />
-    public ValueTask DisposeAsync() => _connection.DisposeAsync();
+    public ValueTask DisposeAsync() => _session.DisposeAsync();
 
     /// <summary>Maps one enabled <c>nntpmoderators</c> row. CHAR columns are trimmed.</summary>
     internal static NntpModeratorRow MapModeratorRow(MySqlDataReader reader)
@@ -415,7 +425,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         MySqlTransaction? transaction,
         CancellationToken cancellationToken)
     {
-        await using var command = _connection.CreateCommand();
+        await using var command = _session.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = commandText;
         command.Parameters.AddWithValue("@account_name", accountName);
@@ -559,28 +569,17 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     /// </summary>
     internal static byte ConvertPostingStatus(object? value, string groupName)
     {
-        byte status;
-        switch (value)
+        var status = value switch
         {
-            case byte b:
-                status = b;
-                break;
-            case sbyte sb:
-                status = (byte)sb;
-                break;
-            case char ch:
-                status = (byte)ch;
-                break;
-            case string text when text.Length == 1:
-                status = (byte)text[0];
-                break;
-            case string text when text.Length > 0 && text[0] == '=':
-                throw new Newsgroups.NewsgroupCatalogueException(
-                    $"nntpgroups row '{groupName}' uses unsupported RFC 6048 =<newsgroup> posting_status.");
-            default:
-                throw new Newsgroups.NewsgroupCatalogueException(
-                    $"nntpgroups row '{groupName}' has an unreadable posting_status.");
-        }
+            byte b => b,
+            sbyte sb => (byte)sb,
+            char ch => (byte)ch,
+            string text when text.Length == 1 => (byte)text[0],
+            string text when text.Length > 0 && text[0] == '=' => throw new Newsgroups.NewsgroupCatalogueException(
+                $"nntpgroups row '{groupName}' uses unsupported RFC 6048 =<newsgroup> posting_status."),
+            _ => throw new Newsgroups.NewsgroupCatalogueException(
+                $"nntpgroups row '{groupName}' has an unreadable posting_status."),
+        };
 
         if (!Newsgroups.NewsgroupPostingStatusOctets.IsSupported(status))
         {
@@ -597,12 +596,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
     /// Converts a MySQL <c>SELECT 1</c> scalar, including the connector's <see cref="long"/> result type.
     /// </summary>
     internal static int ConvertSelectOneScalar(object? result) =>
-        result switch
-        {
-            int value => value,
-            long longValue => checked((int)longValue),
-            _ => throw new NntpDbUnavailableException("MySQL health query SELECT 1 returned an unexpected result."),
-        };
+        MySqlNntpDbSession.ConvertSelectOneScalar(result);
 
     private static PostFilterPolicyRecord MapPolicyScalars(MySqlDataReader reader)
     {
@@ -653,7 +647,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         MySqlTransaction transaction,
         CancellationToken cancellationToken)
     {
-        await using var command = _connection.CreateCommand();
+        await using var command = _session.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = NntpPostFilterQueries.SelectCurrentRevision;
         var scalar = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
@@ -667,7 +661,7 @@ internal sealed class MySqlNntpDbConnection : INntpDbConnection
         long revision,
         MySqlTransaction transaction)
     {
-        var command = _connection.CreateCommand();
+        var command = _session.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = commandText;
         command.Parameters.AddWithValue("@revision", revision);

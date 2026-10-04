@@ -3,7 +3,7 @@ using System.Text;
 using Microsoft.Extensions.Options;
 using VectorNNTP.NNTPD.Authentication.Sasl;
 using VectorNNTP.NNTPD.Configuration;
-using VectorNNTP.NNTPD.NntpDb;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 

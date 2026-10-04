@@ -1,5 +1,6 @@
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Nntp;
+using VectorNNTP.Common.NntpDb;
 
 namespace VectorNNTP.BackFiller.Accounts
 {
@@ -14,10 +15,13 @@ namespace VectorNNTP.BackFiller.Accounts
     /// A failed refresh does not replace the last applied snapshot. The first required
     /// refresh propagates that failure instead of logging it.
     /// </remarks>
-    internal sealed class ProviderAccountConfigurationService : IHostedService, IAsyncDisposable
+    internal sealed class ProviderAccountConfigurationService : IHostedService, INntpSharedConfigurationCatalogue, IAsyncDisposable
     {
         /// <summary>Account query. Not disposed by this service.</summary>
         private readonly IProviderAccountSource _source;
+
+        /// <summary>Shared-configuration query. Not disposed by this service. Has no timer of its own.</summary>
+        private readonly IBackFillerSharedConfigurationSource _sharedConfiguration;
 
         /// <summary>Receives each changed snapshot through <see cref="NntpProviderRegistry.ApplySnapshotAsync"/>.</summary>
         private readonly NntpProviderRegistry _registry;
@@ -43,6 +47,9 @@ namespace VectorNNTP.BackFiller.Accounts
         /// </summary>
         private IReadOnlyList<BackFillerProviderDefinition> _published = [];
 
+        /// <summary>Last shared-configuration snapshot published with a successful refresh. Null until the first success.</summary>
+        private NntpSharedConfiguration? _shared;
+
         /// <summary>Poll loop started after the first required refresh returns. Read by <see cref="DisposeAsync"/> without further synchronization.</summary>
         private Task? _pollTask;
 
@@ -63,6 +70,7 @@ namespace VectorNNTP.BackFiller.Accounts
 
         /// <summary>Retains the account source, registry, runtime snapshot, and logger.</summary>
         /// <param name="source">Query used by each refresh.</param>
+        /// <param name="sharedConfiguration">Shared-configuration read for the same refresh cycle.</param>
         /// <param name="registry">Registry that applies a changed snapshot.</param>
         /// <param name="runtime">Server id and poll interval.</param>
         /// <param name="logger">Logger passed to <see cref="ProviderAccountLogMessages"/>.</param>
@@ -73,18 +81,38 @@ namespace VectorNNTP.BackFiller.Accounts
         /// </remarks>
         internal ProviderAccountConfigurationService(
             IProviderAccountSource source,
+            IBackFillerSharedConfigurationSource sharedConfiguration,
             NntpProviderRegistry registry,
             BackFillerRuntimeOptions runtime,
             ILogger<ProviderAccountConfigurationService> logger)
         {
             ArgumentNullException.ThrowIfNull(source);
+            ArgumentNullException.ThrowIfNull(sharedConfiguration);
             ArgumentNullException.ThrowIfNull(registry);
             ArgumentNullException.ThrowIfNull(runtime);
             ArgumentNullException.ThrowIfNull(logger);
             _source = source;
+            _sharedConfiguration = sharedConfiguration;
             _registry = registry;
             _runtime = runtime;
             _logger = logger;
+        }
+
+        /// <inheritdoc />
+        public NntpSharedConfiguration Current
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    if (_shared is not { } snapshot)
+                    {
+                        throw new InvalidOperationException("nntpsharedconfig has not been published.");
+                    }
+
+                    return snapshot;
+                }
+            }
         }
 
         /// <summary>Gets the last successfully published provider snapshot (tests).</summary>
@@ -219,6 +247,7 @@ namespace VectorNNTP.BackFiller.Accounts
             try
             {
                 var rows = await _source.QueryAsync(cancellationToken).ConfigureAwait(false);
+                var shared = await _sharedConfiguration.ReadAsync(cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
                 var mapped = ProviderAccountMapper.Map(rows);
                 foreach (var rejected in mapped.Rejected)
@@ -234,6 +263,11 @@ namespace VectorNNTP.BackFiller.Accounts
 
                 if (SnapshotsEqual(previous, mapped.Providers))
                 {
+                    lock (_gate)
+                    {
+                        _shared = shared;
+                    }
+
                     ProviderAccountLogMessages.SnapshotUnchanged(_logger, mapped.Providers.Count);
                     if (_lastRefreshFailed)
                     {
@@ -249,6 +283,7 @@ namespace VectorNNTP.BackFiller.Accounts
                 lock (_gate)
                 {
                     _published = mapped.Providers;
+                    _shared = shared;
                 }
 
                 LogDelta(previous, mapped.Providers);

@@ -192,6 +192,9 @@ namespace VectorNNTP.BackFiller.Nntp
         /// It is called only after the terminator is recognized and the payload has a header/body separator.
         /// An exception from the delegate is rethrown after <see cref="_busy"/> is released and does not mark the session unhealthy.
         /// </param>
+        /// <param name="maxArticleBytes">
+        /// Article-size boundary for this download. Zero uses <see cref="NntpSessionOptions.MaxArticleBytes"/>.
+        /// </param>
         /// <returns>
         /// Status <see cref="NntpStatusCode.ArticleFollows"/> returns the destuffed payload when <see cref="NntpProtocolIo.HasHeaderBodySeparator"/> is true.
         /// With <paramref name="consumePayload"/> null, that payload is an owned <see cref="RetrievedArticle"/>.
@@ -211,8 +214,14 @@ namespace VectorNNTP.BackFiller.Nntp
         internal async Task<ArticleRetrievalResult> DownloadArticleAsync(
             string messageId,
             CancellationToken cancellationToken,
-            Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult>? consumePayload = null)
+            Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult>? consumePayload = null,
+            int maxArticleBytes = 0)
         {
+            if (maxArticleBytes <= 0)
+            {
+                maxArticleBytes = _options.MaxArticleBytes;
+            }
+
             ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
             if (_reader is null || _stream is null || State is NntpSessionState.Closed or NntpSessionState.Retiring)
             {
@@ -275,7 +284,7 @@ namespace VectorNNTP.BackFiller.Nntp
                         try
                         {
                             payload = await _reader
-                                .ReadArticlePayloadAsync(_options.MaxArticleBytes, _options.ReceiveTimeout, cancellationToken)
+                                .ReadArticlePayloadAsync(maxArticleBytes, _options.ReceiveTimeout, cancellationToken)
                                 .ConfigureAwait(false);
                             NntpLogMessages.WireArticlePayloadComplete(_logger, _wireIdentity, payload.Length);
                         }
@@ -316,7 +325,7 @@ namespace VectorNNTP.BackFiller.Nntp
                     try
                     {
                         _ = await _reader.ReadArticlePayloadAsync(
-                                _options.MaxArticleBytes,
+                                maxArticleBytes,
                                 _options.ReceiveTimeout,
                                 memory =>
                                 {

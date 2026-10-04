@@ -31,6 +31,29 @@ internal static class ArticleRecordIngress
     }
 
     /// <summary>
+    /// Parses already-destuffed article bytes with one captured size limit and Path tracker.
+    /// </summary>
+    /// <param name="parser">Session parser. Its local identity remains the application hop.</param>
+    /// <param name="destuffedArticle">Unstuffed article bytes.</param>
+    /// <param name="maxArticleBytes">Captured <c>maxartsize</c>.</param>
+    /// <param name="siteNameUtf8">Captured <c>sitename</c> bytes.</param>
+    /// <returns>Factory result.</returns>
+    public static ArticleRecordCreateResult TryCreateFromDestuffed(
+        NntpArticleParser parser,
+        ReadOnlyMemory<byte> destuffedArticle,
+        int maxArticleBytes,
+        ReadOnlySpan<byte> siteNameUtf8)
+    {
+        ArgumentNullException.ThrowIfNull(parser);
+        return ArticleRecordFactory.TryCreate(
+            parser,
+            destuffedArticle,
+            ArticlePathMode.Traverse,
+            maxArticleBytes,
+            siteNameUtf8);
+    }
+
+    /// <summary>
     /// Destuffs terminator-omitted wire once, then builds a CanonicalV1 record.
     /// </summary>
     /// <param name="parser">Session-scoped Common parser (local identity for Path hops).</param>
@@ -56,6 +79,35 @@ internal static class ArticleRecordIngress
     }
 
     /// <summary>
+    /// Destuffs stuffed wire and materializes it with one captured size limit and Path tracker.
+    /// </summary>
+    /// <param name="parser">Session parser.</param>
+    /// <param name="stuffedWire">Stuffed article bytes.</param>
+    /// <param name="maxArticleBytes">Captured <c>maxartsize</c>. Also the destuff ceiling.</param>
+    /// <param name="siteNameUtf8">Captured <c>sitename</c> bytes.</param>
+    /// <returns>Factory result, or <see cref="NntpArticleParseFailureCode.ArticleTooLarge"/> when destuff exceeds the limit.</returns>
+    public static ArticleRecordCreateResult TryCreateFromStuffedWire(
+        NntpArticleParser parser,
+        ReadOnlyMemory<byte> stuffedWire,
+        int maxArticleBytes,
+        ReadOnlySpan<byte> siteNameUtf8)
+    {
+        ArgumentNullException.ThrowIfNull(parser);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxArticleBytes, 1);
+        if (!NntpArticleDestuffer.TryDestuffStuffedWire(stuffedWire.Span, maxArticleBytes, out var destuffed))
+        {
+            return ArticleRecordCreateResult.RejectedParse(NntpArticleParseFailureCode.ArticleTooLarge);
+        }
+
+        return ArticleRecordFactory.TryCreate(
+            parser,
+            destuffed,
+            ArticlePathMode.Traverse,
+            maxArticleBytes,
+            siteNameUtf8);
+    }
+
+    /// <summary>
     /// Creates a queue item whose <see cref="InboundArticle.Payload"/> aliases
     /// <paramref name="record"/>.ArtData (no article-sized copy).
     /// </summary>
@@ -69,7 +121,7 @@ internal static class ArticleRecordIngress
     /// <remarks>
     /// Throws only when <paramref name="messageId"/> is empty or
     /// <paramref name="record"/> is not CanonicalV1. POST calls this only after
-    /// <see cref="TryCreateFromDestuffed"/> accepted CanonicalV1 with a non-empty
+    /// <c>TryCreateFromDestuffed</c> accepted CanonicalV1 with a non-empty
     /// Message-ID; those throws are unreachable on that path.
     /// </remarks>
     public static InboundArticle CreateQueued(

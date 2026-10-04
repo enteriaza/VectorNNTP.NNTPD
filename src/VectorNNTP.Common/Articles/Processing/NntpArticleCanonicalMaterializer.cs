@@ -1,4 +1,3 @@
-using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 
 namespace VectorNNTP.Common.Articles.Processing
@@ -26,7 +25,7 @@ namespace VectorNNTP.Common.Articles.Processing
         /// <summary>The header/body separator could not be resolved for Path insertion.</summary>
         InvalidHeaderSeparator = 5,
 
-        /// <summary>Canonical output would exceed <see cref="ArticleResourceLimits.MaxArticleBytes"/>.</summary>
+        /// <summary>Canonical output would exceed the article-size boundary supplied for this operation.</summary>
         ArticleTooLarge = 6,
 
         /// <summary>Canonical Date rewrite would exceed <see cref="ArticleResourceLimits.MaxArticleLineBytes"/>.</summary>
@@ -142,6 +141,25 @@ namespace VectorNNTP.Common.Articles.Processing
         internal static NntpArticleCanonicalMaterializeResult Materialize(
             in NntpArticleParseResult parseResult,
             ArticlePathMode pathMode)
+            => Materialize(
+                in parseResult,
+                pathMode,
+                ArticleResourceLimits.MaxArticleBytes,
+                ArticlePathCanonicalizer.OrganizationalTrackerHost);
+
+        /// <summary>
+        /// Builds a canonicalized article using one captured article-size limit and Path tracker.
+        /// </summary>
+        /// <param name="parseResult">Accepted parse result.</param>
+        /// <param name="pathMode">Normalize revalidates Path. Traverse prepends the parser's application FQDN.</param>
+        /// <param name="maxArticleBytes">Article-size boundary for this operation.</param>
+        /// <param name="organizationalTrackerHost">Path tracker component captured with <paramref name="maxArticleBytes"/>.</param>
+        /// <returns>A result that owns one exact-size canonical buffer on success, or a failure classification.</returns>
+        internal static NntpArticleCanonicalMaterializeResult Materialize(
+            in NntpArticleParseResult parseResult,
+            ArticlePathMode pathMode,
+            int maxArticleBytes,
+            ReadOnlySpan<byte> organizationalTrackerHost)
         {
             if (!parseResult.IsAccepted)
             {
@@ -173,7 +191,7 @@ namespace VectorNNTP.Common.Articles.Processing
             canonicalDate = canonicalDate[..dateWritten];
 
             Span<byte> canonicalPath = stackalloc byte[ArticlePathCanonicalizer.MaxPathLength + 256];
-            if (!parseResult.TryWriteCanonicalPath(pathMode, canonicalPath, out var pathWritten))
+            if (!parseResult.TryWriteCanonicalPath(pathMode, organizationalTrackerHost, canonicalPath, out var pathWritten))
             {
                 return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
             }
@@ -224,7 +242,8 @@ namespace VectorNNTP.Common.Articles.Processing
                 dateEdit,
                 pathEdit,
                 pathInsert,
-                destinationLength);
+                destinationLength,
+                maxArticleBytes);
             if (boundaryFailure != NntpArticleCanonicalFailureCode.None)
             {
                 return NntpArticleCanonicalMaterializeResult.Rejected(boundaryFailure);
@@ -419,6 +438,7 @@ namespace VectorNNTP.Common.Articles.Processing
         /// <param name="pathEdit">Existing Path value replacement, or <see langword="null"/> when Path will be inserted.</param>
         /// <param name="pathInsert">Inserted Path line, or <see langword="null"/> when an existing Path is rewritten.</param>
         /// <param name="destinationLength">Projected canonical length, already checked for overflow by the caller.</param>
+        /// <param name="maxArticleBytes">Article-size boundary for this operation.</param>
         /// <returns>
         /// <see cref="NntpArticleCanonicalFailureCode.ArticleTooLarge"/>,
         /// <see cref="NntpArticleCanonicalFailureCode.DateLineTooLong"/>,
@@ -434,9 +454,10 @@ namespace VectorNNTP.Common.Articles.Processing
             HeaderEdit dateEdit,
             HeaderEdit? pathEdit,
             HeaderInsert? pathInsert,
-            int destinationLength)
+            int destinationLength,
+            int maxArticleBytes)
         {
-            if (destinationLength > ArticleResourceLimits.MaxArticleBytes)
+            if (destinationLength > maxArticleBytes)
             {
                 return NntpArticleCanonicalFailureCode.ArticleTooLarge;
             }

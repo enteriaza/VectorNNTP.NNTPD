@@ -1,3 +1,4 @@
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.PostFilter;
@@ -24,15 +25,10 @@ public sealed class MySqlPostFilterPolicyRepository : IPostFilterPolicyRepositor
     {
         try
         {
-            await using var connection = await _nntpDb.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var connection = await NntpDbConnections.OpenAsync(_nntpDb, cancellationToken).ConfigureAwait(false);
             var record = await connection.QueryPostFilterPolicyAsync(cancellationToken).ConfigureAwait(false);
-            if (record is null)
-            {
-                throw new InvalidOperationException(
-                    "nntppostfiltercurrent is missing policy_id = 1. NNTPD will not invent a local PostFilter policy.");
-            }
-
-            return record;
+            return record ?? throw new InvalidOperationException(
+                "nntppostfiltercurrent is missing policy_id = 1. NNTPD will not invent a local PostFilter policy.");
         }
         catch (OperationCanceledException)
         {

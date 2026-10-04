@@ -593,6 +593,7 @@ namespace VectorNNTP.BackFiller.Tests.Audit
 
             public Task<ArticleRetrievalResult> RetrieveAsync(
                 ArticleWorkItem item,
+                int maxArticleBytes,
                 Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
                 CancellationToken cancellationToken)
             {
@@ -622,6 +623,7 @@ namespace VectorNNTP.BackFiller.Tests.Audit
 
             public Task<ArticleRetrievalResult> RetrieveAsync(
                 ArticleWorkItem item,
+                int maxArticleBytes,
                 Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
                 CancellationToken cancellationToken)
             {

@@ -1,3 +1,4 @@
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.SessionState.BytesAccounting;
@@ -24,7 +25,7 @@ internal sealed class MysqlAccountByteDurableStore : IAccountByteDurableStore
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         try
         {
-            await using var connection = await _nntpDb.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var connection = await NntpDbConnections.OpenAsync(_nntpDb, cancellationToken).ConfigureAwait(false);
             return await connection.ConsumeAccountBytesAsync(accountName, bytes, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -50,7 +51,7 @@ internal sealed class MysqlAccountByteDurableStore : IAccountByteDurableStore
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
         try
         {
-            await using var connection = await _nntpDb.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var connection = await NntpDbConnections.OpenAsync(_nntpDb, cancellationToken).ConfigureAwait(false);
             return await connection.QueryAccountByteRemainingAsync(accountName, cancellationToken)
                 .ConfigureAwait(false);
         }

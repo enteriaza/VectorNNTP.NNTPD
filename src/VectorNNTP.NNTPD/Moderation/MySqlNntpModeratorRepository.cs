@@ -1,3 +1,4 @@
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.Moderation;
@@ -23,7 +24,7 @@ public sealed class MySqlNntpModeratorRepository : INntpModeratorRepository
     {
         try
         {
-            await using var connection = await _nntpDb.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var connection = await NntpDbConnections.OpenAsync(_nntpDb, cancellationToken).ConfigureAwait(false);
             return await connection.QueryEnabledModeratorsAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)

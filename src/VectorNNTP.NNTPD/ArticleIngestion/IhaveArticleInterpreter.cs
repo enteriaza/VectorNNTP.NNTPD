@@ -10,7 +10,7 @@ namespace VectorNNTP.NNTPD.ArticleIngestion;
 /// </summary>
 /// <remarks>
 /// Production IHAVE no longer uses this type. After receive, IHAVE destuffs
-/// once in <see cref="ArticleRecordIngress.TryCreateFromStuffedWire"/> and
+/// once in <c>ArticleRecordIngress.TryCreateFromStuffedWire</c> and
 /// materializes CanonicalV1 through <see cref="ArticleRecordFactory"/>.
 /// Remaining IHAVE-specific behaviour lives in the IHAVE command (History,
 /// 335/235/435/436/437, non-blocking probe/admit). Common owns parse,

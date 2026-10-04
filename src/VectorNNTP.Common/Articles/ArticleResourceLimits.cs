@@ -10,7 +10,10 @@ namespace VectorNNTP.Common.Articles
     /// </remarks>
     internal static class ArticleResourceLimits
     {
-        /// <summary>Maximum accepted ARTICLE payload size in bytes.</summary>
+        /// <summary>
+        /// StorageServer and VATP article-size ceiling, and the parser default when the caller does not supply
+        /// <c>nntpsharedconfig.maxartsize</c>. NNTPD and BackFiller pass that database value into parse and materialize.
+        /// </summary>
         public const int MaxArticleBytes = 5 * 1024 * 1024;
 
         /// <summary>Maximum accepted ARTICLE/header line length in characters.</summary>

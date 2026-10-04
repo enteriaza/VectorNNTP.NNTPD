@@ -11,6 +11,7 @@ using VectorNNTP.BackFiller.Tests.RabbitMq;
 using VectorNNTP.BackFiller.Tests.Retention;
 using VectorNNTP.BackFiller.Tests.TestDoubles;
 using VectorNNTP.Common.Articles.Parsing;
+using VectorNNTP.Common.NntpDb;
 
 using VectorNNTP.Common.Messaging.RabbitMq;
 
@@ -121,6 +122,7 @@ namespace VectorNNTP.BackFiller.Tests.Fixtures
                 NullLogger<NntpProviderRegistry>.Instance);
             var accountService = new ProviderAccountConfigurationService(
                 accounts,
+                new FixedSharedConfigurationSource(),
                 registry,
                 runtime,
                 NullLogger<ProviderAccountConfigurationService>.Instance);
@@ -242,6 +244,15 @@ namespace VectorNNTP.BackFiller.Tests.Fixtures
             await AccountService.DisposeAsync().ConfigureAwait(false);
             await Registry.DisposeAsync().ConfigureAwait(false);
             await Retention.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    internal sealed class FixedSharedConfigurationSource : IBackFillerSharedConfigurationSource
+    {
+        public ValueTask<NntpSharedConfiguration> ReadAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(new NntpSharedConfiguration(1024, "news.usenet.ninja", null));
         }
     }
 }

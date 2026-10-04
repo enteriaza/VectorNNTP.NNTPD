@@ -1,4 +1,8 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using VectorNNTP.BackFiller.Accounts;
+using VectorNNTP.Common.Configuration;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Tests.Fixtures;
 
@@ -48,7 +52,11 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
             var runtime = BackFillerRuntimeOptionsFactory.Create(
                 BackFillerTestOptions.CreateValid(),
                 BackFillerTestOptions.CreateValidNntpDb());
-            _ = new MySqlProviderAccountSource(runtime);
+            var database = new NntpDbService(
+                new MySqlNntpDbConnectionFactory(),
+                Options.Create(new NntpDbOptions { ConnectionString = runtime.NntpDb.ConnectionString }),
+                NullLogger<NntpDbService>.Instance);
+            _ = new MySqlProviderAccountSource(database, runtime.ServerId);
             Assert.Contains("Password=db-secret-xyz", runtime.NntpDb.ConnectionString, StringComparison.Ordinal);
         }
 

@@ -56,6 +56,31 @@ namespace VectorNNTP.Common.Articles.Parsing
         internal static ReadOnlySpan<byte> OrganizationalTrackerHost => "news.usenet.ninja"u8;
 
         /// <summary>
+        /// Returns whether <paramref name="siteName"/> can be the Path tracker component.
+        /// </summary>
+        /// <param name="siteName"><c>nntpsharedconfig.sitename</c>.</param>
+        /// <returns>
+        /// <see langword="true"/> when the value is non-empty, at most 50 characters, and a printable ASCII Path component without <c>!</c>.
+        /// </returns>
+        internal static bool IsValidSiteName(string? siteName)
+        {
+            if (string.IsNullOrEmpty(siteName) || siteName.Length > 50)
+            {
+                return false;
+            }
+
+            foreach (var ch in siteName)
+            {
+                if (ch is <= ' ' or '!' or > '\u007E')
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Validates a raw Path value and classifies the rewrite that a later materializer would apply.
         /// </summary>
         /// <param name="rawPath">Raw Path header value bytes, or empty when the header is absent.</param>
@@ -63,7 +88,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <param name="pathPresent">Whether a Path header was present.</param>
         /// <param name="kind">Rewrite classification when validation succeeds.</param>
         /// <param name="containsOrganizationalTracker">
-        /// Whether a Path token equals <see cref="OrganizationalTrackerHost"/> using existing case-insensitive token rules.
+        /// Whether a Path token equals the tracker host using existing case-insensitive token rules.
         /// </param>
         /// <param name="failureCode">Failure code when the Path value is invalid.</param>
         /// <returns><see langword="true"/> when the Path is usable (including a missing header).</returns>
@@ -71,6 +96,23 @@ namespace VectorNNTP.Common.Articles.Parsing
             ReadOnlySpan<byte> rawPath,
             ReadOnlySpan<byte> localIdentity,
             bool pathPresent,
+            out ArticlePathKind kind,
+            out bool containsOrganizationalTracker,
+            out NntpArticleParseFailureCode failureCode)
+            => TryAnalyze(
+                rawPath,
+                localIdentity,
+                pathPresent,
+                OrganizationalTrackerHost,
+                out kind,
+                out containsOrganizationalTracker,
+                out failureCode);
+
+        internal static bool TryAnalyze(
+            ReadOnlySpan<byte> rawPath,
+            ReadOnlySpan<byte> localIdentity,
+            bool pathPresent,
+            ReadOnlySpan<byte> organizationalTracker,
             out ArticlePathKind kind,
             out bool containsOrganizationalTracker,
             out NntpArticleParseFailureCode failureCode)
@@ -128,7 +170,7 @@ namespace VectorNNTP.Common.Articles.Parsing
                 }
 
                 sawComponent = true;
-                if (AsciiEqualsIgnoreCase(component, OrganizationalTrackerHost))
+                if (AsciiEqualsIgnoreCase(component, organizationalTracker))
                 {
                     containsOrganizationalTracker = true;
                 }
@@ -151,7 +193,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// </summary>
         /// <param name="rawPath">Original Path value bytes when present; ignored when <paramref name="kind"/> is <see cref="ArticlePathKind.Missing"/> or <see cref="ArticlePathKind.Empty"/>.</param>
         /// <param name="localIdentity">Local application FQDN written as an application hop when needed.</param>
-        /// <param name="kind">Rewrite classification from <see cref="TryAnalyze"/>.</param>
+        /// <param name="kind">Rewrite classification from path analysis.</param>
         /// <param name="containsOrganizationalTracker">Whether the organizational tracker token is already present.</param>
         /// <param name="mode">Normalize leaves application hops unchanged. Traverse always prepends <paramref name="localIdentity"/>.</param>
         /// <param name="destination">Destination receiving ASCII Path bytes.</param>
@@ -173,6 +215,25 @@ namespace VectorNNTP.Common.Articles.Parsing
             ArticlePathMode mode,
             Span<byte> destination,
             out int bytesWritten)
+            => TryWriteCanonicalPath(
+                rawPath,
+                localIdentity,
+                kind,
+                containsOrganizationalTracker,
+                mode,
+                OrganizationalTrackerHost,
+                destination,
+                out bytesWritten);
+
+        internal static bool TryWriteCanonicalPath(
+            ReadOnlySpan<byte> rawPath,
+            ReadOnlySpan<byte> localIdentity,
+            ArticlePathKind kind,
+            bool containsOrganizationalTracker,
+            ArticlePathMode mode,
+            ReadOnlySpan<byte> organizationalTracker,
+            Span<byte> destination,
+            out int bytesWritten)
         {
             var remaining = kind is ArticlePathKind.Missing or ArticlePathKind.Empty
                 ? []
@@ -181,14 +242,15 @@ namespace VectorNNTP.Common.Articles.Parsing
             var traverse = mode == ArticlePathMode.Traverse;
             var localIsTracker = traverse
                 && !localIdentity.IsEmpty
-                && AsciiEqualsIgnoreCase(localIdentity, OrganizationalTrackerHost);
+                && AsciiEqualsIgnoreCase(localIdentity, organizationalTracker);
             var prependTracker = !containsOrganizationalTracker && !localIsTracker;
             var applicationHop = traverse ? localIdentity : default;
 
             return TryWriteJoinedComponents(
                 remaining,
-                prependTracker ? OrganizationalTrackerHost : default,
+                prependTracker ? organizationalTracker : default,
                 applicationHop,
+                organizationalTracker,
                 trackerAlreadyEmitted: prependTracker || localIsTracker,
                 destination,
                 out bytesWritten);
@@ -219,6 +281,7 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <param name="remaining">Path value still to split. Empty components are skipped.</param>
         /// <param name="prepend1">First hop, or empty. Used for <see cref="OrganizationalTrackerHost"/> when it must be inserted.</param>
         /// <param name="prepend2">Second hop, or empty. Used for the application FQDN in traverse mode.</param>
+        /// <param name="organizationalTracker">Tracker component suppressed after its first occurrence.</param>
         /// <param name="trackerAlreadyEmitted">
         /// When <see langword="true"/>, later components equal to <see cref="OrganizationalTrackerHost"/> are omitted.
         /// The first such component is written and then this suppression applies.
@@ -230,6 +293,7 @@ namespace VectorNNTP.Common.Articles.Parsing
             ReadOnlySpan<byte> remaining,
             ReadOnlySpan<byte> prepend1,
             ReadOnlySpan<byte> prepend2,
+            ReadOnlySpan<byte> organizationalTracker,
             bool trackerAlreadyEmitted,
             Span<byte> destination,
             out int bytesWritten)
@@ -249,7 +313,7 @@ namespace VectorNNTP.Common.Articles.Parsing
                     continue;
                 }
 
-                if (AsciiEqualsIgnoreCase(component, OrganizationalTrackerHost))
+                if (AsciiEqualsIgnoreCase(component, organizationalTracker))
                 {
                     if (trackerAlreadyEmitted)
                     {

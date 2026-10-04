@@ -1,11 +1,8 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.Common.Messaging.RabbitMq;
-using VectorNNTP.Common.Acme;
 using VectorNNTP.NNTPD.Acme;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Redis;
@@ -18,7 +15,6 @@ using VectorNNTP.Common.Cloudflare;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.Common.Core;
 using VectorNNTP.NNTPD.Hosting.Systemd;
-using VectorNNTP.Common.Networking;
 using VectorNNTP.NNTPD.Networking.Listeners;
 using VectorNNTP.NNTPD.Networking.Proxy;
 using VectorNNTP.NNTPD.Session;
@@ -31,6 +27,7 @@ using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Session.Commands.Posting;
 using VectorNNTP.NNTPD.Session.SpeedTest;
 using VectorNNTP.NNTPD.Diagnostics;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.PostFilter.Quota;
@@ -360,6 +357,13 @@ public static class NntpdServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, NntpDbService>(static sp =>
                 sp.GetRequiredService<NntpDbService>()));
+
+        services.TryAddSingleton<NntpSharedConfigurationService>();
+        services.TryAddSingleton<INntpArticlePolicySource>(static sp =>
+            sp.GetRequiredService<NntpSharedConfigurationService>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, NntpSharedConfigurationService>(static sp =>
+                sp.GetRequiredService<NntpSharedConfigurationService>()));
 
         services.TryAddSingleton<NewsgroupCatalogueService>();
         services.TryAddSingleton<INewsgroupCatalogue>(static sp =>

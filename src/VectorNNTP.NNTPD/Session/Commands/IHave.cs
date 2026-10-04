@@ -1,4 +1,5 @@
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
@@ -85,11 +86,16 @@ internal static class IHave
                     cancellationToken)
             .ConfigureAwait(false);
 
+        NntpArticlePolicyCapture.Capture(
+            context.Session,
+            queue.MaxArticleBytes,
+            out var maxArticleBytes,
+            out var siteNameUtf8);
         IHaveArticleReadResult read;
         try
         {
             read = await IHaveArticleReader
-                .ReadAsync(context.Connection.Input, queue.MaxArticleBytes, cancellationToken)
+                .ReadAsync(context.Connection.Input, maxArticleBytes, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (
@@ -124,10 +130,16 @@ internal static class IHave
             return;
         }
 
-        var created = ArticleRecordIngress.TryCreateFromStuffedWire(
-            context.Session.ArticleParser,
-            read.Payload,
-            queue.MaxArticleBytes);
+        var created = siteNameUtf8 is null
+            ? ArticleRecordIngress.TryCreateFromStuffedWire(
+                context.Session.ArticleParser,
+                read.Payload,
+                queue.MaxArticleBytes)
+            : ArticleRecordIngress.TryCreateFromStuffedWire(
+                context.Session.ArticleParser,
+                read.Payload,
+                maxArticleBytes,
+                siteNameUtf8);
         if (!created.IsAccepted)
         {
             var recordReject = created.ParseFailure != VectorNNTP.Common.Articles.Parsing.NntpArticleParseFailureCode.None
@@ -224,14 +236,19 @@ internal static class IHave
         }
 
         history?.Remember(messageId);
-        IHaveLogMessages.Received(
-            Logger,
-            NntpCommandLogFormat.Client(context.Session),
-            messageIdText,
-            read.Metrics.ArticleSize,
-            read.Metrics.PipeReads,
-            read.Metrics.ReceiveElapsed.TotalMilliseconds,
-            Queued: true);
+        var logger = Logger;
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            var client = NntpCommandLogFormat.Client(context.Session);
+            IHaveLogMessages.Received(
+                logger,
+                client,
+                messageIdText,
+                read.Metrics.ArticleSize,
+                read.Metrics.PipeReads,
+                read.Metrics.ReceiveElapsed.TotalMilliseconds,
+                Queued: true);
+        }
 
         await NntpCommandReply.WriteAsync(
                     context,

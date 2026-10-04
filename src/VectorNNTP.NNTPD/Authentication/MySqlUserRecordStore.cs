@@ -1,3 +1,4 @@
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.Authentication;
@@ -27,7 +28,7 @@ public sealed class MySqlUserRecordStore : INntpUserRecordStore
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
         try
         {
-            await using var connection = await _nntpDb.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var connection = await NntpDbConnections.OpenAsync(_nntpDb, cancellationToken).ConfigureAwait(false);
             return await connection.QueryUserAccountAsync(accountName, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)

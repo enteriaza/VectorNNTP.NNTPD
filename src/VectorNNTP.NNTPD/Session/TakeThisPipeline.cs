@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Session.Commands;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
@@ -43,7 +44,7 @@ internal sealed class TakeThisPipeline
     private readonly NntpResponseWriter _response;
     private readonly ILogger _logger;
     private readonly Slot?[] _slots;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly SemaphoreSlim _emitGate = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly TakeThisStageSessionLog? _stageLog;
@@ -200,11 +201,9 @@ internal sealed class TakeThisPipeline
             CommandParsedTs = started,
             PeekStartTs = started,
         };
-        var lookup = TakeThis.PeekAsync(_session, ownedId, cancellationToken);
-        if (marks is not null)
-        {
-            lookup = marks.ObservePeek(lookup);
-        }
+        var lookup = marks is not null
+            ? marks.ObservePeek(TakeThis.PeekAsync(_session, ownedId, cancellationToken))
+            : TakeThis.PeekAsync(_session, ownedId, cancellationToken);
 
         AfterPeekStarted?.Invoke();
 
@@ -217,13 +216,19 @@ internal sealed class TakeThisPipeline
                 throw new InvalidOperationException("TAKETHIS pipeline accepted a command without a free slot.");
             }
 
+            NntpArticlePolicyCapture.Capture(
+                _session,
+                _session.ArticleIngestion.MaxArticleBytes,
+                out var capturedMaxArticleBytes,
+                out var capturedSiteName);
             slot = new Slot
             {
                 MessageId = ownedId,
                 StartedTimestamp = started,
                 Index = (_head + _count) % Depth,
-                Lookup = lookup,
                 Marks = marks,
+                MaxArticleBytes = capturedMaxArticleBytes,
+                SiteNameUtf8 = capturedSiteName,
             };
             _slots[slot.Index] = slot;
             _count++;
@@ -239,10 +244,7 @@ internal sealed class TakeThisPipeline
                 Volatile.Read(ref _activeArticleProcessing));
         }
 
-        if (marks is not null)
-        {
-            marks.ReceiveStartTs = System.Diagnostics.Stopwatch.GetTimestamp();
-        }
+        marks?.ReceiveStartTs = System.Diagnostics.Stopwatch.GetTimestamp();
 
         AfterReceiveStarted?.Invoke();
         var reads = Interlocked.Increment(ref _activeArticleReads);
@@ -262,7 +264,7 @@ internal sealed class TakeThisPipeline
                 }
 
                 read = await IHaveArticleReader
-                    .ReadAsync(_session.Connection.Input, _session.ArticleIngestion.MaxArticleBytes, cancellationToken)
+                    .ReadAsync(_session.Connection.Input, slot.MaxArticleBytes, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (
@@ -859,11 +861,15 @@ internal sealed class TakeThisPipeline
         {
             var remote = _session.ClientIdentity.TcpPeer?.ToString() ?? "session";
             var path = _stageLog.Write(dir, remote);
-            _logger.LogInformation(
-                "TAKETHIS stage timing wrote {Path} samples={Samples} peak={Peak}",
-                path,
-                _stageLog.Count,
-                _stageLog.PeakOccupied);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                var samples = _stageLog.Count;
+                _logger.LogInformation(
+                    "TAKETHIS stage timing wrote {Path} samples={Samples} peak={Peak}",
+                    path,
+                    samples,
+                    _stageLog.PeakOccupied);
+            }
         }
         catch
         {
@@ -934,6 +940,8 @@ internal sealed class TakeThisPipeline
                     read.Payload,
                     stuffed: true,
                     messageIdText,
+                    slot.MaxArticleBytes,
+                    slot.SiteNameUtf8,
                     out var inbound,
                     out var recordReject,
                     out var canonicalSize))
@@ -1063,11 +1071,13 @@ internal sealed class TakeThisPipeline
 
         public required long StartedTimestamp { get; init; }
 
-        public ValueTask<HistoryLookupResult> Lookup { get; init; }
-
         public TakeThisStageMarks? Marks { get; init; }
 
         public IHaveArticleReadResult Read { get; set; }
+
+        public int MaxArticleBytes { get; init; }
+
+        public byte[]? SiteNameUtf8 { get; init; }
 
         public HistoryLookupResult Peek { get; set; }
 

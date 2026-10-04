@@ -8,6 +8,7 @@ namespace VectorNNTP.BackFiller.Nntp
     {
         /// <summary>Retrieves the article identified by <paramref name="item"/>.</summary>
         /// <param name="item">Work item whose request backbone and message id select the provider and ARTICLE argument.</param>
+        /// <param name="maxArticleBytes">Captured article-size boundary for this retrieval.</param>
         /// <param name="consumePayload">
         /// Invoked synchronously with the destuffed payload before this method returns a retrieved article.
         /// The memory is valid only until the delegate returns. The delegate must not store it and must not await.
@@ -17,6 +18,7 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <returns>The retrieval outcome for <paramref name="item"/>.</returns>
         Task<ArticleRetrievalResult> RetrieveAsync(
             ArticleWorkItem item,
+            int maxArticleBytes,
             Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
             CancellationToken cancellationToken);
     }
@@ -46,6 +48,7 @@ namespace VectorNNTP.BackFiller.Nntp
         /// Acquires a session for the work-item backbone, downloads its message id, and disposes the lease.
         /// </summary>
         /// <param name="item">Work item. <see cref="ArticleWorkItem.Request"/> supplies the backbone and message id.</param>
+        /// <param name="maxArticleBytes">Captured article-size boundary passed to the download.</param>
         /// <param name="consumePayload">
         /// Passed to <see cref="NntpProviderSession.DownloadArticleAsync"/> and invoked there while the session busy lock is held.
         /// </param>
@@ -73,6 +76,7 @@ namespace VectorNNTP.BackFiller.Nntp
         /// </remarks>
         public async Task<ArticleRetrievalResult> RetrieveAsync(
             ArticleWorkItem item,
+            int maxArticleBytes,
             Func<ReadOnlyMemory<byte>, ArticleRecordCreateResult> consumePayload,
             CancellationToken cancellationToken)
         {
@@ -117,7 +121,11 @@ namespace VectorNNTP.BackFiller.Nntp
             await using (lease)
             {
                 var result = await lease.Session
-                    .DownloadArticleAsync(item.Request.MessageId, cancellationToken, consumePayload)
+                    .DownloadArticleAsync(
+                        item.Request.MessageId,
+                        cancellationToken,
+                        consumePayload,
+                        maxArticleBytes)
                     .ConfigureAwait(false);
                 if (!result.SessionReusable)
                 {

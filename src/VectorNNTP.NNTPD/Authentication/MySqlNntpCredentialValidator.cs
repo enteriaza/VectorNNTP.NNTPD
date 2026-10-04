@@ -1,6 +1,6 @@
 using System.Net;
 using VectorNNTP.NNTPD.Authentication.Sasl;
-using VectorNNTP.NNTPD.NntpDb;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.Session;
 using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.SessionState;

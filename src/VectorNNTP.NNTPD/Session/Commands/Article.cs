@@ -4,6 +4,7 @@ using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Articles.Processing;
 using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Session.CommandProcessor;
 using VectorNNTP.NNTPD.Session.Framing;
@@ -154,7 +155,7 @@ internal static class Article
                     headersSpan = record.ArtData.Span;
                 }
 
-                var headers = record.ArtData.Slice(0, headersSpan.Length);
+                var headers = record.ArtData[..headersSpan.Length];
                 await context.Response.WriteCustomerHeadAsync(
                     headers,
                     messageIdText,
@@ -202,6 +203,7 @@ internal static class Article
         }
 
         var articleId = ArticleId.FromMessageId(messageId.Span);
+        var logger = Logger;
         StorageArticleLookupResult fleet;
         try
         {
@@ -213,11 +215,15 @@ internal static class Article
         }
         catch (Exception)
         {
-            ArticleRetrievalLogMessages.StorageLookupCompleted(
-                Logger,
-                "unavailable",
-                articleId.ToLowerHexString(),
-                Guid.Empty);
+            if (logger.IsEnabled(LogLevel.Debug))
+            {
+                var articleIdText = articleId.ToLowerHexString();
+                ArticleRetrievalLogMessages.StorageLookupCompleted(
+                    logger,
+                    "unavailable",
+                    articleIdText,
+                    Guid.Empty);
+            }
             return ResolveResult.Temporary();
         }
 
@@ -228,11 +234,15 @@ internal static class Article
         }
 
         var silence = string.Equals(fleet.Error, StorageLookupSilence, StringComparison.Ordinal);
-        ArticleRetrievalLogMessages.StorageLookupCompleted(
-            Logger,
-            silence ? "miss" : "unavailable",
-            articleId.ToLowerHexString(),
-            fleet.RequestId);
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            var articleIdText = articleId.ToLowerHexString();
+            ArticleRetrievalLogMessages.StorageLookupCompleted(
+                logger,
+                silence ? "miss" : "unavailable",
+                articleIdText,
+                fleet.RequestId);
+        }
         if (!silence)
         {
             return ResolveResult.Temporary();
@@ -334,13 +344,19 @@ internal static class Article
         StorageArticleLookupResult fleet,
         CancellationToken cancellationToken)
     {
+        var logger = Logger;
         if (fleet.ArticleId != articleId || !TryBindStorageEndpoint(fleet.Fqdn, fleet.VatpPort, out var host, out var port))
         {
-            ArticleRetrievalLogMessages.StorageLookupCompleted(
-                Logger,
-                "unavailable",
-                articleId.ToLowerHexString(),
-                fleet.RequestId);
+            if (logger.IsEnabled(LogLevel.Debug))
+            {
+                var articleIdText = articleId.ToLowerHexString();
+                ArticleRetrievalLogMessages.StorageLookupCompleted(
+                    logger,
+                    "unavailable",
+                    articleIdText,
+                    fleet.RequestId);
+            }
+
             ArticleRetrievalLogMessages.TransferUnavailable(Logger, "StorageEndpoint", EndpointDetail(fleet.Fqdn, fleet.VatpPort));
             return ResolveResult.Temporary();
         }
@@ -348,20 +364,29 @@ internal static class Article
         var vatp = context.Session.VatpArticleClient;
         if (vatp is null)
         {
-            ArticleRetrievalLogMessages.StorageLookupCompleted(
-                Logger,
-                "found",
-                articleId.ToLowerHexString(),
-                fleet.RequestId);
+            if (logger.IsEnabled(LogLevel.Debug))
+            {
+                var articleIdText = articleId.ToLowerHexString();
+                ArticleRetrievalLogMessages.StorageLookupCompleted(
+                    logger,
+                    "found",
+                    articleIdText,
+                    fleet.RequestId);
+            }
+
             ArticleRetrievalLogMessages.TransferUnavailable(Logger, "VatpClientMissing", EndpointDetail(host, port));
             return ResolveResult.Temporary();
         }
 
-        ArticleRetrievalLogMessages.StorageLookupCompleted(
-            Logger,
-            "found",
-            articleId.ToLowerHexString(),
-            fleet.RequestId);
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            var articleIdText = articleId.ToLowerHexString();
+            ArticleRetrievalLogMessages.StorageLookupCompleted(
+                logger,
+                "found",
+                articleIdText,
+                fleet.RequestId);
+        }
 
         var serverId = fleet.ServerId ?? 0;
         VatpFetchResult fetch;
@@ -419,11 +444,15 @@ internal static class Article
             }
             else
             {
-                ArticleRetrievalLogMessages.StorageCandidateExhausted(
-                    Logger,
-                    articleId.ToLowerHexString(),
-                    fleet.RequestId,
-                    1);
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    var articleIdText = articleId.ToLowerHexString();
+                    ArticleRetrievalLogMessages.StorageCandidateExhausted(
+                        logger,
+                        articleIdText,
+                        fleet.RequestId,
+                        1);
+                }
             }
         }
 
@@ -440,27 +469,38 @@ internal static class Article
         int attempt,
         CancellationToken cancellationToken)
     {
-        ArticleRetrievalLogMessages.StorageCandidateSelected(
-            Logger,
-            articleId.ToLowerHexString(),
-            requestId,
-            serverId,
-            attempt);
+        var logger = Logger;
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            var articleIdText = articleId.ToLowerHexString();
+            ArticleRetrievalLogMessages.StorageCandidateSelected(
+                logger,
+                articleIdText,
+                requestId,
+                serverId,
+                attempt);
+        }
         try
         {
             var fetch = await vatp.FetchArticleAsync(fqdn, vatpPort, requestId, articleId, cancellationToken)
                 .ConfigureAwait(false);
             if (fetch.Kind != VatpFetchKind.Success)
             {
-                ArticleRetrievalLogMessages.StorageCandidateFailed(
-                    Logger,
-                    articleId.ToLowerHexString(),
-                    requestId,
-                    serverId,
-                    attempt,
-                    fetch.Kind.ToString(),
-                    fetch.AcceptedDataBytes,
-                    IsAlternateEligible(fetch));
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    var articleIdText = articleId.ToLowerHexString();
+                    var kind = fetch.Kind.ToString();
+                    var failoverEligible = IsAlternateEligible(fetch);
+                    ArticleRetrievalLogMessages.StorageCandidateFailed(
+                        logger,
+                        articleIdText,
+                        requestId,
+                        serverId,
+                        attempt,
+                        kind,
+                        fetch.AcceptedDataBytes,
+                        failoverEligible);
+                }
             }
 
             return fetch;
@@ -562,10 +602,22 @@ internal static class Article
         out ArticleRecord entered)
     {
         entered = default;
-        var created = ArticleRecordFactory.TryCreate(
-            context.Session.ArticleParser,
-            record.ArtData,
-            ArticlePathMode.Traverse);
+        NntpArticlePolicyCapture.Capture(
+            context.Session,
+            ArticleResourceLimits.MaxArticleBytes,
+            out var maxArticleBytes,
+            out var siteNameUtf8);
+        var created = siteNameUtf8 is null
+            ? ArticleRecordFactory.TryCreate(
+                context.Session.ArticleParser,
+                record.ArtData,
+                ArticlePathMode.Traverse)
+            : ArticleRecordFactory.TryCreate(
+                context.Session.ArticleParser,
+                record.ArtData,
+                ArticlePathMode.Traverse,
+                maxArticleBytes,
+                siteNameUtf8);
         if (!created.IsAccepted || created.Record.ArtId != record.ArtId)
         {
             return false;
@@ -587,19 +639,36 @@ internal static class Article
         admitted = default;
         try
         {
-            var created = ArticleRecordFactory.TryCreate(
-                context.Session.ArticleParser,
-                record.ArtData,
-                ArticlePathMode.Traverse);
+            var logger = Logger;
+            NntpArticlePolicyCapture.Capture(
+                context.Session,
+                ArticleResourceLimits.MaxArticleBytes,
+                out var maxArticleBytes,
+                out var siteNameUtf8);
+            var created = siteNameUtf8 is null
+                ? ArticleRecordFactory.TryCreate(
+                    context.Session.ArticleParser,
+                    record.ArtData,
+                    ArticlePathMode.Traverse)
+                : ArticleRecordFactory.TryCreate(
+                    context.Session.ArticleParser,
+                    record.ArtData,
+                    ArticlePathMode.Traverse,
+                    maxArticleBytes,
+                    siteNameUtf8);
             if (!created.IsAccepted || created.Record.ArtId != record.ArtId)
             {
-                var reason = created.ParseFailure != NntpArticleParseFailureCode.None
-                    ? created.ParseFailure.ToString()
-                    : created.MaterializeFailure.ToString();
-                ArticleRetrievalLogMessages.IngestNotAdmitted(
-                    Logger,
-                    reason,
-                    Encoding.ASCII.GetString(record.MessageId));
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    var reason = created.ParseFailure != NntpArticleParseFailureCode.None
+                        ? created.ParseFailure.ToString()
+                        : created.MaterializeFailure.ToString();
+                    var rejectedMessageId = Encoding.ASCII.GetString(record.MessageId);
+                    ArticleRetrievalLogMessages.IngestNotAdmitted(
+                        logger,
+                        reason,
+                        rejectedMessageId);
+                }
                 return false;
             }
 
@@ -622,7 +691,11 @@ internal static class Article
             }
 
             admitted = default;
-            ArticleRetrievalLogMessages.IngestNotAdmitted(Logger, enqueue.ToString(), messageIdText);
+            if (logger.IsEnabled(LogLevel.Debug))
+            {
+                var result = enqueue.ToString();
+                ArticleRetrievalLogMessages.IngestNotAdmitted(logger, result, messageIdText);
+            }
             return false;
         }
         catch (Exception ex)

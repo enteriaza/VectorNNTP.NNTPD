@@ -112,6 +112,19 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// resolves Date, classifies Path rewrite, classifies content type, and validates detected yEnc sections.
         /// </returns>
         internal NntpArticleParseResult Parse(ReadOnlyMemory<byte> articleBytes)
+            => Parse(articleBytes, _options.MaxArticleBytes, ArticlePathCanonicalizer.OrganizationalTrackerHost);
+
+        /// <summary>
+        /// Parses one article using one captured article-size limit and Path tracker.
+        /// </summary>
+        /// <param name="articleBytes">Complete article bytes after destuffing.</param>
+        /// <param name="maxArticleBytes">Article-size boundary for this operation. Not clamped to a fixed ceiling.</param>
+        /// <param name="organizationalTrackerHost">Path tracker component for this operation.</param>
+        /// <returns>The parse result.</returns>
+        internal NntpArticleParseResult Parse(
+            ReadOnlyMemory<byte> articleBytes,
+            int maxArticleBytes,
+            ReadOnlySpan<byte> organizationalTrackerHost)
         {
             var localIdentity = (ReadOnlyMemory<byte>)_localIdentity;
             if (articleBytes.IsEmpty)
@@ -127,7 +140,7 @@ namespace VectorNNTP.Common.Articles.Parsing
                     localIdentity);
             }
 
-            if (articleBytes.Length > _options.MaxArticleBytes)
+            if (articleBytes.Length > maxArticleBytes)
             {
                 return NntpArticleParseResult.Rejected(
                     NntpArticleParseFailureCode.ArticleTooLarge,
@@ -234,7 +247,7 @@ namespace VectorNNTP.Common.Articles.Parsing
                         originalMessageIdValue: originalMessageIdValue);
                 }
 
-                if (!TryAnalyzePath(articleSpan, parsedHeaders, articleBytes, localIdentity.Span, out var pathKind, out var containsOrganizationalTracker, out var originalPathValue, out var pathFailure))
+                if (!TryAnalyzePath(articleSpan, parsedHeaders, articleBytes, localIdentity.Span, organizationalTrackerHost, out var pathKind, out var containsOrganizationalTracker, out var originalPathValue, out var pathFailure))
                 {
                     return NntpArticleParseResult.Rejected(
                         pathFailure,
@@ -314,15 +327,15 @@ namespace VectorNNTP.Common.Articles.Parsing
         }
 
         /// <summary>
-        /// Clamps <see cref="NntpArticleParserOptions.MaxArticleBytes"/> and <see cref="NntpArticleParserOptions.MaxHeaderLineBytes"/>
-        /// to <see cref="ArticleResourceLimits"/>. Other limits are left as supplied.
+        /// Clamps <see cref="NntpArticleParserOptions.MaxHeaderLineBytes"/>
+        /// to <see cref="ArticleResourceLimits.MaxArticleLineBytes"/>.
+        /// <see cref="NntpArticleParserOptions.MaxArticleBytes"/> is the caller's article-size policy and is not reduced.
         /// </summary>
         /// <param name="options">Caller-supplied limits.</param>
-        /// <returns>A copy with those two fields reduced when they exceed the resource ceilings.</returns>
+        /// <returns>A copy with the header-line field reduced when it exceeds the line ceiling.</returns>
         private static NntpArticleParserOptions CapOptions(NntpArticleParserOptions options)
             => options with
             {
-                MaxArticleBytes = Math.Min(options.MaxArticleBytes, ArticleResourceLimits.MaxArticleBytes),
                 MaxHeaderLineBytes = Math.Min(options.MaxHeaderLineBytes, ArticleResourceLimits.MaxArticleLineBytes),
             };
 
@@ -856,12 +869,13 @@ namespace VectorNNTP.Common.Articles.Parsing
         }
 
         /// <summary>
-        /// Requires at most one Path header and classifies it with <see cref="ArticlePathCanonicalizer.TryAnalyze"/>.
+        /// Requires at most one Path header and classifies it with path analysis.
         /// </summary>
         /// <param name="articleSpan">Article bytes.</param>
         /// <param name="headers">Parsed headers in wire order.</param>
         /// <param name="articleBytes">Buffer that owns <paramref name="originalPathValue"/>.</param>
         /// <param name="localIdentity">Parser FQDN bytes.</param>
+        /// <param name="organizationalTrackerHost">Path tracker component for this article.</param>
         /// <param name="pathKind">Rewrite classification. <see cref="ArticlePathKind.Missing"/> when no Path header exists.</param>
         /// <param name="containsOrganizationalTracker">Whether a Path token equals the organizational tracker host.</param>
         /// <param name="originalPathValue">Original Path value slice when a header exists; otherwise empty.</param>
@@ -872,6 +886,7 @@ namespace VectorNNTP.Common.Articles.Parsing
             ReadOnlySpan<NntpArticleHeaderEntry> headers,
             ReadOnlyMemory<byte> articleBytes,
             ReadOnlySpan<byte> localIdentity,
+            ReadOnlySpan<byte> organizationalTrackerHost,
             out ArticlePathKind pathKind,
             out bool containsOrganizationalTracker,
             out ReadOnlyMemory<byte> originalPathValue,
@@ -905,7 +920,7 @@ namespace VectorNNTP.Common.Articles.Parsing
             var rawPath = found
                 ? articleSpan.Slice(pathHeader.ValueOffset, pathHeader.ValueLength)
                 : [];
-            if (!ArticlePathCanonicalizer.TryAnalyze(rawPath, localIdentity, found, out pathKind, out containsOrganizationalTracker, out failureCode))
+            if (!ArticlePathCanonicalizer.TryAnalyze(rawPath, localIdentity, found, organizationalTrackerHost, out pathKind, out containsOrganizationalTracker, out failureCode))
             {
                 return false;
             }

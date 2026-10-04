@@ -1,6 +1,7 @@
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Diagnostics;
 using VectorNNTP.NNTPD.History;
@@ -103,6 +104,11 @@ internal static class TakeThis
         var lookup = PeekAsync(context.Session, messageIdBytes, cancellationToken);
         var queue = context.Session.ArticleIngestion;
 
+        NntpArticlePolicyCapture.Capture(
+            context.Session,
+            queue.MaxArticleBytes,
+            out var maxArticleBytes,
+            out var siteNameUtf8);
         NntpMultilineReadStatus status;
         ReadOnlyMemory<byte> payload;
         var receiveStart = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -116,7 +122,7 @@ internal static class TakeThis
             else if (context.Session.ReceiveStrategy == NntpReceiveStrategy.StreamDataPlane)
             {
                 var read = await IHaveArticleReader
-                    .ReadAsync(context.Connection.Input, queue.MaxArticleBytes, cancellationToken)
+                    .ReadAsync(context.Connection.Input, maxArticleBytes, cancellationToken)
                     .ConfigureAwait(false);
                 status = read.Status;
                 payload = read.Payload;
@@ -124,7 +130,7 @@ internal static class TakeThis
             else
             {
                 var article = await NntpMultilineDataReader
-                    .ReadArticleAsync(context.Connection.Input, queue.MaxArticleBytes, cancellationToken)
+                    .ReadArticleAsync(context.Connection.Input, maxArticleBytes, cancellationToken)
                     .ConfigureAwait(false);
                 status = article.Status;
                 payload = article.Payload;
@@ -212,6 +218,8 @@ internal static class TakeThis
                 payload,
                 stuffed,
                 messageId,
+                maxArticleBytes,
+                siteNameUtf8,
                 out var inbound,
                 out var recordReject,
                 out var canonicalSize))
@@ -330,17 +338,50 @@ internal static class TakeThis
         out InboundArticle inbound,
         out string rejectDetail,
         out int canonicalSize)
+        => TryCreateQueuedRecord(
+            session,
+            payload,
+            stuffed,
+            messageId,
+            session.ArticleIngestion.MaxArticleBytes,
+            siteNameUtf8: null,
+            out inbound,
+            out rejectDetail,
+            out canonicalSize);
+
+    internal static bool TryCreateQueuedRecord(
+        NntpSession session,
+        ReadOnlyMemory<byte> payload,
+        bool stuffed,
+        string messageId,
+        int maxArticleBytes,
+        byte[]? siteNameUtf8,
+        out InboundArticle inbound,
+        out string rejectDetail,
+        out int canonicalSize)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentException.ThrowIfNullOrWhiteSpace(messageId);
         canonicalSize = 0;
 
-        var created = stuffed
-            ? ArticleRecordIngress.TryCreateFromStuffedWire(
-                session.ArticleParser,
-                payload,
-                session.ArticleIngestion.MaxArticleBytes)
-            : ArticleRecordIngress.TryCreateFromDestuffed(session.ArticleParser, payload);
+        var created = siteNameUtf8 is null
+            ? stuffed
+                ? ArticleRecordIngress.TryCreateFromStuffedWire(
+                    session.ArticleParser,
+                    payload,
+                    session.ArticleIngestion.MaxArticleBytes)
+                : ArticleRecordIngress.TryCreateFromDestuffed(session.ArticleParser, payload)
+            : stuffed
+                ? ArticleRecordIngress.TryCreateFromStuffedWire(
+                    session.ArticleParser,
+                    payload,
+                    maxArticleBytes,
+                    siteNameUtf8)
+                : ArticleRecordIngress.TryCreateFromDestuffed(
+                    session.ArticleParser,
+                    payload,
+                    maxArticleBytes,
+                    siteNameUtf8);
         if (!created.IsAccepted)
         {
             inbound = null!;

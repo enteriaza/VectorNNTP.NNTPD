@@ -1,3 +1,5 @@
+using MySqlConnector;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.Authentication;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Moderation;
@@ -61,6 +63,10 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
 
     public TaskCompletionSource? QueryNewsgroupsStarted { get; set; }
 
+    public IReadOnlyList<NntpSharedConfigurationCandidate>? SharedConfigurationRows { get; set; }
+
+    public Exception? SharedConfigurationException { get; set; }
+
     public IReadOnlyList<FakeNntpDbConnection> Connections
     {
         get
@@ -89,7 +95,7 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
         }
     }
 
-    public async Task<INntpDbConnection> OpenAsync(string connectionString, CancellationToken cancellationToken)
+    public async Task<INntpDbSession> OpenAsync(string connectionString, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         OpenAttemptCount++;
@@ -131,6 +137,8 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
             InsertPostFilterRejectionException = InsertPostFilterRejectionException,
             BlockQueryNewsgroups = BlockQueryNewsgroups,
             QueryNewsgroupsStarted = QueryNewsgroupsStarted,
+            SharedConfigurationRows = SharedConfigurationRows,
+            SharedConfigurationException = SharedConfigurationException,
         };
         lock (_sync)
         {
@@ -143,7 +151,7 @@ internal sealed class FakeNntpDbConnectionFactory : INntpDbConnectionFactory
 }
 
 /// <summary>In-memory logical MySQL connection with failure injection.</summary>
-internal sealed class FakeNntpDbConnection : INntpDbConnection
+internal sealed class FakeNntpDbConnection : INntpDbConnection, INntpSharedConfigurationRowSource
 {
     public int SelectOneCount { get; private set; }
 
@@ -356,6 +364,35 @@ internal sealed class FakeNntpDbConnection : INntpDbConnection
 
         Rejections.Add(evidence);
         return ValueTask.CompletedTask;
+    }
+
+    public IReadOnlyList<NntpSharedConfigurationCandidate>? SharedConfigurationRows { get; set; }
+
+    public Exception? SharedConfigurationException { get; set; }
+
+    public MySqlCommand CreateCommand() =>
+        throw new NotSupportedException("Fake NntpDB connections do not create provider commands.");
+
+    public ValueTask<MySqlTransaction> BeginTransactionAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Fake NntpDB connections do not begin transactions.");
+
+    public ValueTask<MySqlTransaction> BeginTransactionAsync(
+        System.Data.IsolationLevel isolationLevel,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Fake NntpDB connections do not begin transactions.");
+
+    public ValueTask<IReadOnlyList<NntpSharedConfigurationCandidate>> ReadCandidatesAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (SharedConfigurationException is not null)
+        {
+            throw SharedConfigurationException;
+        }
+
+        IReadOnlyList<NntpSharedConfigurationCandidate> rows = SharedConfigurationRows
+            ?? [new NntpSharedConfigurationCandidate(5 * 1024 * 1024, "news.usenet.ninja", null)];
+        return ValueTask.FromResult(rows);
     }
 
     public ValueTask DisposeAsync()

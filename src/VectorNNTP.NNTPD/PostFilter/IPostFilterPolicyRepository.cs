@@ -10,7 +10,7 @@ public interface IPostFilterPolicyRepository
     /// </summary>
     /// <param name="cancellationToken">Token used to cancel the load.</param>
     /// <returns>The complete policy document.</returns>
-    /// <exception cref="NntpDb.NntpDbUnavailableException">
+    /// <exception cref="VectorNNTP.Common.NntpDb.NntpDbUnavailableException">
     /// MySQL is unavailable or the query failed.
     /// </exception>
     /// <exception cref="InvalidOperationException">

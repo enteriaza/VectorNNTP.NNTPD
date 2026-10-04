@@ -1,55 +1,49 @@
 using VectorNNTP.Common.Core;
 using VectorNNTP.Common.NntpDb;
-using VectorNNTP.NNTPD.NntpDb;
 
-namespace VectorNNTP.NNTPD.Newsgroups;
+namespace VectorNNTP.NNTPD.NntpDb;
 
 /// <summary>
-/// Loads the newsgroup catalogue from NntpDB, publishes an immutable snapshot,
-/// and refreshes it every five minutes.
+/// Loads <c>nntpsharedconfig</c> during startup and refreshes it on this service's own loop.
 /// </summary>
 /// <remarks>
-/// <para>
-/// MySqlConnector owns physical connection pooling. Each refresh opens one logical
-/// connection through <see cref="NntpDbService"/>, consumes the result set, and
-/// disposes the connection before the snapshot is published. The snapshot retains
-/// only managed immutable data.
-/// </para>
-/// <para>
-/// Initial population runs during <see cref="StartAsync"/> and fails startup when
-/// the query cannot be completed. Subsequent refresh failures keep the last
-/// known-good snapshot. A refresh does not start while the previous refresh is
-/// still running (single loop).
-/// </para>
+/// The initial load fails startup. A later refresh failure keeps the last known-good snapshot.
+/// One refresh runs at a time. This service does not query on an article path.
 /// </remarks>
-public sealed class NewsgroupCatalogueService : INewsgroupCatalogue, IApplicationService, IAsyncDisposable
+internal sealed class NntpSharedConfigurationService : INntpSharedConfigurationCatalogue, INntpArticlePolicySource, IApplicationService, IAsyncDisposable
 {
-    /// <summary>Catalogue refresh interval after a successful initial load.</summary>
-    public static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(5);
+    /// <summary>Refresh interval after a successful initial load. Owned by this service, not by a shared scheduler.</summary>
+    public static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(60);
 
     private readonly NntpDbService _nntpDb;
-    private readonly ILogger<NewsgroupCatalogueService> _logger;
+    private readonly ILogger<NntpSharedConfigurationService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _interval;
     private readonly CancellationTokenSource _runCts = new();
-    private NewsgroupSnapshot? _current;
+    private PublishedSnapshot? _current;
     private Task? _execution;
     private int _started;
     private int _refreshing;
     private int _disposed;
 
-    /// <summary>Initializes a new instance of the <see cref="NewsgroupCatalogueService"/> class.</summary>
-    public NewsgroupCatalogueService(
+    /// <summary>Initializes a new instance of the <see cref="NntpSharedConfigurationService"/> class.</summary>
+    /// <param name="nntpDb">Started database service.</param>
+    /// <param name="logger">Lifecycle logger.</param>
+    public NntpSharedConfigurationService(
         NntpDbService nntpDb,
-        ILogger<NewsgroupCatalogueService> logger)
+        ILogger<NntpSharedConfigurationService> logger)
         : this(nntpDb, logger, TimeProvider.System, RefreshInterval)
     {
     }
 
     /// <summary>Initializes a new instance with an explicit clock and interval (tests).</summary>
-    internal NewsgroupCatalogueService(
+    /// <param name="nntpDb">Started database service.</param>
+    /// <param name="logger">Lifecycle logger.</param>
+    /// <param name="timeProvider">Clock used by the refresh delay.</param>
+    /// <param name="interval">Delay between refreshes.</param>
+    internal NntpSharedConfigurationService(
         NntpDbService nntpDb,
-        ILogger<NewsgroupCatalogueService> logger,
+        ILogger<NntpSharedConfigurationService> logger,
         TimeProvider timeProvider,
         TimeSpan interval)
     {
@@ -64,19 +58,42 @@ public sealed class NewsgroupCatalogueService : INewsgroupCatalogue, IApplicatio
     }
 
     /// <inheritdoc />
-    public string Name => "NewsgroupCatalogue";
+    public string Name => "NntpSharedConfiguration";
 
     /// <inheritdoc />
     public Task? Execution => _execution;
 
     /// <inheritdoc />
-    public NewsgroupSnapshot Current
+    public bool TryGetArticlePolicy(out int maxArticleBytes, out string siteName)
+    {
+        var snapshot = Volatile.Read(ref _current);
+        if (snapshot is null)
+        {
+            maxArticleBytes = 0;
+            siteName = string.Empty;
+            return false;
+        }
+
+        maxArticleBytes = snapshot.Value.MaxArticleBytes;
+        siteName = snapshot.Value.SiteName;
+        return true;
+    }
+
+    /// <inheritdoc />
+    public NntpSharedConfiguration Current
     {
         get
         {
             var snapshot = Volatile.Read(ref _current);
-            return snapshot ?? throw new InvalidOperationException("Newsgroup catalogue has not been published.");
+            return snapshot?.Value ?? throw new InvalidOperationException("nntpsharedconfig has not been published.");
         }
+    }
+
+    private sealed class PublishedSnapshot
+    {
+        internal PublishedSnapshot(NntpSharedConfiguration value) => Value = value;
+
+        internal NntpSharedConfiguration Value { get; }
     }
 
     /// <summary>Gets whether a snapshot has been published (tests).</summary>
@@ -93,19 +110,19 @@ public sealed class NewsgroupCatalogueService : INewsgroupCatalogue, IApplicatio
             return;
         }
 
-        NewsgroupCatalogueLogMessages.InitialLoadStarted(_logger);
+        NntpSharedConfigurationLogMessages.InitialLoadStarted(_logger);
         try
         {
-            var snapshot = await LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            var snapshot = await LoadAsync(cancellationToken).ConfigureAwait(false);
             Publish(snapshot);
-            NewsgroupCatalogueLogMessages.RefreshLoopStarted(_logger, _interval);
+            NntpSharedConfigurationLogMessages.RefreshLoopStarted(_logger, _interval);
             _execution = RunAsync(_runCts.Token);
         }
         catch (Exception ex)
         {
             if (ex is not OperationCanceledException)
             {
-                NewsgroupCatalogueLogMessages.InitialLoadFailed(_logger, ex);
+                NntpSharedConfigurationLogMessages.InitialLoadFailed(_logger, ex);
             }
 
             Interlocked.Exchange(ref _started, 0);
@@ -129,7 +146,6 @@ public sealed class NewsgroupCatalogueService : INewsgroupCatalogue, IApplicatio
         }
         catch (OperationCanceledException)
         {
-            // Expected on shutdown.
         }
     }
 
@@ -143,13 +159,6 @@ public sealed class NewsgroupCatalogueService : INewsgroupCatalogue, IApplicatio
 
         await _runCts.CancelAsync().ConfigureAwait(false);
         _runCts.Dispose();
-    }
-
-    /// <summary>Replaces the published snapshot (tests).</summary>
-    internal void PublishForTests(NewsgroupSnapshot snapshot)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        Publish(snapshot);
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
@@ -169,10 +178,9 @@ public sealed class NewsgroupCatalogueService : INewsgroupCatalogue, IApplicatio
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Shutdown.
         }
 
-        NewsgroupCatalogueLogMessages.RefreshLoopStopped(_logger);
+        NntpSharedConfigurationLogMessages.RefreshLoopStopped(_logger);
     }
 
     private async Task TryRefreshAsync(CancellationToken cancellationToken)
@@ -184,7 +192,7 @@ public sealed class NewsgroupCatalogueService : INewsgroupCatalogue, IApplicatio
 
         try
         {
-            var snapshot = await LoadSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            var snapshot = await LoadAsync(cancellationToken).ConfigureAwait(false);
             Publish(snapshot);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -193,7 +201,7 @@ public sealed class NewsgroupCatalogueService : INewsgroupCatalogue, IApplicatio
         }
         catch (Exception ex)
         {
-            NewsgroupCatalogueLogMessages.RefreshFailed(_logger, ex);
+            NntpSharedConfigurationLogMessages.RefreshFailed(_logger, ex);
         }
         finally
         {
@@ -201,16 +209,15 @@ public sealed class NewsgroupCatalogueService : INewsgroupCatalogue, IApplicatio
         }
     }
 
-    private async Task<NewsgroupSnapshot> LoadSnapshotAsync(CancellationToken cancellationToken)
+    private async Task<NntpSharedConfiguration> LoadAsync(CancellationToken cancellationToken)
     {
-        await using var connection = await NntpDbConnections.OpenAsync(_nntpDb, cancellationToken).ConfigureAwait(false);
-        var rows = await connection.QueryNewsgroupsAsync(cancellationToken).ConfigureAwait(false);
-        return NewsgroupSnapshot.Create(rows);
+        await using var session = await _nntpDb.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await NntpSharedConfigurationReader.ReadAsync(session, cancellationToken).ConfigureAwait(false);
     }
 
-    private void Publish(NewsgroupSnapshot snapshot)
+    private void Publish(NntpSharedConfiguration snapshot)
     {
-        Interlocked.Exchange(ref _current, snapshot);
-        NewsgroupCatalogueLogMessages.SnapshotPublished(_logger, snapshot.Groups.Count);
+        Volatile.Write(ref _current, new PublishedSnapshot(snapshot));
+        NntpSharedConfigurationLogMessages.SnapshotPublished(_logger, snapshot.MaxArticleBytes, snapshot.SiteName);
     }
 }

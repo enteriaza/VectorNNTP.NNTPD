@@ -7,6 +7,7 @@ using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.Common.Core;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.Common.Networking;
 using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.NNTPD.Networking.Proxy;
@@ -58,6 +59,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly ITransitPeerMetrics? _peerMetrics;
     private readonly IPostingTraceProtector? _postingTraceProtector;
     private readonly INewsgroupCatalogue? _newsgroupCatalogue;
+    private readonly INntpArticlePolicySource? _sharedConfiguration;
     private readonly IModeratorCatalogue? _moderatorCatalogue;
     private readonly IModeratorAuthorization _moderatorAuthorization;
     private readonly IModerationSubmissionService _moderationSubmission;
@@ -114,7 +116,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         IPostFilter? postFilter = null,
         PostFilterMetrics? postFilterMetrics = null,
         IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
-        INewsLogWriter? newsLog = null)
+        INewsLogWriter? newsLog = null,
+        INntpArticlePolicySource? sharedConfiguration = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -138,6 +141,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _peerMetrics = peerMetrics;
         _postingTraceProtector = postingTraceProtector;
         _newsgroupCatalogue = newsgroupCatalogue;
+        _sharedConfiguration = sharedConfiguration;
         _moderatorCatalogue = moderatorCatalogue;
         _moderatorAuthorization = moderatorAuthorization ?? EmptyModeratorAuthorization.Instance;
         _moderationSubmission = moderationSubmission ?? UnavailableModerationSubmissionService.Instance;
@@ -171,7 +175,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
 
     /// <summary>Gets bound local endpoints after start (tests).</summary>
     internal IReadOnlyList<IPEndPoint> LocalEndPoints =>
-        _listeners.Select(static l => l.LocalEndPoint).ToArray();
+        [.. _listeners.Select(static l => l.LocalEndPoint)];
 
     /// <summary>Gets whether any accept loop is still running (tests).</summary>
     internal bool HasActiveAcceptLoops => _listeners.Exists(static l => l.AcceptLoopActive);
@@ -405,7 +409,10 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 postFilterMetrics: _postFilterMetrics,
                 postFilterEvidence: _postFilterEvidence,
                 newsLog: _newsLog,
-                transit: _options.Value.Transit);
+                transit: _options.Value.Transit)
+            {
+                SharedConfiguration = _sharedConfiguration,
+            };
 
             if (!connection.TryGetNegotiatedTlsParameters(out var tlsVersion, out var cipher))
             {
@@ -491,7 +498,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         }
     }
 
-    private async Task WaitUntilStoppedAsync(CancellationToken cancellationToken)
+    private static async Task WaitUntilStoppedAsync(CancellationToken cancellationToken)
     {
         try
         {

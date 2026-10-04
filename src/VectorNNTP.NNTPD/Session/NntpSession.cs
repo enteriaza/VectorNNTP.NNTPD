@@ -1,6 +1,7 @@
 using System.IO.Pipelines;
 using System.Net;
 using VectorNNTP.Common.Articles.Parsing;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.ArticleIngestion;
 using VectorNNTP.NNTPD.PostFilter;
 using VectorNNTP.NNTPD.Configuration;
@@ -237,6 +238,12 @@ public sealed class NntpSession
 
     /// <summary>Gets the destuffed POST article size limit (<c>Nntpd:MaxArticleSize</c>).</summary>
     public int MaxArticleSize { get; }
+
+    /// <summary>
+    /// Published <c>nntpsharedconfig</c>. Null when the session was constructed without the catalogue.
+    /// Article commands capture one policy for the whole operation.
+    /// </summary>
+    internal INntpArticlePolicySource? SharedConfiguration { get; set; }
 
     /// <summary>
     /// Gets the server injection identity used for POST metadata
@@ -1100,12 +1107,11 @@ public sealed class NntpSession
 
         if (command.Verb != NntpVerb.BenchIt
             && !NntpCommandLogFormat.SuppressHotPathCommand(command.Verb)
-            && logger.IsEnabled(LogLevel.Information))
+            && logger.IsEnabled(LogLevel.Debug))
         {
-            CommandLogMessages.CommandRx(
-                logger,
-                NntpCommandLogFormat.Client(this),
-                NntpCommandLogFormat.RedactRxCommand(command, line.Span));
+            var client = NntpCommandLogFormat.Client(this);
+            var commandText = NntpCommandLogFormat.RedactRxCommand(command, line.Span);
+            CommandLogMessages.CommandRx(logger, client, commandText);
         }
 
         await dispatcher
@@ -1148,12 +1154,11 @@ public sealed class NntpSession
                 await TakeThisWindow.DrainAsync(cancellationToken).ConfigureAwait(false);
                 if (command.Verb != NntpVerb.BenchIt
                     && !NntpCommandLogFormat.SuppressHotPathCommand(command.Verb)
-                    && logger.IsEnabled(LogLevel.Information))
+                    && logger.IsEnabled(LogLevel.Debug))
                 {
-                    CommandLogMessages.CommandRx(
-                        logger,
-                        NntpCommandLogFormat.Client(this),
-                        NntpCommandLogFormat.RedactRxCommand(command, line.Span));
+                    var client = NntpCommandLogFormat.Client(this);
+                    var commandText = NntpCommandLogFormat.RedactRxCommand(command, line.Span);
+                    CommandLogMessages.CommandRx(logger, client, commandText);
                 }
 
                 await Pipeline.SubmitAsync(command, line, cancellationToken).ConfigureAwait(false);
@@ -1277,14 +1282,15 @@ public sealed class NntpSession
     /// <summary>Logs a parser rejection without converting the full command line to a string.</summary>
     internal void LogCommandRejected(NntpCommand command, string detail)
     {
-        if (!_logger.IsEnabled(LogLevel.Information))
+        if (!_logger.IsEnabled(LogLevel.Debug))
         {
             return;
         }
 
+        var client = NntpCommandLogFormat.Client(this);
         CommandLogMessages.CommandRejected(
             _logger,
-            NntpCommandLogFormat.Client(this),
+            client,
             command.Verb,
             command.Qualifier,
             command.Status,

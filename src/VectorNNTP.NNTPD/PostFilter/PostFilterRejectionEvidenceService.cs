@@ -1,4 +1,5 @@
 using VectorNNTP.Common.Core;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.PostFilter;
@@ -96,7 +97,7 @@ public sealed class PostFilterRejectionEvidenceService : IApplicationService
 
             try
             {
-                await using var connection = await _nntpDb.OpenAsync(CancellationToken.None)
+                await using var connection = await NntpDbConnections.OpenAsync(_nntpDb, CancellationToken.None)
                     .ConfigureAwait(false);
                 await connection.InsertPostFilterRejectionAsync(evidence, CancellationToken.None)
                     .ConfigureAwait(false);

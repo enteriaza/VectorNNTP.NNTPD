@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.BackFiller.Accounts;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Nntp;
 using VectorNNTP.BackFiller.Tests.Fixtures;
@@ -167,6 +168,24 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
             Assert.True(await harness.Service.RefreshOnceAsync(CancellationToken.None));
             Assert.True(harness.Catalog.TryGetProvider("Giganews", out var restored));
             Assert.Equal("news.example.test", restored.Host);
+        }
+
+        [Fact]
+        public async Task Shared_configuration_failure_after_startup_retains_both_snapshots()
+        {
+            var source = new FakeProviderAccountSource
+            {
+                Rows = [ProviderAccountTestRows.Create()],
+            };
+            await using var harness = CreateHarness(source);
+            await harness.Service.StartAsync(CancellationToken.None);
+            var knownGood = Assert.Single(harness.Service.PublishedProviders);
+            var shared = harness.Service.Current;
+
+            harness.Shared.Failure = new InvalidOperationException("nntpsharedconfig has no row.");
+            Assert.False(await harness.Service.RefreshOnceAsync(CancellationToken.None));
+            Assert.Same(knownGood, Assert.Single(harness.Service.PublishedProviders));
+            Assert.Equal(shared, harness.Service.Current);
         }
 
         [Fact]
@@ -390,12 +409,14 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
                 },
                 TimeSpan.FromSeconds(2),
                 NullLogger<NntpProviderRegistry>.Instance);
+            var shared = new FixedSharedConfigurationSource();
             var service = new ProviderAccountConfigurationService(
                 source,
+                shared,
                 registry,
                 runtime,
                 logger);
-            return new ServiceHarness(service, catalog, registry, transport, logger);
+            return new ServiceHarness(service, catalog, registry, transport, logger, shared);
         }
 
         private static async Task WaitUntilAsync(Func<bool> condition)
@@ -415,13 +436,15 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
                 ProviderConfigurationCatalog catalog,
                 NntpProviderRegistry registry,
                 ScriptedNntpTransportFactory transport,
-                CollectingLogger<ProviderAccountConfigurationService> logger)
+                CollectingLogger<ProviderAccountConfigurationService> logger,
+                FixedSharedConfigurationSource shared)
             {
                 Service = service;
                 Catalog = catalog;
                 Registry = registry;
                 Transport = transport;
                 Logger = logger;
+                Shared = shared;
             }
 
             public ProviderAccountConfigurationService Service { get; }
@@ -434,10 +457,33 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
 
             public CollectingLogger<ProviderAccountConfigurationService> Logger { get; }
 
+            public FixedSharedConfigurationSource Shared { get; }
+
             public async ValueTask DisposeAsync()
             {
                 await Service.DisposeAsync().ConfigureAwait(false);
                 await Registry.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        private sealed class FixedSharedConfigurationSource : IBackFillerSharedConfigurationSource
+        {
+            public NntpSharedConfiguration Value { get; set; } = new(1024, "news.usenet.ninja", null);
+
+            public int Reads { get; private set; }
+
+            public Exception? Failure { get; set; }
+
+            public ValueTask<NntpSharedConfiguration> ReadAsync(CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Reads++;
+                if (Failure is not null)
+                {
+                    throw Failure;
+                }
+
+                return ValueTask.FromResult(Value);
             }
         }
     }

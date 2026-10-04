@@ -1516,19 +1516,20 @@ namespace VectorNNTP.Common.Tests.Articles.Parsing
         }
 
         /// <summary>
-        /// Verifies parser caps caller article limit above 5 MiB to the hard 5 MiB ceiling.
+        /// Verifies a caller article limit above 5 MiB is honored. The old global ceiling is not applied.
         /// </summary>
         [Fact]
-        public void Parse_WhenCallerArticleLimitExceedsHardCeiling_IsCappedAtHardCeiling()
+        public void Parse_WhenCallerArticleLimitExceedsFormerHardCeiling_HonorsCallerLimit()
         {
+            int callerLimit = ArticleResourceLimits.MaxArticleBytes + 1;
             NntpArticleParser parser = new(
                 LocalFqdn,
                 NntpArticleParserOptions.Default with
                 {
-                    MaxArticleBytes = ArticleResourceLimits.MaxArticleBytes + (1024 * 1024),
+                    MaxArticleBytes = callerLimit,
                 });
 
-            int payloadBytes = ArticleResourceLimits.MaxArticleBytes - BuildArticleHeaderBytes("<m16-caller-article-above@example.test>").Length + 1;
+            int payloadBytes = callerLimit - BuildArticleHeaderBytes("<m16-caller-article-above@example.test>").Length;
             byte[] article = BuildArticle(
                 headers:
                 [
@@ -1537,12 +1538,12 @@ namespace VectorNNTP.Common.Tests.Articles.Parsing
                     "Newsgroups: alt.test",
                     "From: user@example.test",
                 ],
-                bodyBytes: CreateFilledBytes(payloadBytes, (byte)'F'));
+                bodyBytes: CreateLineBoundedBodyBytes(payloadBytes, (byte)'F'));
 
             NntpArticleParseResult result = parser.Parse(article);
 
-            Assert.False(result.IsAccepted);
-            Assert.Equal(NntpArticleParseFailureCode.ArticleTooLarge, result.FailureCode);
+            Assert.True(result.IsAccepted);
+            Assert.Equal(callerLimit, result.ArticleBytes.Length);
         }
 
         /// <summary>

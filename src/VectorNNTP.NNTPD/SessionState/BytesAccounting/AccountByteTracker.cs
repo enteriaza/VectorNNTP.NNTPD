@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.NNTPD.NntpDb;
 
 namespace VectorNNTP.NNTPD.SessionState.BytesAccounting;
@@ -436,15 +437,8 @@ internal sealed class AccountByteTracker : IAccountByteAccountant
         public string? BatchId;
     }
 
-    private sealed class AccountLedgerSink : IAccountByteSink
+    private sealed class AccountLedgerSink(AccountLedger ledger) : IAccountByteSink
     {
-        private readonly AccountLedger _ledger;
-
-        public AccountLedgerSink(AccountLedger ledger)
-        {
-            _ledger = ledger;
-        }
-
         public void ObserveCopied(int bytes)
         {
             if (bytes <= 0)
@@ -452,7 +446,7 @@ internal sealed class AccountByteTracker : IAccountByteAccountant
                 return;
             }
 
-            Interlocked.Add(ref _ledger.Pending, bytes);
+            Interlocked.Add(ref ledger.Pending, bytes);
         }
     }
 }

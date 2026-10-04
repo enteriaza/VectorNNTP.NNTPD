@@ -450,12 +450,28 @@ namespace VectorNNTP.Common.Articles.Parsing
         /// <param name="bytesWritten">Bytes written on success.</param>
         /// <returns><see langword="true"/> when Path analysis succeeded and <paramref name="destination"/> was large enough.</returns>
         internal bool TryWriteCanonicalPath(ArticlePathMode mode, Span<byte> destination, out int bytesWritten)
+            => TryWriteCanonicalPath(mode, ArticlePathCanonicalizer.OrganizationalTrackerHost, destination, out bytesWritten);
+
+        /// <summary>
+        /// Writes the canonical Path bytes using <paramref name="organizationalTrackerHost"/> as the tracker component.
+        /// </summary>
+        /// <param name="mode">Normalize leaves application hops unchanged. Traverse always prepends the parser FQDN.</param>
+        /// <param name="organizationalTrackerHost">Tracker component captured for this article.</param>
+        /// <param name="destination">Destination receiving ASCII Path bytes.</param>
+        /// <param name="bytesWritten">Bytes written on success.</param>
+        /// <returns><see langword="true"/> when Path analysis succeeded and <paramref name="destination"/> was large enough.</returns>
+        internal bool TryWriteCanonicalPath(
+            ArticlePathMode mode,
+            ReadOnlySpan<byte> organizationalTrackerHost,
+            Span<byte> destination,
+            out int bytesWritten)
             => ArticlePathCanonicalizer.TryWriteCanonicalPath(
                 OriginalPathValue.Span,
                 _localIdentity.Span,
                 PathKind,
                 ContainsOrganizationalTracker,
                 mode,
+                organizationalTrackerHost,
                 destination,
                 out bytesWritten);
 

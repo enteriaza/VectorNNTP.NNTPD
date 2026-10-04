@@ -1,5 +1,5 @@
 using MySqlConnector;
-using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.Common.NntpDb;
 
 namespace VectorNNTP.BackFiller.Accounts
 {
@@ -28,26 +28,27 @@ namespace VectorNNTP.BackFiller.Accounts
             "FROM nntpbackfilleraccounts " +
             "WHERE serverid = @ServerId;";
 
-        /// <summary>NntpDB connection string copied from runtime options at construction. Secret. Not mutated.</summary>
-        private readonly string _connectionString;
+        /// <summary>Shared database service. Connections are opened only while querying.</summary>
+        private readonly NntpDbService _nntpDb;
 
         /// <summary>Server id copied at construction and bound to <c>@ServerId</c> as an unsigned byte.</summary>
         private readonly byte _serverId;
 
-        /// <summary>Copies the NntpDB connection string and server id from runtime options.</summary>
-        /// <param name="runtime">Runtime snapshot. Only <see cref="BackFillerRuntimeOptions.NntpDb"/> and <see cref="BackFillerRuntimeOptions.ServerId"/> are read.</param>
-        /// <exception cref="ArgumentNullException"><paramref name="runtime"/> is null.</exception>
-        /// <exception cref="InvalidOperationException"><see cref="BackFillerRuntimeOptions.ServerId"/> is outside 0–255.</exception>
-        public MySqlProviderAccountSource(BackFillerRuntimeOptions runtime)
+        /// <summary>Retains the database service and server id.</summary>
+        /// <param name="nntpDb">Started NntpDB service. This source does not start it.</param>
+        /// <param name="serverId">BackFiller server id bound to <c>@ServerId</c>.</param>
+        /// <exception cref="ArgumentNullException"><paramref name="nntpDb"/> is null.</exception>
+        /// <exception cref="InvalidOperationException"><paramref name="serverId"/> is outside 0–255.</exception>
+        public MySqlProviderAccountSource(NntpDbService nntpDb, int serverId)
         {
-            ArgumentNullException.ThrowIfNull(runtime);
-            if (runtime.ServerId is < byte.MinValue or > byte.MaxValue)
+            ArgumentNullException.ThrowIfNull(nntpDb);
+            if (serverId is < byte.MinValue or > byte.MaxValue)
             {
                 throw new InvalidOperationException("BackFiller:ServerId must fit in an unsigned byte for nntpbackfilleraccounts.");
             }
 
-            _connectionString = runtime.NntpDb.ConnectionString;
-            _serverId = (byte)runtime.ServerId;
+            _nntpDb = nntpDb;
+            _serverId = (byte)serverId;
         }
 
         /// <summary>
@@ -69,11 +70,9 @@ namespace VectorNNTP.BackFiller.Accounts
         {
             try
             {
-                var connection = new MySqlConnection(_connectionString);
-                await using (connection.ConfigureAwait(false))
+                await using var session = await _nntpDb.OpenAsync(cancellationToken).ConfigureAwait(false);
                 {
-                    await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-                    var command = connection.CreateCommand();
+                    var command = session.CreateCommand();
                     await using (command.ConfigureAwait(false))
                     {
                         command.CommandText = AccountsQuery;

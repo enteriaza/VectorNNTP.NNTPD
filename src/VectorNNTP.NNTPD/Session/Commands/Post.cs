@@ -2,6 +2,7 @@ using System.Text;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.NNTPD.ArticleIngestion;
+using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.History;
 using VectorNNTP.NNTPD.Moderation;
 using VectorNNTP.NNTPD.Authentication;
@@ -58,6 +59,11 @@ internal static class Post
                 cancellationToken)
             .ConfigureAwait(false);
 
+        NntpArticlePolicyCapture.Capture(
+            context.Session,
+            context.Session.MaxArticleSize,
+            out var maxArticleBytes,
+            out var siteNameUtf8);
         StreamingPostReadResult read;
         try
         {
@@ -66,7 +72,7 @@ internal static class Post
                     context.Connection.Input,
                     new StreamingPostReadOptions
                     {
-                        MaxArticleSize = context.Session.MaxArticleSize,
+                        MaxArticleSize = maxArticleBytes,
                         Time = context.Session.Time,
                         NewsgroupPolicy = context.Session.NewsgroupPostingPolicy,
                         InjectionIdentity = context.Session.InjectionIdentity,
@@ -154,9 +160,15 @@ internal static class Post
             return;
         }
 
-        var created = ArticleRecordIngress.TryCreateFromDestuffed(
-            context.Session.ArticleParser,
-            read.Wire);
+        var created = siteNameUtf8 is null
+            ? ArticleRecordIngress.TryCreateFromDestuffed(
+                context.Session.ArticleParser,
+                read.Wire)
+            : ArticleRecordIngress.TryCreateFromDestuffed(
+                context.Session.ArticleParser,
+                read.Wire,
+                maxArticleBytes,
+                siteNameUtf8);
         if (!created.IsAccepted)
         {
             await RejectAsync(
@@ -267,12 +279,18 @@ internal static class Post
         await CommitLeaseAsync(context, lease, read.MessageId!).ConfigureAwait(false);
 
         history?.Remember(messageIdBytes);
-        PostLogMessages.Accepted(
-            Logger,
-            NntpCommandLogFormat.Client(context.Session),
-            read.MessageId!,
-            FormatGroups(read.Newsgroups),
-            read.Wire.Length);
+        var logger = Logger;
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            var client = NntpCommandLogFormat.Client(context.Session);
+            var groups = FormatGroups(read.Newsgroups);
+            PostLogMessages.Accepted(
+                logger,
+                client,
+                read.MessageId!,
+                groups,
+                read.Wire.Length);
+        }
 
         await WriteStatusAsync(
                 context,
@@ -396,15 +414,21 @@ internal static class Post
             return;
         }
 
-        PostLogMessages.SubmittedForModeration(
-            Logger,
-            NntpCommandLogFormat.Client(context.Session),
-            read.MessageId ?? "-",
-            FormatGroups(read.Newsgroups),
-            read.TargetModeratedGroup ?? "-",
-            read.ModeratorAddress ?? "-",
-            context.Session.Authentication.Username ?? "-",
-            read.DestuffedSize);
+        var logger = Logger;
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            var client = NntpCommandLogFormat.Client(context.Session);
+            var groups = FormatGroups(read.Newsgroups);
+            PostLogMessages.SubmittedForModeration(
+                logger,
+                client,
+                read.MessageId ?? "-",
+                groups,
+                read.TargetModeratedGroup ?? "-",
+                read.ModeratorAddress ?? "-",
+                context.Session.Authentication.Username ?? "-",
+                read.DestuffedSize);
+        }
 
         IngressNewsEvents.TryWriteModerated(context.Session, read.MessageId, read.DestuffedSize);
         await WriteStatusAsync(
@@ -424,14 +448,19 @@ internal static class Post
         int size,
         CancellationToken cancellationToken)
     {
-        PostLogMessages.Rejected(
-            Logger,
-            NntpCommandLogFormat.Client(context.Session),
-            failure.Category,
-            messageId ?? "-",
-            newsgroups ?? "-",
-            size,
-            failure.Detail);
+        var logger = Logger;
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            var client = NntpCommandLogFormat.Client(context.Session);
+            PostLogMessages.Rejected(
+                logger,
+                client,
+                failure.Category,
+                messageId ?? "-",
+                newsgroups ?? "-",
+                size,
+                failure.Detail);
+        }
         IngressNewsEvents.TryWriteRejected(
             context.Session,
             messageId ?? "-",
