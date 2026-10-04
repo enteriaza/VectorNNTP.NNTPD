@@ -160,15 +160,16 @@ public sealed class RabbitMqTopologyServiceTests
         using var host = builder.Build();
         var services = host.Services.GetServices<IApplicationService>().ToArray();
 
-        Assert.Equal(typeof(RabbitMqService), services[2].GetType());
-        Assert.Equal(typeof(RabbitMqTopologyService), services[3].GetType());
-        Assert.Equal(typeof(StorageServerFleetConsumerService), services[4].GetType());
-        Assert.Equal(typeof(StorageArticleLookupService), services[5].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService), services[6].GetType());
+        // NntpDB and nntpsharedconfig are registered ahead of Cloudflare, Redis, and RabbitMQ.
+        Assert.Equal(typeof(RabbitMqService), services[4].GetType());
+        Assert.Equal(typeof(RabbitMqTopologyService), services[5].GetType());
+        Assert.Equal(typeof(StorageServerFleetConsumerService), services[6].GetType());
+        Assert.Equal(typeof(StorageArticleLookupService), services[7].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.RabbitMq.ArticleWork.ArticleWorkRpcService), services[8].GetType());
         Assert.Equal(1, services.Count(static s => s is RabbitMqTopologyService));
         Assert.Same(
             host.Services.GetRequiredService<RabbitMqTopologyService>(),
-            services[3]);
+            services[5]);
     }
 
     private static RabbitMqService CreateRabbitMqService(FakeRabbitMqConnectionFactory factory)

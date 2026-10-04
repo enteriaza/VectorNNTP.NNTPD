@@ -216,13 +216,14 @@ public sealed class ArticleWorkRpcServiceTests
 
         using var host = builder.Build();
         var services = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(typeof(RabbitMqTopologyService), services[3].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Storage.StorageServerFleetConsumerService), services[4].GetType());
-        Assert.Equal(typeof(VectorNNTP.NNTPD.Storage.StorageArticleLookupService), services[5].GetType());
-        Assert.Equal(typeof(ArticleWorkRpcService), services[6].GetType());
+        // NntpDB and nntpsharedconfig are registered ahead of Cloudflare, Redis, and RabbitMQ.
+        Assert.Equal(typeof(RabbitMqTopologyService), services[5].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Storage.StorageServerFleetConsumerService), services[6].GetType());
+        Assert.Equal(typeof(VectorNNTP.NNTPD.Storage.StorageArticleLookupService), services[7].GetType());
+        Assert.Equal(typeof(ArticleWorkRpcService), services[8].GetType());
         Assert.Same(
             host.Services.GetRequiredService<IArticleWorkRpcClient>(),
-            services[6]);
+            services[8]);
     }
 
     private static ArticleWorkRpcService CreateRpcService(

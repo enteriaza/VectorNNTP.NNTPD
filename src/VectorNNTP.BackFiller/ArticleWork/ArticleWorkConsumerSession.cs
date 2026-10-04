@@ -364,7 +364,10 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// The first call publishes <see cref="_retireTask"/> under <see cref="_gate"/>.
         /// Unless the session is already <see cref="ArticleWorkConsumerState.Stopped"/>, that same critical section
         /// moves the state to <see cref="ArticleWorkConsumerState.Retiring"/> and captures the channel and consumer tag.
-        /// Cancel, drain, and channel disposal run after that lock is released, on the caller until the first incomplete await.
+        /// When <see cref="BackFillerShutdownRuntimeOptions.DrainQueuedWork"/> is false, this method cancels
+        /// <see cref="_queueCts"/> on the caller before it returns, so a delivery still waiting to become active
+        /// observes cancellation before the caller continues. Basic.Cancel, the drain wait, and channel disposal
+        /// still run after the lock is released.
         /// </remarks>
         internal Task RetireAsync(CancellationToken shutdownToken)
         {
@@ -389,6 +392,11 @@ namespace VectorNNTP.BackFiller.ArticleWork
                 started = new TaskCompletionSource();
                 retireTask = RetireCoreAsync(channel, tag, started.Task, shutdownToken);
                 _retireTask = retireTask;
+            }
+
+            if (!_shutdown.DrainQueuedWork)
+            {
+                _queueCts.Cancel();
             }
 
             started.TrySetResult();
@@ -431,7 +439,8 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// The caller has already published <see cref="ArticleWorkConsumerState.Retiring"/> and this task.
         /// This method does not take <see cref="_gate"/> until it clears the channel.
         /// Basic.Cancel failures are swallowed.
-        /// When queued work is not drained, <see cref="_queueCts"/> is cancelled before the wait.
+        /// When queued work is not drained, <see cref="RetireAsync(CancellationToken)"/> has already cancelled
+        /// <see cref="_queueCts"/>; the cancel here is idempotent and still runs before the wait.
         /// When active articles are not finished, <see cref="_workCts"/> is cancelled before the wait.
         /// The channel is disposed of even when cancel or the wait fails. Generation is left at the value captured at the start.
         /// </remarks>

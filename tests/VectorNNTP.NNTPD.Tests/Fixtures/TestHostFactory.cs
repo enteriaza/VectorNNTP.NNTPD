@@ -127,6 +127,7 @@ internal static class TestHostFactory
             new Dictionary<string, string?>
             {
                 [NntpdOptions.CloudFlareApiKeyConfigurationKey] = TestCloudFlareApiKey,
+                [$"{NntpdOptions.SectionName}:{nameof(NntpdOptions.ServerId)}"] = "1",
                 [$"{NntpdOptions.SectionName}:{NntpdOptions.XTraceKeyConfigurationKey}"] = TestXTraceKey,
                 [NntpdOptions.XTraceKeyConfigurationKey] = TestXTraceKey,
                 // Replace appsettings BindAddress entirely (in-memory must clear leftover indices).

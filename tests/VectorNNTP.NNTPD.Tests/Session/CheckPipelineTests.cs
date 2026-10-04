@@ -66,7 +66,8 @@ public sealed class CheckPipelineTests
         var history = CreateHistory(redis);
         _ = await history.LookupAsync(IdB);
         redis.Database.KeyExistsCount = 0;
-        redis.Database.NotifyExistsStartedAt = 2;
+        // LookupAsync(<b>) already counted one Redis start. Threshold 3 is that warmup plus CHECK <a> and CHECK <c>.
+        redis.Database.NotifyExistsStartedAt = 3;
         redis.Database.ExistsReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var duplex = new CheckPipelineDuplex();
