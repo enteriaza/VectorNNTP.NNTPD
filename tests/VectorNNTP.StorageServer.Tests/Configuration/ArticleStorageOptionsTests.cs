@@ -21,6 +21,8 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(0, storage.JournalCheckpointThresholdBytes);
         Assert.Equal(0, storage.IndexCheckpointThresholdBytes);
         Assert.Equal(256L * 1024 * 1024, storage.SegmentTargetSizeBytes);
+        Assert.Equal(ArticleStorageOptions.DefaultMaxSegmentSealDelay, storage.MaxSegmentSealDelay);
+        Assert.Equal(TimeSpan.FromSeconds(60), storage.MaxSegmentSealDelay);
         Assert.Equal(0, storage.ArticleCache.MaxBytes);
         Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Enabled"));
         Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Maintenance" + "Enabled"));
@@ -251,6 +253,7 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(134217728, storage.GetProperty("JournalCheckpointThresholdBytes").GetInt64());
         Assert.Equal(67108864, storage.GetProperty("JournalSoftLimitBytes").GetInt64());
         Assert.Equal(134217728, storage.GetProperty("JournalHardLimitBytes").GetInt64());
+        Assert.Equal("00:01:00", storage.GetProperty("MaxSegmentSealDelay").GetString());
         Assert.Equal(10737418240, storage.GetProperty("SegmentTargetSizeBytes").GetInt64());
         Assert.Equal(1073741824, storage.GetProperty("ArticleCache").GetProperty("MaxBytes").GetInt64());
         var compaction = storage.GetProperty("Compaction");

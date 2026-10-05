@@ -1198,7 +1198,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         try
         {
             journal = FileArticleJournal.Open(options, log);
-            segments = FileSegmentStore.Open(options, log);
+            segments = FileSegmentStore.Open(options, log, timeProvider ?? TimeProvider.System);
             index = FileArticleIndex.Open(options, log);
             var capacity = CapacityVolumes.Resolve(
                 options.SegmentDir,

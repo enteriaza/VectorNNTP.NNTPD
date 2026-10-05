@@ -40,6 +40,11 @@ public sealed class ArticleStorageOptions
     public const long DefaultSegmentTargetSizeBytes = 256L * 1024 * 1024;
 
     /// <summary>
+    /// Default maximum time an active segment may stay open after its first durable article.
+    /// </summary>
+    public static readonly TimeSpan DefaultMaxSegmentSealDelay = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// Gets or sets the SATA segment/cache root for append-oriented immutable article segments.
     /// </summary>
     /// <remarks>
@@ -115,10 +120,29 @@ public sealed class ArticleStorageOptions
     public long IndexCheckpointThresholdBytes { get; set; } = DefaultIndexCheckpointThresholdBytes;
 
     /// <summary>
-    /// Gets or sets the target closed-segment size in bytes (future rollover hint).
+    /// Gets or sets the target closed-segment size in bytes.
+    /// The active segment seals when the next article would exceed this size, unless it is still empty.
     /// </summary>
     [Range(1, long.MaxValue)]
     public long SegmentTargetSizeBytes { get; set; } = DefaultSegmentTargetSizeBytes;
+
+    /// <summary>
+    /// Gets or sets how long an active segment may stay open after its first durable article.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The segment still seals when the next article would exceed
+    /// <see cref="SegmentTargetSizeBytes"/>. This delay is the second condition: a segment
+    /// that never reaches the size target seals once it has held a durable article this long.
+    /// </para>
+    /// <para>
+    /// <c>00:00:00</c> disables age sealing. Negative values are rejected. The delay is measured
+    /// from the durable activation instant of that segment, not from process start, and an
+    /// empty active segment is not sealed because the delay elapsed. A wall clock behind that
+    /// instant does not add the backward step; the segment still seals after at most one delay.
+    /// </para>
+    /// </remarks>
+    public TimeSpan MaxSegmentSealDelay { get; set; } = DefaultMaxSegmentSealDelay;
 
     /// <summary>
     /// Gets or sets process-local article memory-cache bounds under

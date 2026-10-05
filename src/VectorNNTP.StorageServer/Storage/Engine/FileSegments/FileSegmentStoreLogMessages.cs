@@ -58,6 +58,24 @@ internal static partial class FileSegmentStoreLogMessages
     public static partial void Closed(ILogger logger, ulong SegmentId, long Bytes);
 
     [LoggerMessage(
+        EventId = 3211,
+        Level = LogLevel.Information,
+        Message = "Active segment sealed by age (segmentId={SegmentId}, bytes={Bytes})")]
+    public static partial void SealedByAge(ILogger logger, ulong SegmentId, long Bytes);
+
+    [LoggerMessage(
+        EventId = 3212,
+        Level = LogLevel.Warning,
+        Message = "Active segment age seal failed (segmentId={SegmentId})")]
+    public static partial void AgeSealFailed(ILogger logger, ulong SegmentId, Exception exception);
+
+    [LoggerMessage(
+        EventId = 3213,
+        Level = LogLevel.Warning,
+        Message = "Active segment activation instant was not saved (segmentId={SegmentId})")]
+    public static partial void ActivationPersistFailed(ILogger logger, ulong SegmentId, Exception exception);
+
+    [LoggerMessage(
         EventId = 3207,
         Level = LogLevel.Information,
         Message = "Segment retired (segmentId={SegmentId})")]

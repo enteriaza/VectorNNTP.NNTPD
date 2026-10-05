@@ -30,11 +30,25 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 /// Closed and retired segments are catalogued from filename,
 /// lifecycle, and file length only; payload CRC is proved on the targeted read path.
 /// </para>
+/// <para>
+/// An active segment seals when the next article would exceed the size target, or when
+/// <see cref="ArticleStorageRuntimeOptions.MaxSegmentSealDelay"/> has elapsed since that
+/// segment's first durable article. <see cref="TimeSpan.Zero"/> disables the age condition.
+/// The activation instant is the catalogue <c>CreatedUtc</c> and is stored in
+/// <c>segment-activation</c> so a restart continues the same deadline. The open segment has
+/// one <see cref="TimeProvider"/> delay, keyed to that segment id. The wait is monotonic.
+/// A wall clock behind the saved instant does not add the backward step; the wait is at most
+/// the configured delay, and the segment seals when that wait completes. An empty segment is
+/// not sealed by the delay. Age sealing calls the same close as a size rollover. A delay that
+/// fires for a segment which is no longer active does nothing.
+/// </para>
 /// </remarks>
 public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposable
 {
     private readonly long _targetSegmentBytes;
     private readonly ILogger _logger;
+    private readonly TimeProvider _time;
+    private readonly TimeSpan _maxSealDelay;
     private readonly object _writeGate = new();
     private readonly Dictionary<ulong, SegmentRuntime> _segments = new();
     private readonly FileSegmentCatalogue _catalogue = new();
@@ -43,12 +57,79 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     private ulong? _activeSegmentId;
     private ActiveValidatedPrefix? _activeValidatedPrefix;
     private bool _disposed;
+    private CancellationTokenSource? _ageSealCts;
+    private Task _ageSealTask = Task.CompletedTask;
+    private ulong? _ageSealSegmentId;
+    private long _sealByAgeCount;
+    private long _sealBySizeCount;
+
+    /// <summary>File under the segment root that records the active segment's activation instant.</summary>
+    private const string ActivationFileName = "segment-activation";
+
+    /// <summary>
+    /// Largest delay <see cref="Task.Delay(TimeSpan, TimeProvider, CancellationToken)"/> accepts.
+    /// Longer configured delays are split into successive waits on the same segment timer.
+    /// </summary>
+    private static readonly TimeSpan MaxSingleWait = TimeSpan.FromMilliseconds(int.MaxValue - 1);
 
     /// <summary>
     /// Invoked after the segment record is written and before <see cref="FileStream.Flush(bool)"/>.
     /// Tests only. The production path is null.
     /// </summary>
     internal Action<FileStream, long, int>? TestAfterWriteBeforeFlush { get; set; }
+
+    /// <summary>
+    /// Invoked once inside <see cref="CloseActiveUnlocked"/> before the active file is renamed.
+    /// Tests only. Cleared before invoke. Runs while the segment write gate is held.
+    /// </summary>
+    internal Action<ulong>? TestHookBeforeActiveClose { get; set; }
+
+    /// <summary>Seals caused by <see cref="ArticleStorageRuntimeOptions.MaxSegmentSealDelay"/>.</summary>
+    internal long SegmentSealByAgeCount => Volatile.Read(ref _sealByAgeCount);
+
+    /// <summary>Seals caused by <see cref="ArticleStorageRuntimeOptions.SegmentTargetSizeBytes"/>.</summary>
+    internal long SegmentSealBySizeCount => Volatile.Read(ref _sealBySizeCount);
+
+    /// <summary>
+    /// Elapsed time since the active segment's first durable article.
+    /// Null when there is no active segment or it has not yet stored an article.
+    /// A clock behind the activation instant reports zero.
+    /// </summary>
+    internal TimeSpan? ActiveSegmentAge
+    {
+        get
+        {
+            lock (_writeGate)
+            {
+                if (_activeSegmentId is not { } id
+                    || !_segments.TryGetValue(id, out var runtime)
+                    || runtime.ActivatedUtc is not DateTimeOffset activated)
+                {
+                    return null;
+                }
+
+                var now = _time.GetUtcNow();
+                if (now <= activated)
+                {
+                    return TimeSpan.Zero;
+                }
+
+                return now - activated;
+            }
+        }
+    }
+
+    /// <summary>Task for the current active segment's age delay. Completed when no delay is armed.</summary>
+    internal Task AgeSealTask
+    {
+        get
+        {
+            lock (_writeGate)
+            {
+                return _ageSealTask;
+            }
+        }
+    }
 
     /// <summary>
     /// Invoked immediately before each durability <see cref="FileStream.Flush(bool)"/>.
@@ -161,11 +242,22 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     private FileSegmentStore(
         string root,
         long targetSegmentBytes,
-        ILogger logger)
+        ILogger logger,
+        TimeProvider time,
+        TimeSpan maxSealDelay)
     {
+        if (maxSealDelay < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxSealDelay),
+                "Maximum segment seal delay cannot be negative.");
+        }
+
         _root = root;
         _targetSegmentBytes = targetSegmentBytes;
         _logger = logger;
+        _time = time;
+        _maxSealDelay = maxSealDelay;
     }
 
     /// <summary>Gets the segment root directory (CacheDir / SegmentDir).</summary>
@@ -193,8 +285,9 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     public static FileSegmentStore Open(
         ArticleStorageRuntimeOptions options,
-        ILogger? logger = null)
-        => OpenCore(options, logger, discoveryPayloadReader: null);
+        ILogger? logger = null,
+        TimeProvider? timeProvider = null)
+        => OpenCore(options, logger, discoveryPayloadReader: null, configureBeforeDiscovery: null, timeProvider);
 
     /// <summary>
     /// Test entry that installs <paramref name="discoveryPayloadReader"/> before discovery.
@@ -217,14 +310,20 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         ArticleStorageRuntimeOptions options,
         ILogger? logger,
         Func<string, byte[]>? discoveryPayloadReader,
-        Action<FileSegmentStore>? configureBeforeDiscovery = null)
+        Action<FileSegmentStore>? configureBeforeDiscovery = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.SegmentDir);
 
         var log = logger ?? NullLogger.Instance;
         Directory.CreateDirectory(options.SegmentDir);
-        var store = new FileSegmentStore(options.SegmentDir, options.SegmentTargetSizeBytes, log);
+        var store = new FileSegmentStore(
+            options.SegmentDir,
+            options.SegmentTargetSizeBytes,
+            log,
+            timeProvider ?? TimeProvider.System,
+            options.MaxSegmentSealDelay);
         store.TestDiscoveryPayloadReader = discoveryPayloadReader;
         configureBeforeDiscovery?.Invoke(store);
         try
@@ -267,7 +366,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_activeSegmentId is { } active)
             {
-                CloseActiveUnlocked(active, DateTimeOffset.UtcNow);
+                CloseActiveUnlocked(active, _time.GetUtcNow(), SegmentSealCause.Explicit);
             }
         }
 
@@ -509,6 +608,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
             _disposed = true;
             _activeValidatedPrefix = null;
+            CancelAgeSealScheduleUnlocked();
             foreach (var runtime in _segments.Values)
             {
                 runtime.DisposeStream();
@@ -629,7 +729,18 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         var runtime = _segments[activeId];
         if (runtime.PendingRecord is not null)
         {
-            return FinishPendingSegmentRecord(runtime, recordLength, framedHash, artId, artHash, artData.Length);
+            var finished = FinishPendingSegmentRecord(runtime, recordLength, framedHash, artId, artHash, artData.Length);
+            if (ActiveAgeElapsedUnlocked(runtime))
+            {
+                if (_deferDurableFlush > 0 && _unflushedCommittedAppend)
+                {
+                    DurableSegmentFlush(runtime.Stream);
+                }
+
+                CloseActiveUnlocked(runtime.SegmentId.Value, _time.GetUtcNow(), SegmentSealCause.Age);
+            }
+
+            return finished;
         }
 
         ReconcileBlockedSegmentTail(runtime);
@@ -645,11 +756,26 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 DurableSegmentFlush(runtime.Stream);
             }
 
-            CloseActiveUnlocked(activeId, DateTimeOffset.UtcNow);
+            CloseActiveUnlocked(activeId, _time.GetUtcNow(), SegmentSealCause.Size);
             EnsureActiveUnlocked();
             activeId = _activeSegmentId!.Value;
             runtime = _segments[activeId];
             FileSegmentStoreLogMessages.Rotated(_logger, closedId, activeId);
+        }
+
+        if (runtime.SizeBytes > 0 && ActiveAgeElapsedUnlocked(runtime))
+        {
+            var closedForAge = activeId;
+            if (_deferDurableFlush > 0 && _unflushedCommittedAppend)
+            {
+                DurableSegmentFlush(runtime.Stream);
+            }
+
+            CloseActiveUnlocked(activeId, _time.GetUtcNow(), SegmentSealCause.Age);
+            EnsureActiveUnlocked();
+            activeId = _activeSegmentId!.Value;
+            runtime = _segments[activeId];
+            FileSegmentStoreLogMessages.Rotated(_logger, closedForAge, activeId);
         }
 
         var offset = runtime.SizeBytes;
@@ -869,6 +995,10 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     {
         runtime.SizeBytes = offset + recordLength;
         _catalogue.RecordAppend(runtime.SegmentId, recordLength, runtime.SizeBytes);
+        if (offset == 0)
+        {
+            NoteFirstDurableArticleUnlocked(runtime);
+        }
         if (_deferDurableFlush > 0)
         {
             _unflushedCommittedAppend = true;
@@ -994,6 +1124,358 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>
+    /// Seals <paramref name="segmentId"/> when it is still the active segment, contains article
+    /// bytes, and its activation age has elapsed. A stale id, an empty segment, or a segment
+    /// that already left the active state is left unchanged.
+    /// </summary>
+    /// <returns>True when this call sealed the segment.</returns>
+    internal bool TrySealActiveForAge(ulong segmentId) =>
+        SealActiveForAge(segmentId, scheduledWaitElapsed: false);
+
+    /// <summary>
+    /// Seals <paramref name="segmentId"/> when <paramref name="scheduledWaitElapsed"/> or the age
+    /// predicate says the delay is over. Caller does not hold <see cref="_writeGate"/>.
+    /// </summary>
+    private bool SealActiveForAge(ulong segmentId, bool scheduledWaitElapsed)
+    {
+        lock (_writeGate)
+        {
+            return TrySealActiveForAgeUnlocked(segmentId, scheduledWaitElapsed);
+        }
+    }
+
+    /// <summary>Age-seal check. Caller holds <see cref="_writeGate"/>.</summary>
+    private bool TrySealActiveForAgeUnlocked(ulong segmentId, bool scheduledWaitElapsed)
+    {
+        if (_disposed || _activeSegmentId != segmentId)
+        {
+            return false;
+        }
+
+        if (!_segments.TryGetValue(segmentId, out var runtime)
+            || runtime.State != SegmentState.Active
+            || runtime.SizeBytes <= 0
+            || runtime.PendingRecord is not null
+            || runtime.TailUnreconciled
+            || (!scheduledWaitElapsed && !ActiveAgeElapsedUnlocked(runtime)))
+        {
+            return false;
+        }
+
+        CloseActiveUnlocked(segmentId, _time.GetUtcNow(), SegmentSealCause.Age);
+        return runtime.State == SegmentState.Closed;
+    }
+
+    /// <summary>
+    /// True when the segment should seal for age. The monotonic budget wins when the wall
+    /// clock is behind the saved activation instant.
+    /// </summary>
+    private bool ActiveAgeElapsedUnlocked(SegmentRuntime runtime)
+    {
+        if (_maxSealDelay <= TimeSpan.Zero || runtime.ActivatedUtc is not DateTimeOffset activated)
+        {
+            return false;
+        }
+
+        if (MonotonicBudgetElapsedUnlocked(runtime))
+        {
+            return true;
+        }
+
+        var now = _time.GetUtcNow();
+        if (now < activated)
+        {
+            return false;
+        }
+
+        return now - activated >= _maxSealDelay;
+    }
+
+    /// <summary>True when this process has waited out the budget armed for <paramref name="runtime"/>.</summary>
+    private bool MonotonicBudgetElapsedUnlocked(SegmentRuntime runtime)
+    {
+        if (runtime.AgeBudgetStartTimestamp is not long start)
+        {
+            return false;
+        }
+
+        var elapsed = _time.GetElapsedTime(start);
+        if (elapsed < TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        return elapsed >= runtime.AgeBudget;
+    }
+
+    /// <summary>
+    /// Wall-clock time left until <paramref name="activated"/> plus the configured delay.
+    /// A clock behind <paramref name="activated"/> returns the configured delay, not the backward step.
+    /// </summary>
+    private TimeSpan SealDelayRemainingUnlocked(DateTimeOffset activated)
+    {
+        var now = _time.GetUtcNow();
+        if (now < activated)
+        {
+            return _maxSealDelay;
+        }
+
+        var due = activated + _maxSealDelay;
+        if (due <= now)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var remaining = due - now;
+        return remaining > _maxSealDelay ? _maxSealDelay : remaining;
+    }
+
+    /// <summary>
+    /// Records the activation instant for a segment whose first article has just been committed.
+    /// An instant already recorded for this segment is kept, including across the articles that follow.
+    /// </summary>
+    private void NoteFirstDurableArticleUnlocked(SegmentRuntime runtime)
+    {
+        if (_maxSealDelay <= TimeSpan.Zero || runtime.ActivatedUtc is not null)
+        {
+            return;
+        }
+
+        var activated = _time.GetUtcNow();
+        runtime.ActivatedUtc = activated;
+        if (_catalogue.TryGet(runtime.SegmentId, out var info))
+        {
+            _catalogue.Upsert(info with { CreatedUtc = activated });
+        }
+
+        try
+        {
+            PersistActivationUnlocked(runtime.SegmentId.Value, activated);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The article is already durable. Losing the sidecar seals on the next open
+            // instead of failing an append that has already committed.
+            FileSegmentStoreLogMessages.ActivationPersistFailed(_logger, runtime.SegmentId.Value, ex);
+        }
+
+        ArmAgeSealUnlocked(runtime.SegmentId.Value, activated);
+    }
+
+    /// <summary>Arms one delay for <paramref name="segmentId"/>. Caller holds <see cref="_writeGate"/>.</summary>
+    private void ArmAgeSealUnlocked(ulong segmentId, DateTimeOffset activated)
+    {
+        if (_maxSealDelay <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        if (!_segments.TryGetValue(segmentId, out var runtime))
+        {
+            return;
+        }
+
+        CancelAgeSealScheduleUnlocked();
+        var remaining = SealDelayRemainingUnlocked(activated);
+        runtime.AgeBudgetStartTimestamp = _time.GetTimestamp();
+        runtime.AgeBudget = remaining;
+        var cts = new CancellationTokenSource();
+        _ageSealCts = cts;
+        _ageSealSegmentId = segmentId;
+        _ageSealTask = SealWhenDueAsync(segmentId, remaining, cts);
+    }
+
+    /// <summary>Waits for the active segment's remaining age, then attempts one age seal.</summary>
+    private async Task SealWhenDueAsync(ulong segmentId, TimeSpan remaining, CancellationTokenSource cancellation)
+    {
+        try
+        {
+            try
+            {
+                if (remaining > TimeSpan.Zero)
+                {
+                    await WaitRemainingAsync(remaining, cancellation.Token).ConfigureAwait(false);
+                }
+                else
+                {
+                    // A zero wait must not call back onto the write gate on this stack.
+                    await Task.Yield();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            if (cancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                SealActiveForAge(segmentId, scheduledWaitElapsed: true);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FileSegmentStoreLogMessages.AgeSealFailed(_logger, segmentId, ex);
+            }
+        }
+        finally
+        {
+            cancellation.Dispose();
+        }
+    }
+
+    /// <summary>Waits <paramref name="remaining"/> on <see cref="_time"/>, splitting only at the timer limit.</summary>
+    private async Task WaitRemainingAsync(TimeSpan remaining, CancellationToken cancellationToken)
+    {
+        var wait = remaining;
+        while (wait > TimeSpan.Zero)
+        {
+            var slice = wait > MaxSingleWait ? MaxSingleWait : wait;
+            await Task.Delay(slice, _time, cancellationToken).ConfigureAwait(false);
+            wait -= slice;
+        }
+    }
+
+    /// <summary>Cancels the delay for the current active segment. Does not wait for it.</summary>
+    private void CancelAgeSealScheduleUnlocked()
+    {
+        var cts = _ageSealCts;
+        _ageSealCts = null;
+        _ageSealSegmentId = null;
+        if (cts is null)
+        {
+            return;
+        }
+
+        try
+        {
+            cts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The delay task disposes the source when it finishes.
+        }
+    }
+
+    /// <summary>Writes the activation instant durably next to the segment files.</summary>
+    private void PersistActivationUnlocked(ulong segmentId, DateTimeOffset activated)
+    {
+        var path = Path.Combine(_root, ActivationFileName);
+        var temporary = path + ".tmp";
+        var buffer = new byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(buffer, segmentId);
+        BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(8), activated.UtcTicks);
+        using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            stream.Write(buffer);
+            stream.Flush(flushToDisk: true);
+        }
+
+        File.Move(temporary, path, overwrite: true);
+    }
+
+    /// <summary>Reads the activation instant when the file names <paramref name="segmentId"/>.</summary>
+    private bool TryReadActivationUnlocked(ulong segmentId, out DateTimeOffset activated)
+    {
+        activated = default;
+        var path = Path.Combine(_root, ActivationFileName);
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = File.ReadAllBytes(path);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+
+        if (bytes.Length != 16)
+        {
+            return false;
+        }
+
+        if (BinaryPrimitives.ReadUInt64LittleEndian(bytes) != segmentId)
+        {
+            return false;
+        }
+
+        var ticks = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(8));
+        if (ticks < DateTimeOffset.MinValue.UtcTicks || ticks > DateTimeOffset.MaxValue.UtcTicks)
+        {
+            return false;
+        }
+
+        activated = new DateTimeOffset(ticks, TimeSpan.Zero);
+        return true;
+    }
+
+    /// <summary>Removes the activation file when it still names <paramref name="segmentId"/>.</summary>
+    private void DeleteActivationIfMatchUnlocked(ulong segmentId)
+    {
+        if (!TryReadActivationUnlocked(segmentId, out _))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(Path.Combine(_root, ActivationFileName));
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// After discovery, seals an active segment whose saved age has already elapsed.
+    /// A younger segment keeps that saved instant and arms the remainder of the delay.
+    /// </summary>
+    private void SealOrArmRecoveredActiveUnlocked()
+    {
+        if (_maxSealDelay <= TimeSpan.Zero || _activeSegmentId is not ulong id)
+        {
+            return;
+        }
+
+        if (!_segments.TryGetValue(id, out var runtime)
+            || runtime.State != SegmentState.Active
+            || runtime.SizeBytes <= 0
+            || runtime.ActivatedUtc is not DateTimeOffset activated)
+        {
+            return;
+        }
+
+        if (ActiveAgeElapsedUnlocked(runtime))
+        {
+            CloseActiveUnlocked(id, _time.GetUtcNow(), SegmentSealCause.Age);
+            return;
+        }
+
+        ArmAgeSealUnlocked(id, activated);
+    }
+
+    /// <summary>Why an active segment left the active state.</summary>
+    private enum SegmentSealCause
+    {
+        /// <summary>Caller asked to close the active segment.</summary>
+        Explicit = 0,
+
+        /// <summary>The next article would exceed the size target.</summary>
+        Size = 1,
+
+        /// <summary>The segment has held a durable article for the configured delay.</summary>
+        Age = 2,
+    }
+
     private void EnsureActiveUnlocked()
     {
         if (_activeSegmentId is { } existing && _segments.TryGetValue(existing, out var runtime)
@@ -1041,11 +1523,15 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         FileSegmentStoreLogMessages.ActiveSelected(_logger, id, 0);
     }
 
-    private void CloseActiveUnlocked(ulong activeId, DateTimeOffset utcNow)
+    private void CloseActiveUnlocked(ulong activeId, DateTimeOffset utcNow, SegmentSealCause cause)
     {
         if (!_segments.TryGetValue(activeId, out var runtime) || runtime.State != SegmentState.Active)
         {
-            _activeSegmentId = null;
+            if (_activeSegmentId == activeId)
+            {
+                _activeSegmentId = null;
+            }
+
             return;
         }
 
@@ -1056,7 +1542,16 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 new IOException("pending-segment-record"));
         }
 
+        var beforeClose = TestHookBeforeActiveClose;
+        TestHookBeforeActiveClose = null;
+        beforeClose?.Invoke(activeId);
+        if (runtime.State != SegmentState.Active || _activeSegmentId != activeId)
+        {
+            return;
+        }
+
         runtime.Stream.Flush(flushToDisk: true);
+        _unflushedCommittedAppend = false;
         runtime.DisposeStream();
         var closedPath = Path.Combine(_root, SegmentFileNames.Format(runtime.SegmentId, SegmentFileKind.Closed));
         File.Move(runtime.Path, closedPath, overwrite: false);
@@ -1078,6 +1573,22 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             ClosedUtc = utcNow,
         });
         _activeSegmentId = null;
+        if (_ageSealSegmentId == activeId)
+        {
+            CancelAgeSealScheduleUnlocked();
+        }
+
+        DeleteActivationIfMatchUnlocked(activeId);
+        if (cause == SegmentSealCause.Age)
+        {
+            Interlocked.Increment(ref _sealByAgeCount);
+            FileSegmentStoreLogMessages.SealedByAge(_logger, activeId, runtime.SizeBytes);
+        }
+        else if (cause == SegmentSealCause.Size)
+        {
+            Interlocked.Increment(ref _sealBySizeCount);
+        }
+
         FileSegmentStoreLogMessages.Closed(_logger, activeId, runtime.SizeBytes);
     }
 
@@ -1189,6 +1700,22 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             }
 
             var generation = _catalogue.AllocateGeneration();
+            DateTimeOffset? activated = null;
+            var createdUtc = DateTimeOffset.UtcNow;
+            if (state == SegmentState.Active && _maxSealDelay > TimeSpan.Zero && validLength > 0)
+            {
+                if (TryReadActivationUnlocked(item.Id.Value, out var stamp))
+                {
+                    createdUtc = stamp;
+                    activated = stamp;
+                }
+                else
+                {
+                    createdUtc = DateTimeOffset.MinValue;
+                    activated = DateTimeOffset.MinValue;
+                }
+            }
+
             catalogueEntries.Add(new SegmentInfo(
                 item.Id,
                 state,
@@ -1196,7 +1723,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 validLength,
                 LiveBytes: 0,
                 DeadBytes: 0,
-                CreatedUtc: DateTimeOffset.UtcNow,
+                CreatedUtc: createdUtc,
                 ClosedUtc: state == SegmentState.Active ? null : DateTimeOffset.UtcNow));
 
             if (state == SegmentState.Active)
@@ -1218,7 +1745,10 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                         state,
                         item.Path,
                         opened,
-                        validLength);
+                        validLength)
+                    {
+                        ActivatedUtc = activated,
+                    };
                     opened = null;
                 }
                 finally
@@ -1258,6 +1788,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 active,
                 _segments[active].SizeBytes);
         }
+
+        SealOrArmRecoveredActiveUnlocked();
     }
 
     private long RepairActiveTail(string path, SegmentId segmentId, long fileLength)
@@ -2029,6 +2561,21 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         public FileStream Stream => _stream ?? throw new ObjectDisposedException(nameof(SegmentRuntime));
 
         public long SizeBytes { get; set; } = sizeBytes;
+
+        /// <summary>
+        /// Instant of the first durable article on this segment.
+        /// Null until that article is committed. Not cleared when the segment closes.
+        /// </summary>
+        public DateTimeOffset? ActivatedUtc { get; set; }
+
+        /// <summary>
+        /// <see cref="TimeProvider.GetTimestamp"/> when the current age budget was armed.
+        /// Null until this process arms a delay for the segment.
+        /// </summary>
+        public long? AgeBudgetStartTimestamp { get; set; }
+
+        /// <summary>Monotonic time to wait from <see cref="AgeBudgetStartTimestamp"/> before an age seal.</summary>
+        public TimeSpan AgeBudget { get; set; }
 
         public bool TailUnreconciled { get; set; }
 

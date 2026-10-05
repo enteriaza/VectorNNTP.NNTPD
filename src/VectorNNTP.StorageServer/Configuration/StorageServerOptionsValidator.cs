@@ -189,6 +189,12 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             failures.Add("StorageServer:Storage:SegmentTargetSizeBytes must be at least 1.");
         }
 
+        if (options.Storage.MaxSegmentSealDelay < TimeSpan.Zero)
+        {
+            failures.Add(
+                "StorageServer:Storage:MaxSegmentSealDelay must be greater than or equal to 00:00:00. 00:00:00 disables age sealing.");
+        }
+
         if (options.Storage.JournalCheckpointThresholdBytes < 0)
         {
             failures.Add(

@@ -50,6 +50,10 @@ public sealed record StorageServerRuntimeOptions(
 /// Percentage points of physical usage pressure recovery must reclaim below
 /// <paramref name="CapacityMaximumUsageCapacity"/>.
 /// </param>
+/// <param name="MaxSegmentSealDelay">
+/// Maximum time an active segment may stay open after its first durable article.
+/// <see cref="TimeSpan.Zero"/> disables age sealing. Size rollover is unchanged.
+/// </param>
 public sealed record ArticleStorageRuntimeOptions(
     string ControlDir,
     string SegmentDir,
@@ -59,7 +63,8 @@ public sealed record ArticleStorageRuntimeOptions(
     int CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
     int CapacityCompactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom,
     int CapacityMaximumUsageCapacity = ArticleCapacityOptions.DefaultMaximumUsageCapacity,
-    int CapacityFreeCapacity = ArticleCapacityOptions.DefaultFreeCapacity);
+    int CapacityFreeCapacity = ArticleCapacityOptions.DefaultFreeCapacity,
+    TimeSpan MaxSegmentSealDelay = default);
 
 /// <summary>Validated listener bounds.</summary>
 public sealed record StorageServerListenerRuntimeOptions(
