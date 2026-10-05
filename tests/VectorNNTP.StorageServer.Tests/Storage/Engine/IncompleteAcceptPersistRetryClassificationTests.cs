@@ -95,7 +95,9 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
         Assert.Equal(0, engine.PersistRetryScheduledCount);
         Assert.Equal(required, engine.ProcessLocalArticleReservedBytes);
         Assert.Null(Assert.Single(engine.Journal.EnumerateIncomplete()).PhysicalWritten);
-        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(engine.Index.TryGet(record.ArtId, out _));
     }
 
     [Fact]
@@ -125,7 +127,8 @@ public sealed class IncompleteAcceptPersistRetryClassificationTests
         var incomplete = Assert.Single(engine.Journal.EnumerateIncomplete());
         Assert.Equal(accept.Sequence, incomplete.Accept.Sequence);
         Assert.Null(incomplete.PhysicalWritten);
-        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
         Assert.False(engine.Index.TryGet(record.ArtId, out _));
     }
 

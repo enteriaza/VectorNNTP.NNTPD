@@ -238,8 +238,8 @@ public sealed class ImmutableSegmentStartupTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => restarted.RecoverAsync(CancellationToken.None));
         Assert.Contains("integrity proof", ex.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.False(restarted.TryRead(record.ArtId, out var read));
-        Assert.True(read.ArtData.IsEmpty);
+        Assert.True(restarted.TryRead(record.ArtId, out var read));
+        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
         if (restarted.Index.TryGet(record.ArtId, out var meta))
         {
             Assert.NotEqual(ArticleStorageState.Present, meta.State);

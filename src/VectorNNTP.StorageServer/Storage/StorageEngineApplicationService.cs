@@ -93,7 +93,8 @@ public sealed class StorageEngineApplicationService : IApplicationService, IAsyn
                 storage,
                 _logger,
                 _timeProvider,
-                cache);
+                cache,
+                maxConcurrentPhysicalReads: _runtime.Listener.MaxActiveConnections);
 
             var beforeRecover = TestBeforeRecover;
             TestBeforeRecover = null;

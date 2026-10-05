@@ -201,8 +201,11 @@ public interface IArticleStorageEngine
     Task<ArticleAcceptResult> AcceptAsync(ArticleRecord record, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Reads a Present article and proves ArtSize / ArtHash / ArtId against ArtData.
-    /// Failed proof transitions the article to Invalid and returns false.
+    /// Reads a serveable article and proves ArtSize / ArtHash / ArtId against ArtData.
+    /// A published Present location is read from its segment. A durable outstanding
+    /// journal Accept is read from that Accept payload when no Present row exists.
+    /// Failed proof of a Present location transitions that article to Invalid and returns false.
+    /// A torn or CRC-invalid journal frame is never outstanding and is not served.
     /// Must not require a durable write solely to update LastAccess.
     /// </summary>
     bool TryRead(ArticleId artId, out ArticleReadResult result);

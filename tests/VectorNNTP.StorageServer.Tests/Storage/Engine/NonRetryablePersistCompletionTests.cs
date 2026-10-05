@@ -38,16 +38,20 @@ public sealed class NonRetryablePersistCompletionTests
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Single(engine.Journal.EnumerateIncomplete());
         Assert.Null(Assert.Single(engine.Journal.EnumerateIncomplete()).PhysicalWritten);
-        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.TryRead(record.ArtId, out var journalRead));
+        Assert.True(journalRead.ArtData.Span.SequenceEqual(record.ArtData.Span));
         Assert.False(engine.Index.TryGet(record.ArtId, out _));
 
         var other = CreateRecord("<blocked-other@seg.test>");
         var otherAccepted = await engine.AcceptAsync(other, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Accepted, otherAccepted.Outcome);
         await WaitUntilAsync(
-            () => engine.TryRead(other.ArtId, out _),
+            () => engine.Index.TryGet(other.ArtId, out var published)
+                && published.State == ArticleStorageState.Present,
             TimeSpan.FromSeconds(5));
-        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.TryRead(record.ArtId, out var stillJournal));
+        Assert.True(stillJournal.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(engine.Index.TryGet(record.ArtId, out _));
     }
 
     [Fact]
@@ -67,7 +71,10 @@ public sealed class NonRetryablePersistCompletionTests
         var accepted = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
 
-        await WaitUntilAsync(() => engine.TryRead(record.ArtId, out _), TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => engine.Index.TryGet(record.ArtId, out var published)
+                && published.State == ArticleStorageState.Present,
+            TimeSpan.FromSeconds(5));
 
         Assert.True(engine.PersistBlockedRetryScheduledCount >= 1);
         Assert.Equal(0, engine.PersistRetryScheduledCount);
@@ -103,7 +110,9 @@ public sealed class NonRetryablePersistCompletionTests
         Assert.Equal(0, engine.PersistRetryScheduledCount);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(0, engine.PhysicalAppendCount);
-        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.TryRead(record.ArtId, out var journalRead));
+        Assert.True(journalRead.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(engine.Index.TryGet(record.ArtId, out _));
         Assert.Single(engine.Journal.EnumerateIncomplete());
     }
 
@@ -121,13 +130,17 @@ public sealed class NonRetryablePersistCompletionTests
             var accepted = await engineA.AcceptAsync(record, CancellationToken.None);
             Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
             await WaitUntilAsync(() => engineA.PersistBlockedRetryScheduledCount >= 1, TimeSpan.FromSeconds(5));
-            Assert.False(engineA.TryRead(record.ArtId, out _));
+            Assert.True(engineA.TryRead(record.ArtId, out var beforeRestart));
+            Assert.True(beforeRestart.ArtData.Span.SequenceEqual(record.ArtData.Span));
+            Assert.False(engineA.Index.TryGet(record.ArtId, out _));
             Assert.Single(engineA.Journal.EnumerateIncomplete());
         }
 
         await using var engineB = FileArticleStorageEngine.Open(dir.Options);
         engineB.SuspendBackgroundPersist = true;
-        Assert.False(engineB.TryRead(record.ArtId, out _));
+        Assert.True(engineB.TryRead(record.ArtId, out var recoveredJournal));
+        Assert.True(recoveredJournal.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(engineB.Index.TryGet(record.ArtId, out _));
         await engineB.RecoverAsync(CancellationToken.None);
 
         Assert.Empty(engineB.Journal.EnumerateIncomplete());

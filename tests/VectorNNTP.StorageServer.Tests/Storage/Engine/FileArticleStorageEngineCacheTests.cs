@@ -956,7 +956,11 @@ public sealed class FileArticleStorageEngineCacheTests
         var accept = await engine.AcceptAsync(record, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Accepted, accept.Outcome);
         Assert.Equal(0, cache.PutCount); // journal Accept alone — not yet IndexCommitted
-        Assert.False(engine.TryRead(record.ArtId, out _)); // still Evicted until recovery completes
+        Assert.True(engine.Index.TryGet(record.ArtId, out var evicted));
+        Assert.Equal(ArticleStorageState.Evicted, evicted.State);
+        Assert.True(engine.TryRead(record.ArtId, out var journalRead));
+        Assert.True(journalRead.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
 
         await engine.RecoverAsync(CancellationToken.None);
         Assert.True(cache.PutCount >= 1);

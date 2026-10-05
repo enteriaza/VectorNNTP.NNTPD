@@ -544,6 +544,32 @@ public sealed class JournalAcceptRecord
     public ReadOnlyMemory<byte> ArtData => _artData ?? ReadOnlyMemory<byte>.Empty;
 
     /// <summary>
+    /// Copies <see cref="ArtData"/> while the payload is still attached.
+    /// </summary>
+    /// <param name="copy">Independent copy, or null when the payload was already detached.</param>
+    /// <returns>True when <paramref name="copy"/> holds the attached payload.</returns>
+    /// <remarks>
+    /// Holds <see cref="_payloadGate"/> only for the copy, so <see cref="DetachPayload"/>
+    /// cannot clear the buffer mid-copy. The caller proves the copy after this returns.
+    /// A detached payload returns false and leaves the record unchanged.
+    /// </remarks>
+    internal bool TryCopyArtData(out byte[]? copy)
+    {
+        lock (_payloadGate)
+        {
+            if (_artData is null)
+            {
+                copy = null;
+                return false;
+            }
+
+            copy = GC.AllocateUninitializedArray<byte>(_artData.Length);
+            _artData.CopyTo(copy, 0);
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Allows <see cref="DetachPayload"/> after durable IndexCommitted has been applied.
     /// </summary>
     /// <remarks>

@@ -171,7 +171,9 @@ public sealed class SegmentCopyCapacityReservationTests
         await WaitUntilAsync(() => engine.PersistBlockedRetryScheduledCount >= 1);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(0, engine.PhysicalAppendCount);
-        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.TryRead(record.ArtId, out var journalRead));
+        Assert.True(journalRead.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(engine.Index.TryGet(record.ArtId, out _));
         var failure = AssertNonRetryableReservationEvent(sink);
         Assert.Equal(required.ToString(CultureInfo.InvariantCulture), Scalar(failure, "ReleasedUnwrittenSegmentBytes"));
         Assert.Equal("0", Scalar(failure, "RetainedWrittenSegmentBytes"));
@@ -199,7 +201,9 @@ public sealed class SegmentCopyCapacityReservationTests
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal(1, engine.PhysicalAppendCount);
-        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.TryRead(record.ArtId, out var journalRead));
+        Assert.True(journalRead.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(engine.Index.TryGet(record.ArtId, out _));
         var failure = AssertNonRetryableReservationEvent(sink);
         Assert.Equal("0", Scalar(failure, "ReleasedUnwrittenSegmentBytes"));
         Assert.Equal(required.ToString(CultureInfo.InvariantCulture), Scalar(failure, "RetainedWrittenSegmentBytes"));
@@ -251,7 +255,9 @@ public sealed class SegmentCopyCapacityReservationTests
         Assert.Equal(1, engine.PhysicalAppendCount);
         Assert.Equal(1, engine.ProcessLocalSegmentCopyCount);
         Assert.Equal(0, engine.ProcessLocalArticleReservedBytes);
-        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.TryRead(record.ArtId, out var journalRead));
+        Assert.True(journalRead.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(engine.Index.TryGet(record.ArtId, out _));
     }
 
     [Fact]

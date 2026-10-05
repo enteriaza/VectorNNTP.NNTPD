@@ -276,7 +276,9 @@ public sealed class ArticleSegmentCopyReservationReclamationTests
         Assert.Equal((0, 0), engine.ProcessLocalArticleCopyCounts(accepted.Sequence));
         Assert.Equal(0, engine.PhysicalAppendCount);
         Assert.Equal(0, reader.Read().UsedBytes);
-        Assert.False(engine.TryRead(record.ArtId, out _));
+        Assert.True(engine.TryRead(record.ArtId, out var journalRead));
+        Assert.True(journalRead.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(engine.Index.TryGet(record.ArtId, out _));
         Assert.True(physical > 0);
     }
 

@@ -193,6 +193,29 @@ public sealed class MemoryArticleStorageEngine : IArticleStorageEngine, IArticle
     /// <inheritdoc />
     public bool TryRead(ArticleId artId, out ArticleReadResult result)
     {
+        var presentBefore = _index.TryGet(artId, out var published)
+            && published.State == ArticleStorageState.Present;
+        if (TryReadPresent(artId, out result))
+        {
+            return true;
+        }
+
+        if (TryReadOutstandingJournal(artId, out result))
+        {
+            return true;
+        }
+
+        if (presentBefore)
+        {
+            return false;
+        }
+
+        return TryReadPresent(artId, out result);
+    }
+
+    /// <summary>Reads a Present memory-segment article.</summary>
+    private bool TryReadPresent(ArticleId artId, out ArticleReadResult result)
+    {
         result = default;
         if (!_index.TryGet(artId, out var metadata) || metadata.State != ArticleStorageState.Present)
         {
@@ -225,6 +248,45 @@ public sealed class MemoryArticleStorageEngine : IArticleStorageEngine, IArticle
 
         _ = _index.TryGet(artId, out metadata);
         result = new ArticleReadResult(metadata, artData);
+        return true;
+    }
+
+    /// <summary>
+    /// Serves a proved outstanding Accept when the memory index has not published Present.
+    /// </summary>
+    /// <remarks>
+    /// Proves the copy and returns it only while that Accept is still outstanding.
+    /// A Present row that wins the race is read by the caller, not here.
+    /// </remarks>
+    private bool TryReadOutstandingJournal(ArticleId artId, out ArticleReadResult result)
+    {
+        result = default;
+        if (!_journal.TryGetOutstanding(artId, out var accept)
+            || accept.ArtId != artId
+            || !accept.TryCopyArtData(out var bytes)
+            || bytes is null
+            || !ArticleStorageIntegrity.TryProve(bytes, accept.ArtId, accept.ArtHash, accept.ArtSize))
+        {
+            return false;
+        }
+
+        if (!_journal.TryGetOutstanding(artId, out var still)
+            || still.Sequence != accept.Sequence
+            || still.ArtHash != accept.ArtHash)
+        {
+            return false;
+        }
+
+        result = new ArticleReadResult(
+            new StoredArticleMetadata(
+                accept.ArtId,
+                accept.ArtHash,
+                accept.ArtSize,
+                new StoredArticleLocation(default, 0, accept.ArtSize),
+                ArticleStorageState.Present,
+                accept.AcceptedUtc,
+                accept.Sequence),
+            bytes);
         return true;
     }
 

@@ -20,7 +20,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// <para>
 /// Accept returns after durable journal Accept (ArtData embedded). Background persist (or
 /// <see cref="RecoverAsync"/>) completes SATA append → PhysicalWritten → index Present →
-/// IndexCommitted.
+/// IndexCommitted. That Accept is readable as soon as it is durable, before Present.
+/// <see cref="TryRead(ArticleId, out ArticleReadResult)"/> proves the outstanding payload and prefers the published segment
+/// once Present is visible. The Accept stays outstanding until IndexCommitted, which follows
+/// that publication, so journal reclamation cannot open a miss window.
 /// </para>
 /// <para>
 /// Recovery (Phase 1.5 / Option 1): Accept-only always performs a fresh SATA append from journal
@@ -31,9 +34,17 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// </para>
 /// <para>
 /// Optional <see cref="IArticleMemoryCache"/> accelerates reads (Phase 3B) and is populated
-/// after durable IndexCommitted (Phase 3C). Durable index state remains authoritative: after
-/// successful Evict/Invalidate the cache entry is removed (Phase 3D), and a cache hit for an
-/// ArtId whose durable state is Evicted/Invalid is dropped rather than returned.
+/// after durable IndexCommitted (Phase 3C), not from a journal-only read. A cache hit is
+/// returned only when the index still publishes that identity as Present. After successful
+/// Evict/Invalidate the cache entry is removed (Phase 3D), and a cache hit for an ArtId that
+/// is not serveable is dropped rather than returned.
+/// </para>
+/// <para>
+/// Concurrent published-segment reads of one article share a single in-flight physical read.
+/// The registry is capped by the listener connection limit (default 1024) and holds only reads
+/// that have not finished. Cache hits and outstanding journal Accepts do not enter it. A
+/// cancelled waiter leaves the shared read running. Overflow past the in-flight or per-article
+/// waiter limit uses the existing direct segment path and does not enlarge the registry.
 /// </para>
 /// <para>
 /// Phase 5E.1 / 5E.2: optional process-local capacity reservation under
@@ -149,6 +160,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private long _persistBatchCount;
     private int _lastPersistBatchArticleCount;
     private long _lastPersistBatchByteCount;
+    private long _cacheArticleReadCount;
+    private long _segmentArticleReadCount;
+    private long _journalArticleReadCount;
+
+    /// <summary>
+    /// Shares one published-segment read per article id. Does not retain completed reads.
+    /// </summary>
+    private readonly ArticlePhysicalReadCoalescer _physicalReads = new();
     private int _disposed;
     private int _suspendBackgroundPersist;
 
@@ -238,6 +257,57 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>Sum of ArtSize for the most recent worker batch. Tests only.</summary>
     internal long LastPersistBatchByteCount => Volatile.Read(ref _lastPersistBatchByteCount);
+
+    /// <summary>Successful <see cref="TryRead(ArticleId, out ArticleReadResult)"/> results taken from the RAM cache. Diagnostics only.</summary>
+    internal long CacheArticleReadCount => Volatile.Read(ref _cacheArticleReadCount);
+
+    /// <summary>Successful <see cref="TryRead(ArticleId, out ArticleReadResult)"/> results taken from a published segment. Diagnostics only.</summary>
+    internal long SegmentArticleReadCount => Volatile.Read(ref _segmentArticleReadCount);
+
+    /// <summary>Successful <see cref="TryRead(ArticleId, out ArticleReadResult)"/> results taken from an outstanding journal Accept. Diagnostics only.</summary>
+    internal long JournalArticleReadCount => Volatile.Read(ref _journalArticleReadCount);
+
+    /// <summary>Callers that joined an in-flight published-segment read instead of starting one.</summary>
+    internal long ArticleReadCoalescedCount => _physicalReads.CoalescedCount;
+
+    /// <summary>
+    /// Published-segment read callbacks that ran, including a direct read past the coalescing bound
+    /// and a failed attempt. A joined waiter does not increment this.
+    /// </summary>
+    internal long ArticleReadPhysicalReadCount => _physicalReads.PhysicalReadCount;
+
+    /// <summary>Callers currently waiting on an in-flight published-segment read.</summary>
+    internal int ArticleReadWaiterCount => _physicalReads.WaiterCount;
+
+    /// <summary>Article ids with a published-segment read that has not finished.</summary>
+    internal int ArticleReadInFlightCount => _physicalReads.InFlightCount;
+
+    /// <summary>Largest number of waiters observed on one published-segment read.</summary>
+    internal int ArticleReadMaxObservedWaiters => _physicalReads.MaxObservedWaiters;
+
+    /// <summary>Maximum simultaneous article ids with an in-flight published-segment read.</summary>
+    internal int PhysicalReadCoalesceMaxInFlight
+    {
+        get => _physicalReads.MaxInFlight;
+        set => _physicalReads.MaxInFlight = value;
+    }
+
+    /// <summary>Maximum waiters on one published-segment read, excluding the owner.</summary>
+    internal int PhysicalReadCoalesceMaxWaiters
+    {
+        get => _physicalReads.MaxWaiters;
+        set => _physicalReads.MaxWaiters = value;
+    }
+
+    /// <summary>
+    /// Invoked after a waiter joins a published-segment read, outside the coalescing lock.
+    /// Tests only. Must not block or call back into <see cref="TryRead(ArticleId, CancellationToken, out ArticleReadResult)"/>.
+    /// </summary>
+    internal Action<int>? TestWhenPhysicalReadWaitersChanged
+    {
+        get => _physicalReads.WaitersChanged;
+        set => _physicalReads.WaitersChanged = value;
+    }
 
     /// <summary>Segment-volume capacity, or null when admission is disabled.</summary>
     internal CapacityVolume? SegmentCapacity => _segmentCapacity;
@@ -1012,8 +1082,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <summary>
     /// Invoked after a cache-miss index snapshot and before the segment read.
     /// Tests only; cleared before invoke. Must not be used to hold the index lock across IO.
+    /// Runs on each <see cref="TryRead(ArticleId, out ArticleReadResult)"/> caller before coalescing, so a waiter may observe it
+    /// before the shared physical read starts.
     /// </summary>
     internal Action<ArticleId, StoredArticleLocation>? TestHookAfterIndexSnapshotBeforeSegmentRead { get; set; }
+
+    /// <summary>
+    /// Invoked inside the published-segment read, immediately before <c>TryReadProven</c>.
+    /// Tests only. Not cleared. The owner of a coalesced read is the only caller; a joined waiter
+    /// does not reach it. Must not call back into <see cref="TryRead(ArticleId, CancellationToken, out ArticleReadResult)"/>.
+    /// </summary>
+    internal Action? TestHookBeforeProvenSegmentRead { get; set; }
 
     /// <summary>
     /// Invoked after a failed read is judged current and before the expected-location
@@ -1049,7 +1128,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <param name="logger">Optional logger.</param>
     /// <param name="timeProvider">Optional time provider.</param>
     /// <param name="articleCache">
-    /// Optional process-local cache for <see cref="TryRead"/>. When null, a disabled cache
+    /// Optional process-local cache for <see cref="TryRead(ArticleId, out ArticleReadResult)"/>. When null, a disabled cache
     /// (<c>MaxBytes = 0</c>) is used.
     /// </param>
     /// <param name="capacityReader">
@@ -1058,12 +1137,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <see cref="ArticleStorageRuntimeOptions.SegmentDir"/> is used for that shared volume.
     /// When the volumes differ and this is null, that reader is created for the segment volume only.
     /// </param>
+    /// <param name="maxConcurrentPhysicalReads">
+    /// Cap on simultaneous in-flight published-segment reads and on waiters per article.
+    /// Null uses <see cref="ArticlePhysicalReadCoalescer.DefaultMaxInFlight"/>.
+    /// </param>
     public static FileArticleStorageEngine Open(
         ArticleStorageRuntimeOptions options,
         ILogger? logger = null,
         TimeProvider? timeProvider = null,
         IArticleMemoryCache? articleCache = null,
-        IStorageCapacityReader? capacityReader = null) =>
+        IStorageCapacityReader? capacityReader = null,
+        int? maxConcurrentPhysicalReads = null) =>
         Open(
             options,
             volumeProbe: null,
@@ -1071,7 +1155,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             controlCapacityReader: null,
             logger,
             timeProvider,
-            articleCache);
+            articleCache,
+            maxConcurrentPhysicalReads);
 
     /// <summary>
     /// Opens the engine with an explicit volume probe and optional per-volume readers.
@@ -1088,6 +1173,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <param name="logger">Optional logger.</param>
     /// <param name="timeProvider">Optional time provider.</param>
     /// <param name="articleCache">Optional process-local cache.</param>
+    /// <param name="maxConcurrentPhysicalReads">
+    /// Cap on simultaneous in-flight published-segment reads and on waiters per article.
+    /// Null uses <see cref="ArticlePhysicalReadCoalescer.DefaultMaxInFlight"/>.
+    /// </param>
     internal static FileArticleStorageEngine Open(
         ArticleStorageRuntimeOptions options,
         IStorageVolumeProbe? volumeProbe,
@@ -1095,7 +1184,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         IStorageCapacityReader? controlCapacityReader = null,
         ILogger? logger = null,
         TimeProvider? timeProvider = null,
-        IArticleMemoryCache? articleCache = null)
+        IArticleMemoryCache? articleCache = null,
+        int? maxConcurrentPhysicalReads = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ControlDir);
@@ -1133,6 +1223,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             journal = null;
             segments = null;
             index = null;
+            if (maxConcurrentPhysicalReads is int physicalReadBound)
+            {
+                engine._physicalReads.MaxInFlight = physicalReadBound;
+                engine._physicalReads.MaxWaiters = physicalReadBound;
+            }
+
             engine.RebuildSegmentAccountingFromIndex();
             FileArticleStorageEngineLogMessages.Opened(log, options.ControlDir, options.SegmentDir);
             return engine;
@@ -1887,13 +1983,89 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <inheritdoc />
-    public bool TryRead(ArticleId artId, out ArticleReadResult result)
+    public bool TryRead(ArticleId artId, out ArticleReadResult result) =>
+        TryRead(artId, CancellationToken.None, out result);
+
+    /// <summary>
+    /// Reads <paramref name="artId"/> from the cache, a published segment, or an outstanding Accept.
+    /// </summary>
+    /// <param name="artId">Article identity.</param>
+    /// <param name="cancellationToken">
+    /// Cancels this caller. A cancelled waiter does not cancel a shared segment read that other
+    /// callers still need. The segment read itself does not observe the token.
+    /// </param>
+    /// <param name="result">Proved article when this returns true.</param>
+    /// <returns>True when a proved article was served.</returns>
+    internal bool TryRead(ArticleId artId, CancellationToken cancellationToken, out ArticleReadResult result)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Captured before the published attempt. A Present row that this call already
+        // refused must not be read again: a second attempt can invalidate it or serve
+        // a location the first attempt rejected. A miss may still observe Present
+        // after the journal lookup, and that later row is read once.
+        var presentBefore = IsIndexPresent(artId);
+        if (TryReadPublished(artId, cancellationToken, out result))
+        {
+            return true;
+        }
+
+        if (TryReadOutstandingJournal(artId, out result))
+        {
+            return true;
+        }
+
+        if (presentBefore)
+        {
+            return false;
+        }
+
+        return TryReadPublished(artId, cancellationToken, out result);
+    }
+
+    /// <summary>
+    /// True when <paramref name="artId"/> is index Present or a proved outstanding Accept.
+    /// </summary>
+    /// <param name="artId">Article identity to test.</param>
+    /// <returns>True when <see cref="TryRead(ArticleId, out ArticleReadResult)"/> can serve the article.</returns>
+    /// <remarks>
+    /// Used by fleet presence. The outstanding path copies and proves the journal payload,
+    /// then discards the copy. A Present row that appears during that proof is still present.
+    /// </remarks>
+    internal bool HasDurableServeableArticle(ArticleId artId)
+    {
+        if (IsIndexPresent(artId))
+        {
+            return true;
+        }
+
+        if (TryCopyProvedOutstanding(artId, out _, out _))
+        {
+            return true;
+        }
+
+        return IsIndexPresent(artId);
+    }
+
+    /// <summary>
+    /// Reads a cache hit or published Present location.
+    /// </summary>
+    /// <param name="artId">Article identity.</param>
+    /// <param name="cancellationToken">
+    /// Applied only to the shared published-segment read. A cache hit does not observe it again.
+    /// </param>
+    /// <param name="result">Proved article when this returns true.</param>
+    /// <returns>True when the cache or the published segment served the article.</returns>
+    /// <remarks>
+    /// A cache hit is returned only when the index still publishes the same identity as Present.
+    /// Any other cache entry is removed. A missing or non-Present index row returns false
+    /// without consulting the journal. A Present miss shares one physical segment read among
+    /// concurrent callers of <paramref name="artId"/>.
+    /// </remarks>
+    private bool TryReadPublished(ArticleId artId, CancellationToken cancellationToken, out ArticleReadResult result)
     {
         result = default;
 
-        // Cache is non-authoritative. A hit is usable only when the index still
-        // publishes that exact identity as Present. Anything else is dropped and
-        // the index path decides readability.
         if (_articleCache.TryGet(artId, out var cached))
         {
             var cacheCoherent = _index.TryGet(artId, out var cachedIndexMeta)
@@ -1916,6 +2088,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         _timeProvider.GetUtcNow(),
                         cachedIndexMeta.Sequence),
                     cached.ArtData);
+                Interlocked.Increment(ref _cacheArticleReadCount);
                 return true;
             }
         }
@@ -1929,8 +2102,149 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         TestHookAfterIndexSnapshotBeforeSegmentRead = null;
         hook?.Invoke(artId, metadata.Location);
 
-        return TryReadIndexedLocation(in metadata, allowOneRelocationRetry: true, out result);
+        return CoalesceIndexedRead(artId, cancellationToken, in metadata, out result);
     }
+
+    /// <summary>
+    /// Shares one <see cref="TryReadIndexedLocation"/> call among concurrent readers of
+    /// <paramref name="artId"/>. The relocation retry stays inside that call so the owner
+    /// cannot join itself.
+    /// </summary>
+    /// <param name="artId">Article whose published segment read may be shared.</param>
+    /// <param name="cancellationToken">Cancels this caller only.</param>
+    /// <param name="metadata">Present snapshot selected before the shared read.</param>
+    /// <param name="result">Verified article when this returns true.</param>
+    /// <returns>True when the shared read produced an article.</returns>
+    private bool CoalesceIndexedRead(
+        ArticleId artId,
+        CancellationToken cancellationToken,
+        in StoredArticleMetadata metadata,
+        out ArticleReadResult result)
+    {
+        var snapshot = metadata;
+        return _physicalReads.Execute(
+            artId,
+            cancellationToken,
+            ReadSnapshot,
+            out result);
+
+        ArticleReadResult? ReadSnapshot()
+        {
+            var copy = snapshot;
+            if (TryReadIndexedLocation(in copy, allowOneRelocationRetry: true, out var indexed))
+            {
+                return indexed;
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Serves a proved outstanding Accept when publication has not become the read source.
+    /// </summary>
+    /// <param name="artId">Article identity.</param>
+    /// <param name="result">Proved journal payload when this returns true.</param>
+    /// <returns>True when the journal payload or a publication that won the race was served.</returns>
+    /// <remarks>
+    /// Copies the Accept payload and proves ArtId, ArtHash, and ArtSize. The copy is returned
+    /// only when that Accept is still outstanding, so a checkpoint that already dropped it
+    /// cannot be served. A Present row that appears in that window is left to the caller's
+    /// published retry. A disposed journal returns false.
+    /// </remarks>
+    private bool TryReadOutstandingJournal(ArticleId artId, out ArticleReadResult result)
+    {
+        result = default;
+        if (!TryCopyProvedOutstanding(artId, out var accept, out var bytes))
+        {
+            return false;
+        }
+
+        if (!OutstandingStillMatches(artId, accept))
+        {
+            return false;
+        }
+
+        result = new ArticleReadResult(MetadataForJournalAccept(accept), bytes);
+        Interlocked.Increment(ref _journalArticleReadCount);
+        return true;
+    }
+
+    /// <summary>
+    /// Copies and proves the outstanding Accept for <paramref name="artId"/>.
+    /// </summary>
+    /// <param name="artId">Article identity.</param>
+    /// <param name="accept">Outstanding Accept when this returns true.</param>
+    /// <param name="bytes">Independent proved payload when this returns true.</param>
+    /// <returns>False when no outstanding Accept exists, the payload was detached, or proof fails.</returns>
+    private bool TryCopyProvedOutstanding(
+        ArticleId artId,
+        out JournalAcceptRecord accept,
+        out byte[] bytes)
+    {
+        accept = null!;
+        bytes = null!;
+        JournalAcceptRecord record;
+        try
+        {
+            if (!_journal.TryGetOutstanding(artId, out record))
+            {
+                return false;
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+
+        if (record.ArtId != artId || record.ArtSize <= 0 || !record.TryCopyArtData(out var copy) || copy is null)
+        {
+            return false;
+        }
+
+        if (!ArticleStorageIntegrity.TryProve(copy, record.ArtId, record.ArtHash, record.ArtSize))
+        {
+            return false;
+        }
+
+        accept = record;
+        bytes = copy;
+        return true;
+    }
+
+    /// <summary>True when <paramref name="accept"/> is still the outstanding Accept for <paramref name="artId"/>.</summary>
+    private bool OutstandingStillMatches(ArticleId artId, JournalAcceptRecord accept)
+    {
+        try
+        {
+            return _journal.TryGetOutstanding(artId, out var still)
+                && still.Sequence == accept.Sequence
+                && still.ArtId == accept.ArtId
+                && still.ArtHash == accept.ArtHash
+                && still.ArtSize == accept.ArtSize;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>True when the index publishes <paramref name="artId"/> as Present.</summary>
+    private bool IsIndexPresent(ArticleId artId) =>
+        _index.TryGet(artId, out var metadata) && metadata.State == ArticleStorageState.Present;
+
+    /// <summary>
+    /// Metadata for a journal-served article. The location names no segment; the payload is the journal copy.
+    /// </summary>
+    private static StoredArticleMetadata MetadataForJournalAccept(JournalAcceptRecord accept) =>
+        new(
+            accept.ArtId,
+            accept.ArtHash,
+            accept.ArtSize,
+            new StoredArticleLocation(default, 0, accept.ArtSize),
+            ArticleStorageState.Present,
+            accept.AcceptedUtc,
+            accept.Sequence);
 
     /// <summary>
     /// Reads <paramref name="snapshot"/> without holding the index lock across segment IO.
@@ -1948,6 +2262,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         if (failProvenRead)
         {
             TestFailNextIndexedProvenReads--;
+        }
+        else
+        {
+            TestHookBeforeProvenSegmentRead?.Invoke();
         }
 
         if (failProvenRead
@@ -2003,6 +2321,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         }
 
         result = new ArticleReadResult(published, artData);
+        Interlocked.Increment(ref _segmentArticleReadCount);
 
         // Best-effort populate; Put rejection must not fail the durable read.
         if (TryCreateCacheRecord(in published, artData, out var cacheRecord))

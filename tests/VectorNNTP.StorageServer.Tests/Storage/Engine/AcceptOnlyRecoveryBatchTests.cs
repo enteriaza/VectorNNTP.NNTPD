@@ -208,8 +208,12 @@ public sealed class AcceptOnlyRecoveryBatchTests
         var failed = await Assert.ThrowsAsync<IOException>(() => engine.RecoverAsync(CancellationToken.None));
         Assert.Equal("batch-scan", failed.Message);
         Assert.Equal(0, engine.PhysicalAppendCount);
-        Assert.False(engine.TryRead(first.ArtId, out _));
-        Assert.False(engine.TryRead(second.ArtId, out _));
+        Assert.True(engine.TryRead(first.ArtId, out var firstRead));
+        Assert.True(firstRead.ArtData.Span.SequenceEqual(first.ArtData.Span));
+        Assert.True(engine.TryRead(second.ArtId, out var secondRead));
+        Assert.True(secondRead.ArtData.Span.SequenceEqual(second.ArtData.Span));
+        Assert.False(engine.Index.TryGet(first.ArtId, out _));
+        Assert.False(engine.Index.TryGet(second.ArtId, out _));
         Assert.Equal(2, engine.Journal.EnumerateIncomplete().Count);
     }
 
