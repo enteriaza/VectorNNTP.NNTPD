@@ -36,7 +36,6 @@ public sealed class SerilogPathSurveyWriterTests
         Assert.Equal(250, settings.BufferSize);
         Assert.False(settings.BlockWhenFull);
         Assert.Null(settings.FlushToDiskInterval);
-        Assert.Same(NntpdSerilogHooks.DailyGzipFastest, settings.Hooks);
     }
 
     [Fact]
@@ -145,7 +144,9 @@ public sealed class SerilogPathSurveyWriterTests
 
         Assert.NotEmpty(handler.Completed);
         Assert.All(handler.GzipExistedAtHandoff, static existed => Assert.False(existed));
-        Assert.NotEmpty(Directory.GetFiles(dir.Path, "inpaths*.gz"));
+        Assert.All(handler.Completed, static path => Assert.False(File.Exists(path)));
+        Assert.Empty(Directory.GetFiles(dir.Path, "inpaths*.gz"));
+        Assert.Single(Directory.GetFiles(dir.Path, "inpaths*.log"));
     }
 
     [Fact]

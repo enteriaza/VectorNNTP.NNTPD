@@ -2,7 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Serilog;
 using Serilog.Events;
 using Serilog.Sinks.File;
-using Serilog.Sinks.File.Archive;
+using VectorNNTP.Common.Logging;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.NNTPD.Logging;
@@ -14,7 +14,7 @@ namespace VectorNNTP.NNTPD.Logging;
 /// <para>
 /// Operational File/Async settings bind from <c>Serilog:Inpaths</c> using the same
 /// argument names as the application File sink (path, rolling, retention,
-/// buffering, <c>flushToDiskInterval</c>, hooks). The Path-survey line format is not read from configuration;
+/// buffering, <c>flushToDiskInterval</c>). The Path-survey line format is not read from configuration;
 /// the sink is always constructed with <see cref="InnPathSurveyTextFormatter"/>.
 /// </para>
 /// <para>
@@ -24,12 +24,13 @@ namespace VectorNNTP.NNTPD.Logging;
 /// <see cref="NntpdOptions.LogDir"/> via <see cref="NntpdFileLogging"/>.
 /// </para>
 /// <para>
-/// <see cref="PathSurveyFileSinkSettings.RetainedFileCountLimit"/> should remain
-/// 1 uncompressed file (the active day) so Serilog's delete callback runs at
-/// daily rotation. That callback is the completed-file handoff: the
-/// <see cref="ICompletedPathSurveyFileHandler"/> sees the uncompressed file,
-/// then gzip runs, then Serilog deletes the original. Raising uncompressed
-/// retention delays that handoff until Serilog later deletes the file.
+/// Production <see cref="PathSurveyFileSinkSettings.RetainedFileCountLimit"/> is 1,
+/// so only the active day is kept. When the day rolls, the completed file is handed
+/// to <see cref="ICompletedPathSurveyFileHandler"/> and then gzip-compressed.
+/// Retention then deletes that compressed day because it is outside the one-file limit.
+/// The handler opens the file with share-read/write/delete before compression, so it
+/// can keep reading after the uncompressed file is replaced. Handler failure is logged
+/// and does not skip gzip.
 /// </para>
 /// </remarks>
 public static class NntpdPathSurveyLogging
@@ -103,8 +104,7 @@ public static class NntpdPathSurveyLogging
             inpaths.GetValue<long?>("fileSizeLimitBytes"),
             inpaths.GetValue("bufferSize", 50000),
             inpaths.GetValue("blockWhenFull", true),
-            inpaths.GetValue<TimeSpan?>("flushToDiskInterval"),
-            ResolveArchiveHooks(inpaths["hooks"]));
+            inpaths.GetValue<TimeSpan?>("flushToDiskInterval"));
     }
 
     /// <summary>
@@ -127,15 +127,12 @@ public static class NntpdPathSurveyLogging
         Directory.CreateDirectory(
             Path.GetDirectoryName(Path.GetFullPath(settings.Path)) ?? NntpdOptions.DefaultLogDir);
 
-        FileLifecycleHooks hooks = new PathSurveyCompletedFileHook(completedFileHandler, hookLogger)
-            .Then(settings.Hooks);
-
         return new LoggerConfiguration()
             .MinimumLevel.Information()
             .Enrich.WithProperty(Serilog.Core.Constants.SourceContextPropertyName, SourceContext)
             .Filter.ByIncludingOnly(static e => e.Properties.ContainsKey(PathProperty))
             .WriteTo.Async(
-                a => a.File(
+                a => a.DailyGzipFile(
                     new InnPathSurveyTextFormatter(),
                     settings.Path,
                     restrictedToMinimumLevel: LogEventLevel.Information,
@@ -145,15 +142,21 @@ public static class NntpdPathSurveyLogging
                     rollingInterval: settings.RollingInterval,
                     rollOnFileSizeLimit: settings.RollOnFileSizeLimit,
                     retainedFileCountLimit: settings.RetainedFileCountLimit,
-                    hooks: hooks),
+                    onCompletedFile: path =>
+                    {
+                        try
+                        {
+                            completedFileHandler.OnCompletedFile(path);
+                        }
+                        catch (Exception ex)
+                        {
+                            PathSurveyLogMessages.CompletedFileHandlerFailed(hookLogger, ex, path);
+                        }
+                    }),
                 bufferSize: settings.BufferSize,
                 blockWhenFull: settings.BlockWhenFull)
             .CreateLogger();
     }
-
-    /// <summary>Resolves File <c>hooks</c> from the same type/member string Serilog Settings uses.</summary>
-    public static ArchiveHooks ResolveArchiveHooks(string? configured) =>
-        NntpdNewsLogging.ResolveArchiveHooks(configured);
 
     private static RollingInterval ParseRolling(string? value) =>
         Enum.TryParse<RollingInterval>(value, ignoreCase: true, out var interval)
@@ -167,7 +170,10 @@ public static class NntpdPathSurveyLogging
 /// </summary>
 /// <param name="Path">Resolved Path-survey file path, including Serilog rolling token.</param>
 /// <param name="RollingInterval">Serilog File rolling interval.</param>
-/// <param name="RetainedFileCountLimit">Serilog File uncompressed retention count.</param>
+/// <param name="RetainedFileCountLimit">
+/// Daily files to keep, including the active file. <c>.log</c> and <c>.log.gz</c> for the same day count as one.
+/// Production uses 1 so a completed day is removed after the ninpaths handoff and gzip.
+/// </param>
 /// <param name="Buffered">Whether the File sink buffers writes.</param>
 /// <param name="RollOnFileSizeLimit">Whether size-based rolling is enabled.</param>
 /// <param name="FileSizeLimitBytes">Serilog File size cap; <see langword="null"/> is unlimited.</param>
@@ -177,7 +183,6 @@ public static class NntpdPathSurveyLogging
 /// Serilog File periodic flush. <see langword="null"/> leaves buffering until dispose.
 /// Production <c>Serilog:Inpaths</c> sets one second.
 /// </param>
-/// <param name="Hooks">Resolved File archive hooks (compression).</param>
 public readonly record struct PathSurveyFileSinkSettings(
     string Path,
     RollingInterval RollingInterval,
@@ -187,5 +192,4 @@ public readonly record struct PathSurveyFileSinkSettings(
     long? FileSizeLimitBytes,
     int BufferSize,
     bool BlockWhenFull,
-    TimeSpan? FlushToDiskInterval,
-    ArchiveHooks Hooks);
+    TimeSpan? FlushToDiskInterval);

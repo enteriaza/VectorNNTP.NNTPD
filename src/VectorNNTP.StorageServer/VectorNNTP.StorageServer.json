@@ -63,7 +63,7 @@
         "VectorNNTP.StorageServer": "Debug"
       }
     },
-    "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async", "Serilog.Sinks.File.Archive" ],
+    "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async" ],
     "WriteTo": [
       {
         "Args": {
@@ -82,7 +82,6 @@
                 "buffered": true,
                 "flushToDiskInterval": "00:00:01",
                 "fileSizeLimitBytes": null,
-                "hooks": "VectorNNTP.StorageServer.Logging.StorageServerSerilogHooks::DailyGzipFastest, VectorNNTP.StorageServer",
                 "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
                 "path": "/logs/pending-.log",
                 "restrictedToMinimumLevel": "Debug",

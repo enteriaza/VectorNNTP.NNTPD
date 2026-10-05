@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using VectorNNTP.Common.Logging;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Email;
 using VectorNNTP.NNTPD.Hosting;
@@ -180,10 +181,10 @@ public sealed class NinpathsProcessingServiceTests
         var handler = CreateHandler(service, ["survey@example.com"]);
         await service.StartAsync(CancellationToken.None);
 
-        var hooks = NntpdSerilogHooks.CreatePathSurveyHooks(handler, NullLogger.Instance);
-        hooks.OnFileDeleting(path);
+        handler.OnCompletedFile(path);
+        Assert.True(new GzipLogFileCompressor().TryCompressAndReplace(path));
 
-        Assert.True(File.Exists(path));
+        Assert.False(File.Exists(path));
         var archive = Path.Combine(dir.Path, NntpdFileLogging.GzipArchiveFileName(path));
         Assert.True(File.Exists(archive));
 

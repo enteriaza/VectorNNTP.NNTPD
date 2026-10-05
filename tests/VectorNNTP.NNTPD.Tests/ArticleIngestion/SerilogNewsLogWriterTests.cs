@@ -33,7 +33,6 @@ public sealed class SerilogNewsLogWriterTests
         Assert.Equal(250, settings.BufferSize);
         Assert.False(settings.BlockWhenFull);
         Assert.Null(settings.FlushToDiskInterval);
-        Assert.Same(NntpdSerilogHooks.DailyGzipFastest, settings.Hooks);
     }
 
     [Fact]

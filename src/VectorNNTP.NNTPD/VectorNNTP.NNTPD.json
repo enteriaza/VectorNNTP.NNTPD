@@ -2928,7 +2928,7 @@
         "VectorNNTP.NNTPD": "Debug"
       }
     },
-    "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async", "Serilog.Sinks.File.Archive" ],
+    "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File", "Serilog.Sinks.Async" ],
     "WriteTo": [
       {
         "Args": {
@@ -2947,7 +2947,6 @@
                 "buffered": true,
                 "flushToDiskInterval": "00:00:01",
                 "fileSizeLimitBytes": null,
-                "hooks": "VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD",
                 "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
                 "path": "logs/pending-.log",
                 "restrictedToMinimumLevel": "Debug",
@@ -2968,7 +2967,6 @@
       "buffered": true,
       "flushToDiskInterval": "00:00:01",
       "fileSizeLimitBytes": null,
-      "hooks": "VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD",
       "path": "logs/news-.log",
       "retainedFileCountLimit": 14,
       "rollOnFileSizeLimit": false,
@@ -2980,7 +2978,6 @@
       "buffered": true,
       "flushToDiskInterval": "00:00:01",
       "fileSizeLimitBytes": null,
-      "hooks": "VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD",
       "path": "logs/inpaths-.log",
       "retainedFileCountLimit": 1,
       "rollOnFileSizeLimit": false,

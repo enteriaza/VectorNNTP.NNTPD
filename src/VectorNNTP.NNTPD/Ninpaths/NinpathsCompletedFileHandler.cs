@@ -10,9 +10,8 @@ namespace VectorNNTP.NNTPD.Ninpaths;
 /// </summary>
 /// <remarks>
 /// The stream is opened with <see cref="FileShare.ReadWrite"/> and
-/// <see cref="FileShare.Delete"/> so gzip and Serilog deletion can proceed
-/// while the worker still reads. Failures are logged and never thrown to the
-/// Serilog hook.
+/// <see cref="FileShare.Delete"/> so gzip and deletion of the completed file can proceed
+/// while the worker still reads. Failures are logged and never thrown to rotation.
 /// </remarks>
 public sealed class NinpathsCompletedFileHandler : ICompletedPathSurveyFileHandler
 {

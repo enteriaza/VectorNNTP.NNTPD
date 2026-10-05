@@ -10,7 +10,6 @@ internal static class NewsTestConfiguration
         string rollingInterval = "Day",
         int retainedFileCountLimit = 14,
         bool buffered = false,
-        string? hooks = null,
         long? fileSizeLimitBytes = null,
         bool rollOnFileSizeLimit = false,
         int bufferSize = 1000,
@@ -29,8 +28,6 @@ internal static class NewsTestConfiguration
                 [NntpdNewsLogging.SectionName + ":fileSizeLimitBytes"] = fileSizeLimitBytes?.ToString(),
                 [NntpdNewsLogging.SectionName + ":bufferSize"] = bufferSize.ToString(),
                 [NntpdNewsLogging.SectionName + ":blockWhenFull"] = blockWhenFull ? "true" : "false",
-                [NntpdNewsLogging.SectionName + ":hooks"] = hooks
-                    ?? "VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD",
             })
             .Build();
     }

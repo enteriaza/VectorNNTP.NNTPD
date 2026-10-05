@@ -90,20 +90,12 @@ public static class StorageServerLoggingExtensions
             (services, loggerConfiguration) =>
             {
                 loggerConfiguration
-                    .ReadFrom.Configuration(builder.Configuration)
+                    .ReadFrom.Configuration(StorageServerConfiguredSinks.WithoutWriteTo(builder.Configuration))
                     .ReadFrom.Services(services)
                     .Enrich.FromLogContext()
                     .Enrich.WithProperty("Application", ApplicationJsonConfiguration.EntryAssemblyName);
 
-                // Ensure a console sink exists even if configuration omits WriteTo,
-                // so interactive and systemd journal collection always have an output path.
-                if (!builder.Configuration.GetSection("Serilog:WriteTo").GetChildren().Any())
-                {
-                    loggerConfiguration.WriteTo.Console(
-                        restrictedToMinimumLevel: StorageServerFileLogging.ConsoleMinimumLevel,
-                        outputTemplate: ConsoleOutputTemplate);
-                }
-
+                StorageServerConfiguredSinks.Apply(loggerConfiguration, builder.Configuration);
                 configure?.Invoke(loggerConfiguration);
             },
             preserveStaticLogger: false,

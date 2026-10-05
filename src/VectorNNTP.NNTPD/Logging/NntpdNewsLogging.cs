@@ -1,8 +1,8 @@
-using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Serilog;
 using Serilog.Events;
-using Serilog.Sinks.File.Archive;
+using Serilog.Sinks.File;
+using VectorNNTP.Common.Logging;
 using VectorNNTP.NNTPD.Configuration;
 
 namespace VectorNNTP.NNTPD.Logging;
@@ -14,7 +14,7 @@ namespace VectorNNTP.NNTPD.Logging;
 /// <para>
 /// Operational File/Async settings bind from <c>Serilog:News</c> using the same
 /// argument names as the application File sink (path, rolling, retention,
-/// buffering, <c>flushToDiskInterval</c>, hooks). The INN line format is not read from configuration; the
+/// buffering, <c>flushToDiskInterval</c>). The INN line format is not read from configuration; the
 /// sink is always constructed with <see cref="InnNewsTextFormatter"/>.
 /// </para>
 /// <para>
@@ -113,8 +113,7 @@ public static class NntpdNewsLogging
             news.GetValue<long?>("fileSizeLimitBytes"),
             news.GetValue("bufferSize", 50000),
             news.GetValue("blockWhenFull", true),
-            news.GetValue<TimeSpan?>("flushToDiskInterval"),
-            ResolveArchiveHooks(news["hooks"]));
+            news.GetValue<TimeSpan?>("flushToDiskInterval"));
     }
 
     /// <summary>
@@ -129,7 +128,7 @@ public static class NntpdNewsLogging
         return new LoggerConfiguration()
             .MinimumLevel.Information()
             .WriteTo.Async(
-                a => a.File(
+                a => a.DailyGzipFile(
                     new InnNewsTextFormatter(),
                     settings.Path,
                     restrictedToMinimumLevel: LogEventLevel.Information,
@@ -138,35 +137,10 @@ public static class NntpdNewsLogging
                     flushToDiskInterval: settings.FlushToDiskInterval,
                     rollingInterval: settings.RollingInterval,
                     rollOnFileSizeLimit: settings.RollOnFileSizeLimit,
-                    retainedFileCountLimit: settings.RetainedFileCountLimit,
-                    hooks: settings.Hooks),
+                    retainedFileCountLimit: settings.RetainedFileCountLimit),
                 bufferSize: settings.BufferSize,
                 blockWhenFull: settings.BlockWhenFull)
             .CreateLogger();
-    }
-
-    /// <summary>Resolves File <c>hooks</c> from the same type/member string Serilog Settings uses.</summary>
-    public static ArchiveHooks ResolveArchiveHooks(string? configured)
-    {
-        if (string.IsNullOrWhiteSpace(configured))
-        {
-            return NntpdSerilogHooks.DailyGzipFastest;
-        }
-
-        var comma = configured.IndexOf(',');
-        var typeMember = comma < 0 ? configured.Trim() : configured[..comma].Trim();
-        var assembly = comma < 0 ? typeof(NntpdSerilogHooks).Assembly.GetName().Name : configured[(comma + 1)..].Trim();
-        var separator = typeMember.IndexOf("::", StringComparison.Ordinal);
-        if (separator < 0)
-        {
-            return NntpdSerilogHooks.DailyGzipFastest;
-        }
-
-        var typeName = typeMember[..separator].Trim();
-        var member = typeMember[(separator + 2)..].Trim();
-        var type = Type.GetType($"{typeName}, {assembly}", throwOnError: false);
-        var property = type?.GetProperty(member, BindingFlags.Public | BindingFlags.Static);
-        return property?.GetValue(null) as ArchiveHooks ?? NntpdSerilogHooks.DailyGzipFastest;
     }
 
     private static RollingInterval ParseRolling(string? value) =>
@@ -181,7 +155,9 @@ public static class NntpdNewsLogging
 /// </summary>
 /// <param name="Path">Resolved news file path, including Serilog rolling token.</param>
 /// <param name="RollingInterval">Serilog File rolling interval.</param>
-/// <param name="RetainedFileCountLimit">Serilog File uncompressed retention count.</param>
+/// <param name="RetainedFileCountLimit">
+/// Daily files to keep, including the active file. <c>.log</c> and <c>.log.gz</c> for the same day count as one.
+/// </param>
 /// <param name="Buffered">Whether the File sink buffers writes.</param>
 /// <param name="RollOnFileSizeLimit">Whether size-based rolling is enabled.</param>
 /// <param name="FileSizeLimitBytes">Serilog File size cap; <see langword="null"/> is unlimited.</param>
@@ -191,7 +167,6 @@ public static class NntpdNewsLogging
 /// Serilog File periodic flush. <see langword="null"/> leaves buffering until dispose.
 /// Production <c>Serilog:News</c> sets one second.
 /// </param>
-/// <param name="Hooks">Resolved File archive hooks (compression).</param>
 public readonly record struct NewsFileSinkSettings(
     string Path,
     RollingInterval RollingInterval,
@@ -201,5 +176,4 @@ public readonly record struct NewsFileSinkSettings(
     long? FileSizeLimitBytes,
     int BufferSize,
     bool BlockWhenFull,
-    TimeSpan? FlushToDiskInterval,
-    ArchiveHooks Hooks);
+    TimeSpan? FlushToDiskInterval);

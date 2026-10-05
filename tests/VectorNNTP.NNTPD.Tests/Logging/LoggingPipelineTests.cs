@@ -263,15 +263,16 @@ public sealed class LoggingPipelineTests
     }
 
     [Fact]
-    public void ProductionAssembly_ReferencesArchiveHooksAndConsole()
+    public void ProductionAssembly_ReferencesFileSinksAndCommon()
     {
         var names = typeof(NntpdLoggingExtensions).Assembly
             .GetReferencedAssemblies()
             .Select(static a => a.Name)
             .ToHashSet(StringComparer.Ordinal);
         Assert.Contains("Serilog.Sinks.Console", names);
-        Assert.Contains("Serilog.Sinks.File.Archive", names);
-        Assert.NotNull(NntpdSerilogHooks.DailyGzipFastest);
+        Assert.Contains("Serilog.Sinks.File", names);
+        Assert.Contains("VectorNNTP.Common", names);
+        Assert.DoesNotContain("Serilog.Sinks.File.Archive", names);
     }
 
     [Fact]
@@ -411,7 +412,6 @@ public sealed class LoggingPipelineTests
             ["Serilog:Using:0"] = "Serilog.Sinks.Console",
             ["Serilog:Using:1"] = "Serilog.Sinks.File",
             ["Serilog:Using:2"] = "Serilog.Sinks.Async",
-            ["Serilog:Using:3"] = "Serilog.Sinks.File.Archive",
             ["Serilog:MinimumLevel:Default"] = "Information",
             ["Serilog:MinimumLevel:Override:Microsoft"] = "Warning",
             ["Serilog:MinimumLevel:Override:Microsoft.Hosting.Lifetime"] = "Information",

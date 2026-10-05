@@ -10,7 +10,6 @@ internal static class PathSurveyTestConfiguration
         string rollingInterval = "Day",
         int retainedFileCountLimit = 1,
         bool buffered = false,
-        string? hooks = null,
         long? fileSizeLimitBytes = null,
         bool rollOnFileSizeLimit = false,
         int bufferSize = 1000,
@@ -29,8 +28,6 @@ internal static class PathSurveyTestConfiguration
                 [NntpdPathSurveyLogging.SectionName + ":fileSizeLimitBytes"] = fileSizeLimitBytes?.ToString(),
                 [NntpdPathSurveyLogging.SectionName + ":bufferSize"] = bufferSize.ToString(),
                 [NntpdPathSurveyLogging.SectionName + ":blockWhenFull"] = blockWhenFull ? "true" : "false",
-                [NntpdPathSurveyLogging.SectionName + ":hooks"] = hooks
-                    ?? "VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD",
             })
             .Build();
     }

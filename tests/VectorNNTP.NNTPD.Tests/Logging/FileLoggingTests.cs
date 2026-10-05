@@ -10,6 +10,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using Serilog.Core;
+using VectorNNTP.Common.Logging;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.Hosting;
 using VectorNNTP.NNTPD.Logging;
@@ -35,16 +36,13 @@ public sealed class FileLoggingTests
         var args = file.GetProperty("Args");
         Assert.Equal("Debug", args.GetProperty("restrictedToMinimumLevel").GetString());
         Assert.Equal("Day", args.GetProperty("rollingInterval").GetString());
-        // Application File keeps 14 uncompressed days. Path-survey (inpaths) uses 1 so
-        // Serilog's delete callback can hand off completed files at daily rotation.
+        // 14 daily files including the active file. .log and .log.gz for one day count once.
         Assert.Equal(14, args.GetProperty("retainedFileCountLimit").GetInt32());
         Assert.True(args.GetProperty("buffered").GetBoolean());
         Assert.Equal("00:00:01", args.GetProperty("flushToDiskInterval").GetString());
         Assert.False(args.GetProperty("rollOnFileSizeLimit").GetBoolean());
         Assert.Equal(JsonValueKind.Null, args.GetProperty("fileSizeLimitBytes").ValueKind);
-        Assert.Equal(
-            "VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD",
-            args.GetProperty("hooks").GetString());
+        Assert.False(args.TryGetProperty("hooks", out _));
         Assert.Equal(
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
             args.GetProperty("outputTemplate").GetString());
@@ -52,14 +50,16 @@ public sealed class FileLoggingTests
         var news = doc.RootElement.GetProperty("Serilog").GetProperty("News");
         Assert.True(news.GetProperty("buffered").GetBoolean());
         Assert.Equal("00:00:01", news.GetProperty("flushToDiskInterval").GetString());
+        Assert.False(news.TryGetProperty("hooks", out _));
         var inpaths = doc.RootElement.GetProperty("Serilog").GetProperty("Inpaths");
         Assert.True(inpaths.GetProperty("buffered").GetBoolean());
         Assert.Equal("00:00:01", inpaths.GetProperty("flushToDiskInterval").GetString());
+        Assert.False(inpaths.TryGetProperty("hooks", out _));
         var usingNames = doc.RootElement.GetProperty("Serilog").GetProperty("Using")
             .EnumerateArray().Select(static e => e.GetString()).ToArray();
         Assert.Contains("Serilog.Sinks.File", usingNames);
         Assert.Contains("Serilog.Sinks.Async", usingNames);
-        Assert.Contains("Serilog.Sinks.File.Archive", usingNames);
+        Assert.DoesNotContain("Serilog.Sinks.File.Archive", usingNames);
         Assert.Equal("-.log", NntpdFileLogging.RollingPathSuffix);
         Assert.Equal(".gz", NntpdFileLogging.GzipArchiveSuffix);
     }
@@ -112,22 +112,20 @@ public sealed class FileLoggingTests
                 });
             NntpdFileLogging.BindResolvedFilePath(configuration);
 
-            using var logger = new LoggerConfiguration()
-                .ReadFrom.Configuration(configuration)
-                .CreateLogger();
+            var loggerConfiguration = new LoggerConfiguration()
+                .ReadFrom.Configuration(NntpdConfiguredSinks.WithoutWriteTo(configuration));
+            NntpdConfiguredSinks.Apply(loggerConfiguration, configuration);
+            using var logger = loggerConfiguration.CreateLogger();
 
             var sinks = WalkLogEventSinks(logger).ToArray();
             var fileSink = Assert.Single(
                 sinks,
-                static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
+                static n => n.GetType().Name.Equals("GzipRollingFileSink", StringComparison.Ordinal));
             Assert.Null(ReadInstanceField(fileSink, "_fileSizeLimitBytes"));
             Assert.False(Assert.IsType<bool>(ReadInstanceField(fileSink, "_rollOnFileSizeLimit")!));
-            // Uncompressed application File retention (14 daily files), not inpaths (1) or gzip archives.
             Assert.Equal(14, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
             Assert.True(Assert.IsType<bool>(ReadInstanceField(fileSink, "_buffered")!));
-            Assert.Same(
-                NntpdSerilogHooks.DailyGzipFastest,
-                ReadInstanceField(fileSink, "_hooks"));
+            Assert.DoesNotContain(sinks, static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
 
             var asyncSink = Assert.Single(
                 sinks,
@@ -176,12 +174,12 @@ public sealed class FileLoggingTests
             var sinks = WalkLogEventSinks(logger).ToArray();
             var fileSink = Assert.Single(
                 sinks,
-                static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
+                static n => n.GetType().Name.Equals("GzipRollingFileSink", StringComparison.Ordinal));
             Assert.Null(ReadInstanceField(fileSink, "_fileSizeLimitBytes"));
             Assert.False(Assert.IsType<bool>(ReadInstanceField(fileSink, "_rollOnFileSizeLimit")!));
             Assert.Equal(14, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
             Assert.True(Assert.IsType<bool>(ReadInstanceField(fileSink, "_buffered")!));
-            Assert.Same(NntpdSerilogHooks.DailyGzipFastest, ReadInstanceField(fileSink, "_hooks"));
+            Assert.DoesNotContain(sinks, static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
 
             var asyncSink = Assert.Single(
                 sinks,
@@ -220,6 +218,7 @@ public sealed class FileLoggingTests
         var sinks = WalkLogEventSinks(logger).ToArray();
         Assert.Single(sinks, static n => n.GetType().Name.Equals("ConsoleSink", StringComparison.Ordinal));
         Assert.DoesNotContain(sinks, static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
+        Assert.DoesNotContain(sinks, static n => n.GetType().Name.Equals("GzipRollingFileSink", StringComparison.Ordinal));
         Assert.DoesNotContain(sinks, static n => n.GetType().Name.Equals("BackgroundWorkerSink", StringComparison.Ordinal));
     }
 
@@ -280,8 +279,12 @@ public sealed class FileLoggingTests
                 configuration,
                 new IgnoringCompletedPathSurveyFileHandler(),
                 NullLogger.Instance);
-            AssertFlushesOncePerSecond(WalkLogEventSinks(news));
-            AssertFlushesOncePerSecond(WalkLogEventSinks(inpaths));
+            var newsSinks = WalkLogEventSinks(news).ToArray();
+            var inpathsSinks = WalkLogEventSinks(inpaths).ToArray();
+            Assert.Equal(14, ReadInstanceField(Assert.Single(newsSinks, static n => n.GetType().Name.Equals("GzipRollingFileSink", StringComparison.Ordinal)), "_retainedFileCountLimit"));
+            Assert.Equal(1, ReadInstanceField(Assert.Single(inpathsSinks, static n => n.GetType().Name.Equals("GzipRollingFileSink", StringComparison.Ordinal)), "_retainedFileCountLimit"));
+            AssertFlushesOncePerSecond(newsSinks);
+            AssertFlushesOncePerSecond(inpathsSinks);
         }
         finally
         {
@@ -311,24 +314,26 @@ public sealed class FileLoggingTests
     }
 
     [Fact]
-    public void ArchiveHooks_WritesGzipBesideRolledFile_WithoutCompressingActiveConvention()
+    public void CompletedApplicationLog_IsReplacedByGzip_WithTheOriginalBytes()
     {
         var dir = CreateTempLogDir();
         try
         {
             var rolled = Path.Combine(dir, "VectorNNTP.NNTPD-20260101.log");
-            File.WriteAllText(rolled, "completed-day");
+            var original = "completed-day"u8.ToArray();
+            File.WriteAllBytes(rolled, original);
             var expectedName = NntpdFileLogging.GzipArchiveFileName(rolled);
             Assert.Equal("VectorNNTP.NNTPD-20260101.log.gz", expectedName);
 
-            NntpdSerilogHooks.DailyGzipFastest.OnFileDeleting(rolled);
+            Assert.True(new GzipLogFileCompressor().TryCompressAndReplace(rolled));
 
             var archive = Path.Combine(dir, expectedName);
             Assert.True(File.Exists(archive));
-            Assert.True(File.Exists(rolled));
+            Assert.False(File.Exists(rolled));
             using var gz = new GZipStream(File.OpenRead(archive), CompressionMode.Decompress);
-            using var reader = new StreamReader(gz);
-            Assert.Equal("completed-day", reader.ReadToEnd());
+            using var reader = new MemoryStream();
+            gz.CopyTo(reader);
+            Assert.Equal(original, reader.ToArray());
         }
         finally
         {
@@ -337,23 +342,21 @@ public sealed class FileLoggingTests
     }
 
     [Fact]
-    public void ArchiveHooks_DefaultConstructor_DoesNotDeleteHistoricalGzipArchives()
+    public void FailedCompression_DoesNotDeleteTheOriginalLog()
     {
         var dir = CreateTempLogDir();
         try
         {
-            var olderArchive = Path.Combine(dir, "VectorNNTP.NNTPD-20260101.log.gz");
-            File.WriteAllBytes(olderArchive, [0x1F, 0x8B, 0x08]);
             var rolled = Path.Combine(dir, "VectorNNTP.NNTPD-20260102.log");
             File.WriteAllText(rolled, "newer-day");
+            using (new FileStream(rolled, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                Assert.False(new GzipLogFileCompressor().TryCompressAndReplace(rolled));
+            }
 
-            // Default ArchiveHooks has no archive count limit. Serilog File retention
-            // matches *.log only; this hook must not remove sibling .gz files.
-            NntpdSerilogHooks.DailyGzipFastest.OnFileDeleting(rolled);
-
-            Assert.True(File.Exists(olderArchive));
-            Assert.True(File.Exists(Path.Combine(dir, "VectorNNTP.NNTPD-20260102.log.gz")));
-            Assert.Equal(2, Directory.GetFiles(dir, "*.gz").Length);
+            Assert.True(File.Exists(rolled));
+            Assert.False(File.Exists(rolled + ".gz"));
+            Assert.Equal("newer-day", File.ReadAllText(rolled));
         }
         finally
         {
@@ -459,7 +462,6 @@ public sealed class FileLoggingTests
             ["Serilog:Using:0"] = "Serilog.Sinks.Console",
             ["Serilog:Using:1"] = "Serilog.Sinks.File",
             ["Serilog:Using:2"] = "Serilog.Sinks.Async",
-            ["Serilog:Using:3"] = "Serilog.Sinks.File.Archive",
             ["Serilog:MinimumLevel:Default"] = "Information",
             ["Serilog:MinimumLevel:Override:Microsoft"] = "Warning",
             ["Serilog:MinimumLevel:Override:Microsoft.Hosting.Lifetime"] = "Information",

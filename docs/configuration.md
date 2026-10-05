@@ -124,12 +124,12 @@ Example:
 
 `Nntpd:Top1000` is the enablement switch and recipient list for the internal ninpaths processor. There is no `EnableNinpaths` flag and no `Top1000` environment variable.
 
-- Missing, null, or empty array: ninpaths is disabled. Completed `inpaths-yyyyMMdd.log` files are still gzip-archived; they are not parsed for a report.
+- Missing, null, or empty array: ninpaths is disabled. Completed `inpaths-yyyyMMdd.log` files are still gzip-compressed on rotation; they are not parsed for a report.
 - Whitespace-only entries are ignored.
 - One or more remaining mailboxes: after daily rotation, NNTPD streams the completed uncompressed file, aggregates INN ninpaths statistics, formats the compact `!!NINP` dump, and sends that dump once through `IEmailService` to every remaining address.
 - Non-whitespace entries that are not mailboxes fail startup validation.
 
-Processing is a background `IApplicationService`. The rotation hook opens the completed file (share-read/write/delete) and returns without parsing. Gzip proceeds independently. Raw Path records are not retained; memory is O(unique sites + relations). Failures are logged and do not affect NNTP, ingestion, news, or gzip.
+Processing is a background `IApplicationService`. Rotation opens the completed file (share-read/write/delete) and returns without parsing, then gzip proceeds. Inpaths retention is one daily file, so the compressed day is deleted after that handoff; the worker already holds the stream. Raw Path records are not retained; memory is O(unique sites + relations). Failures are logged and do not affect NNTP, ingestion, news, or gzip.
 
 The email subject follows INN sendinpaths: `inpaths {Fqdn}`. The body is the compact dump, not the human-readable `-r` ZCZC report. From is `Email:DefaultFrom`. When `Email:Enabled` is `false`, the report is generated but not spooled.
 
@@ -544,9 +544,9 @@ Do not commit credentials. NNTPD and BackFiller read `RabbitMQ` username and pas
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `Logging:LogLevel` | string | `Information` | Serilog minimum level for enabled targets: `Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`. |
-| `Logging:LogRetentionDays` | int | `14` | Daily file retention, range `1`–`3650`. Used when the file target is enabled. |
+| `Logging:LogRetentionDays` | int | `14` | Daily files to keep, including the active file. `.log` and `.log.gz` for the same day count as one. Range `1`–`3650`. Used when the file target is enabled. |
 | `Logging:Json` | bool | `false` | When `true`, compatible targets use Serilog's JSON formatter. There is no per-target formatter setting. |
-| `Logging:File:Enabled` | bool | `true` | Rolling file sink. Buffered, flushed about once per second, daily rolling, gzip archive hook. |
+| `Logging:File:Enabled` | bool | `true` | Rolling file sink. Buffered, flushed about once per second, daily rolling, gzip when a day becomes inactive. |
 | `Logging:File:LogDir` | string | `logs` | Directory for the file target. Required when file logging is enabled. Empty is accepted when file logging is disabled. Relative paths resolve through Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. |
 | `Logging:RabbitMQ:Enabled` | bool | `false` | Publish log events on the existing `RabbitMqService` connection. Broker connectivity stays in `RabbitMq.json`. |
 | `Logging:RabbitMQ:Exchange` | string | `logs` | Exchange used when RabbitMQ logging is enabled. The sink does not declare it. |

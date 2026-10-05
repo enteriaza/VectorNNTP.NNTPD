@@ -6,7 +6,7 @@ using Serilog.Events;
 using Serilog.Sinks.File;
 using VectorNNTP.Common.Logging;
 
-namespace VectorNNTP.NNTPD.Logging;
+namespace VectorNNTP.StorageServer.Logging;
 
 /// <summary>
 /// Registers the application Console, File, and Async File sinks with direct Serilog calls.
@@ -18,7 +18,7 @@ namespace VectorNNTP.NNTPD.Logging;
 /// configuration. Omitted arguments use the same defaults as the Serilog extension methods.
 /// A sink this type cannot represent exactly stays on <c>ReadFrom.Configuration</c>.
 /// </remarks>
-internal static class NntpdConfiguredSinks
+internal static class StorageServerConfiguredSinks
 {
     /// <summary>
     /// Default File template used by Serilog when <c>outputTemplate</c> is omitted.
@@ -68,8 +68,8 @@ internal static class NntpdConfiguredSinks
         if (children.Count == 0)
         {
             logger.WriteTo.Console(
-                restrictedToMinimumLevel: NntpdFileLogging.ConsoleMinimumLevel,
-                outputTemplate: NntpdLoggingExtensions.ConsoleOutputTemplate);
+                restrictedToMinimumLevel: StorageServerFileLogging.ConsoleMinimumLevel,
+                outputTemplate: StorageServerLoggingExtensions.ConsoleOutputTemplate);
             return;
         }
 

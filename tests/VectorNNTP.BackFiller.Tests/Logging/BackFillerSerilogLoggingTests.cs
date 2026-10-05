@@ -259,7 +259,7 @@ namespace VectorNNTP.BackFiller.Tests.Logging
 
                 var fileSink = Assert.Single(
                     WalkLogEventSinks(built),
-                    static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
+                    static n => n.GetType().Name.Equals("GzipRollingFileSink", StringComparison.Ordinal));
                 Assert.Equal(9, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
             }
             finally
@@ -357,12 +357,12 @@ namespace VectorNNTP.BackFiller.Tests.Logging
                 var sinks = WalkLogEventSinks(built).ToArray();
                 var fileSink = Assert.Single(
                     sinks,
-                    static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
+                    static n => n.GetType().Name.Equals("GzipRollingFileSink", StringComparison.Ordinal));
                 Assert.Null(ReadInstanceField(fileSink, "_fileSizeLimitBytes"));
                 Assert.False(Assert.IsType<bool>(ReadInstanceField(fileSink, "_rollOnFileSizeLimit")!));
                 Assert.Equal(BackFillerLoggingOptions.DefaultLogRetentionDays, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
                 Assert.True(Assert.IsType<bool>(ReadInstanceField(fileSink, "_buffered")!));
-                Assert.Same(BackFillerSerilogHooks.DailyGzipFastest, ReadInstanceField(fileSink, "_hooks"));
+                Assert.DoesNotContain(sinks, static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
 
                 var asyncSink = Assert.Single(
                     sinks,
@@ -468,12 +468,13 @@ namespace VectorNNTP.BackFiller.Tests.Logging
                 .Select(static a => a.Name)
                 .ToHashSet(StringComparer.Ordinal);
             Assert.Contains("Serilog.Sinks.Console", names);
-            Assert.Contains("Serilog.Sinks.File.Archive", names);
+            Assert.Contains("Serilog.Sinks.File", names);
+            Assert.Contains("VectorNNTP.Common", names);
+            Assert.DoesNotContain("Serilog.Sinks.File.Archive", names);
             Assert.Contains("Serilog.Sinks.Async", names);
             Assert.Contains("Serilog.Sinks.Syslog", names);
             Assert.DoesNotContain("Serilog.Sinks.RabbitMQ", names);
             Assert.DoesNotContain("Serilog.Settings.Configuration", names);
-            Assert.NotNull(BackFillerSerilogHooks.DailyGzipFastest);
         }
 
         [Fact]

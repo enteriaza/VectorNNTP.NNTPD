@@ -6,7 +6,9 @@ using Serilog.Events;
 using Serilog.Formatting;
 using Serilog.Formatting.Display;
 using Serilog.Formatting.Json;
+using Serilog.Sinks.File;
 using VectorNNTP.BackFiller.Configuration;
+using VectorNNTP.Common.Logging;
 using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.Configuration;
 
@@ -419,7 +421,7 @@ namespace VectorNNTP.BackFiller.Logging
         /// <remarks>
         /// Both branches set <see cref="FileBuffered"/>, <see cref="FileFlushToDiskInterval"/>,
         /// daily rolling, <see cref="RollOnFileSizeLimit"/>, a null file size limit,
-        /// and <see cref="BackFillerSerilogHooks.DailyGzipFastest"/>.
+        /// and gzip compression when a day becomes inactive.
         /// </remarks>
         private static void WriteFile(
             LoggerSinkConfiguration sink,
@@ -431,7 +433,7 @@ namespace VectorNNTP.BackFiller.Logging
         {
             if (jsonFormatter is null)
             {
-                sink.File(
+                sink.DailyGzipFile(
                     path,
                     restrictedToMinimumLevel: sinkLevel,
                     outputTemplate: OutputTemplate(includeSourceContext),
@@ -440,12 +442,11 @@ namespace VectorNNTP.BackFiller.Logging
                     flushToDiskInterval: FileFlushToDiskInterval,
                     rollingInterval: RollingInterval.Day,
                     rollOnFileSizeLimit: RollOnFileSizeLimit,
-                    retainedFileCountLimit: retainedFileCountLimit,
-                    hooks: BackFillerSerilogHooks.DailyGzipFastest);
+                    retainedFileCountLimit: retainedFileCountLimit);
                 return;
             }
 
-            sink.File(
+            sink.DailyGzipFile(
                 jsonFormatter,
                 path,
                 restrictedToMinimumLevel: sinkLevel,
@@ -454,8 +455,7 @@ namespace VectorNNTP.BackFiller.Logging
                 flushToDiskInterval: FileFlushToDiskInterval,
                 rollingInterval: RollingInterval.Day,
                 rollOnFileSizeLimit: RollOnFileSizeLimit,
-                retainedFileCountLimit: retainedFileCountLimit,
-                hooks: BackFillerSerilogHooks.DailyGzipFastest);
+                retainedFileCountLimit: retainedFileCountLimit);
         }
 
         /// <summary>Adds a UDP or TCP syslog sink. TCP is opened with TLS off.</summary>

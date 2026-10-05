@@ -19,8 +19,7 @@ internal static class StorageServerFileLogging
     public const string RollingPathSuffix = "-.log";
 
     /// <summary>
-    /// Suffix appended by <see cref="StorageServerSerilogHooks.DailyGzipFastest"/> when the archive
-    /// target directory is null: <c>{original-file-name}.gz</c>.
+    /// Suffix appended when a completed log is gzip-compressed: <c>{original-file-name}.gz</c>.
     /// </summary>
     public const string GzipArchiveSuffix = ".gz";
 
@@ -54,7 +53,7 @@ internal static class StorageServerFileLogging
     }
 
     /// <summary>
-    /// Archive file name produced by <see cref="StorageServerSerilogHooks.DailyGzipFastest"/>.
+    /// Archive file name produced when a completed log is gzip-compressed.
     /// </summary>
     public static string GzipArchiveFileName(string rolledLogPath) =>
         Path.GetFileName(rolledLogPath) + GzipArchiveSuffix;
@@ -124,7 +123,5 @@ internal static class StorageServerFileLogging
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollingInterval"] = "Day",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollOnFileSizeLimit"] = "false",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:retainedFileCountLimit"] = "14",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:hooks"] =
-            "VectorNNTP.StorageServer.Logging.StorageServerSerilogHooks::DailyGzipFastest, VectorNNTP.StorageServer",
     };
 }

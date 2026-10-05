@@ -19,8 +19,7 @@ internal static class NntpdFileLogging
     public const string RollingPathSuffix = "-.log";
 
     /// <summary>
-    /// Suffix appended by <see cref="NntpdSerilogHooks.DailyGzipFastest"/> when the archive
-    /// target directory is null: <c>{original-file-name}.gz</c>.
+    /// Suffix appended when a completed log is gzip-compressed: <c>{original-file-name}.gz</c>.
     /// </summary>
     public const string GzipArchiveSuffix = ".gz";
 
@@ -54,7 +53,7 @@ internal static class NntpdFileLogging
     }
 
     /// <summary>
-    /// Archive file name produced by <see cref="NntpdSerilogHooks.DailyGzipFastest"/>.
+    /// Archive file name produced when a completed log is gzip-compressed.
     /// </summary>
     public static string GzipArchiveFileName(string rolledLogPath) =>
         Path.GetFileName(rolledLogPath) + GzipArchiveSuffix;
@@ -126,7 +125,5 @@ internal static class NntpdFileLogging
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollingInterval"] = "Day",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:rollOnFileSizeLimit"] = "false",
         [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:retainedFileCountLimit"] = "14",
-        [$"Serilog:WriteTo:{writeToIndex}:Args:configure:0:Args:hooks"] =
-            "VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD",
     };
 }

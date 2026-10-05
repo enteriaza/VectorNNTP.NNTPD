@@ -33,9 +33,7 @@ public sealed class FileLoggingTests
         Assert.Equal("00:00:01", args.GetProperty("flushToDiskInterval").GetString());
         Assert.False(args.GetProperty("rollOnFileSizeLimit").GetBoolean());
         Assert.Equal(JsonValueKind.Null, args.GetProperty("fileSizeLimitBytes").ValueKind);
-        Assert.Equal(
-            "VectorNNTP.StorageServer.Logging.StorageServerSerilogHooks::DailyGzipFastest, VectorNNTP.StorageServer",
-            args.GetProperty("hooks").GetString());
+        Assert.False(args.TryGetProperty("hooks", out _));
         Assert.Equal(
             "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] {SourceContext}: {Message:lj}{NewLine}{Exception}",
             args.GetProperty("outputTemplate").GetString());
@@ -46,7 +44,7 @@ public sealed class FileLoggingTests
             .EnumerateArray().Select(static e => e.GetString()).ToArray();
         Assert.Contains("Serilog.Sinks.File", usingNames);
         Assert.Contains("Serilog.Sinks.Async", usingNames);
-        Assert.Contains("Serilog.Sinks.File.Archive", usingNames);
+        Assert.DoesNotContain("Serilog.Sinks.File.Archive", usingNames);
         Assert.Equal("-.log", StorageServerFileLogging.RollingPathSuffix);
         Assert.Equal(".gz", StorageServerFileLogging.GzipArchiveSuffix);
         Assert.Equal("/logs", StorageServerOptions.DefaultLogDir);
@@ -135,21 +133,19 @@ public sealed class FileLoggingTests
                 });
             StorageServerFileLogging.BindResolvedFilePath(configuration);
 
-            using var logger = new LoggerConfiguration()
-                .ReadFrom.Configuration(configuration)
-                .CreateLogger();
+            var loggerConfiguration = new LoggerConfiguration();
+            StorageServerConfiguredSinks.Apply(loggerConfiguration, configuration);
+            using var logger = loggerConfiguration.CreateLogger();
 
             var sinks = WalkLogEventSinks(logger).ToArray();
             var fileSink = Assert.Single(
                 sinks,
-                static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
+                static n => n.GetType().Name.Equals("GzipRollingFileSink", StringComparison.Ordinal));
             Assert.Null(ReadInstanceField(fileSink, "_fileSizeLimitBytes"));
             Assert.False(Assert.IsType<bool>(ReadInstanceField(fileSink, "_rollOnFileSizeLimit")!));
             Assert.Equal(14, ReadInstanceField(fileSink, "_retainedFileCountLimit"));
             Assert.True(Assert.IsType<bool>(ReadInstanceField(fileSink, "_buffered")!));
-            Assert.Same(
-                StorageServerSerilogHooks.DailyGzipFastest,
-                ReadInstanceField(fileSink, "_hooks"));
+            Assert.DoesNotContain(sinks, static n => n.GetType().Name.Equals("RollingFileSink", StringComparison.Ordinal));
 
             var asyncSink = Assert.Single(
                 sinks,

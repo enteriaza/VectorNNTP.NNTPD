@@ -41,25 +41,25 @@ Console and file have **separate** minimum levels. Do not raise the global / `Ve
 | Console | Information+ | Interactive / journald operational use |
 | File | Debug+ | Full diagnostics, including TAKETHIS RX/TX |
 
-There is one source of truth per operational setting. `Serilog:WriteTo` in `VectorNNTP.NNTPD.json` owns File/Async/Archive **arguments**. `Nntpd:LogDir` owns the directory. Code does not re-declare rolling, retention, async buffer, or minimum-level values.
+There is one source of truth per operational setting. `Serilog:WriteTo` in `VectorNNTP.NNTPD.json` owns File and Async arguments. `Nntpd:LogDir` owns the directory. Code does not re-declare rolling, retention, async buffer, or minimum-level values.
 
 | Setting | Source of truth |
 |---------|-----------------|
 | Console minimum / template | `Serilog:WriteTo` Console args |
 | File minimum / template / rolling / retention / buffered / `flushToDiskInterval` / size limit | `Serilog:WriteTo` Async → File args |
 | Async buffer / `blockWhenFull` | `Serilog:WriteTo` Async args |
-| Gzip + `CompressionLevel.Fastest` | File `hooks` string → `NntpdSerilogHooks.DailyGzipFastest` |
+| Gzip + `CompressionLevel.Fastest` | Rotation in `GzipRollingFileSink` when a day becomes inactive |
 | Log directory | `Nntpd:LogDir` |
 
 `ConfigureNntpdLogging` creates `Nntpd:LogDir` and overwrites the File `path` so the JSON placeholder (`logs/VectorNNTP.NNTPD-.log`) is never the runtime path. Serilog.Settings.Configuration 10.0.1 cannot expand `Nntpd:LogDir` into `path`. Relative `LogDir` values resolve through Common `ApplicationLocalPath.ResolveApplicationLocalPath` against `AppContext.BaseDirectory`. Relative `Nntpd:AcmeStateDir` values resolve through the ACME wrapper `ResolveAcmeStateDir`, which delegates to the same helper.
 
 `ConfigureNntpdLogging` registers the Console sink, the File sink, and the Async wrapper with direct Serilog calls. Argument values still come from `Serilog:WriteTo`. `ReadFrom.Configuration` still applies `MinimumLevel`, enrichment, properties, and any `WriteTo` entry those direct calls do not represent (a formatter, a level switch, or a sink other than Console, File, or Async wrapping one File). Native AOT does not keep the reflection metadata `ReadFrom.Configuration` uses to discover sink extension methods, so the application sinks are not constructed that way.
 
-`ArchiveHooks` cannot be constructed from JSON scalars. The File `hooks` argument remains `VectorNNTP.NNTPD.Logging.NntpdSerilogHooks::DailyGzipFastest, VectorNNTP.NNTPD` (`CompressionLevel.Fastest`, no archive count limit). The host maps that string to `NntpdSerilogHooks.DailyGzipFastest` without locating the member by reflection.
+`GzipRollingFileSink` closes the completed file when the local day rolls, gzip-compresses that path to `{filename}.gz` (`CompressionLevel.Fastest`) through a temporary file and an atomic move, then opens `{name}-yyyyMMdd.log` for the new day. The source `.log` is deleted only after the `.gz` file is in place. A failed compression leaves the `.log` in place.
 
-Daily rolling uses Serilog `rollingInterval: Day` (local midnight). The active file is `{entry assembly name}-yyyyMMdd.log` (for example `VectorNNTP.NNTPD-20260925.log` when the process is VectorNNTP.NNTPD). `fileSizeLimitBytes` is JSON `null` and `rollOnFileSizeLimit` is `false` so a single day may exceed 10 GB. `buffered` stays true. `flushToDiskInterval` is `00:00:01`, so Serilog wraps the rolling file sink with `PeriodicFlushToDiskSink` and flushes whichever file is current about once per second. The same interval is set on `Serilog:News` and `Serilog:Inpaths`.
+Daily rolling uses `rollingInterval: Day` (local midnight). The active file is `{entry assembly name}-yyyyMMdd.log` (for example `VectorNNTP.NNTPD-20260925.log` when the process is VectorNNTP.NNTPD). `fileSizeLimitBytes` is JSON `null` and `rollOnFileSizeLimit` is `false` so a single day may exceed 10 GB. `buffered` stays true. `flushToDiskInterval` is `00:00:01`, so the rolling file sink is wrapped with `PeriodicFlushToDiskSink` and flushes whichever file is current about once per second. The same interval is set on `Serilog:News` and `Serilog:Inpaths`.
 
-Gzip runs only because Serilog deletes rolled uncompressed files. `ArchiveHooks.OnFileDeleting` copies the doomed `.log` to `{filename}.gz` in the same directory, then Serilog deletes the uncompressed original. The application File sink `retainedFileCountLimit` is **14 uncompressed daily files**. That is not gzip-archive retention and is not the Path-survey (`inpaths`) limit: Serilog's matcher is `{entry assembly name}-*.log` and does not select `.log.gz`. A rolled application log is gzipped when it falls outside those 14 uncompressed days. Historical `.gz` files stay until an external retention process removes them. The active file is not compressed.
+`retainedFileCountLimit` is **14 daily files, including the active file**. A `.log` and a `.log.gz` for the same day count as one file. Older days are deleted whether they are still uncompressed or already gzipped. The active file is never compressed or deleted. News uses the same retention. Inpaths uses 1, so only the active day remains after the completed day has been handed to ninpaths and compressed.
 
 ## INN `news` log
 
@@ -108,7 +108,7 @@ Feed is the inbound Transit identifier already known on the NNTP session (`Autho
 
 Temporary capacity or pre-article responses (`435` not wanted, `436` try later, TAKETHIS `400`, POST `440`) are not article-rejection news events and are not written as `-`.
 
-Operational file behaviour is the same Serilog File/Async contract as application logs and is configured under `Serilog:News` (path, `rollingInterval`, `retainedFileCountLimit`, `fileSizeLimitBytes`, `rollOnFileSizeLimit`, `hooks` compression, `buffered`, `flushToDiskInterval`, Async `bufferSize` / `blockWhenFull`). `Nntpd:LogDir` still resolves the directory; the runtime path is `{LogDir}/news-yyyyMMdd.log` for daily rolling. Changing those Serilog settings changes the news file. Changing them does not change the INN formatter.
+Operational file behaviour is the same daily gzip File/Async contract as application logs and is configured under `Serilog:News` (path, `rollingInterval`, `retainedFileCountLimit`, `fileSizeLimitBytes`, `rollOnFileSizeLimit`, `buffered`, `flushToDiskInterval`, Async `bufferSize` / `blockWhenFull`). `Nntpd:LogDir` still resolves the directory; the runtime path is `{LogDir}/news-yyyyMMdd.log` for daily rolling. Changing those Serilog settings changes the news file. Changing them does not change the INN formatter.
 
 A news-log I/O failure is reported through application diagnostics and does not produce a second NNTP response. The dedicated news logger is not written to Console or the application File sink, so normal application logs do not contain INN `news` lines.
 
@@ -141,12 +141,12 @@ The Path-survey line format is an application invariant implemented by `InnPathS
 
 High-volume writes use `Serilog.Sinks.Async` (`bufferSize: 50000`, `blockWhenFull: true`) wrapping a buffered File sink. Events are not dropped: if the file writer cannot keep up, logging calls block until the queue has space. The dedicated Path-survey logger has source context `VectorNNTP.NNTPD.Inpaths` and is not written to Console, the application File sink, or the news file.
 
-`Serilog:Inpaths:retainedFileCountLimit` is **1 uncompressed file** (the active day) so Serilog's delete callback runs at daily rotation. That callback is the completed-file handoff:
+`Serilog:Inpaths:retainedFileCountLimit` is **1 daily file** (the active day). Rotation, not deletion, is the completed-file handoff:
 
 ```text
 active inpaths log
       |
-      | daily rotation
+      | daily rotation closes the completed file
       v
 completed uncompressed inpaths log
       |
@@ -155,14 +155,13 @@ completed uncompressed inpaths log
       |         v
       |      NinpathsProcessingService (background stream → !!NINP → IEmailService)
       |
-      +----> NntpdSerilogHooks.DailyGzipFastest
+      +----> gzip to {filename}.gz, then delete the uncompressed original
       |
       v
-Serilog deletes the uncompressed original
-historical {filename}.gz retained (this hook has no archive count limit)
+retention keeps only the active day, so the completed day's .gz is deleted
 ```
 
-The handler sees the uncompressed completed file **before** gzip. It opens the file with share-read/write/delete so gzip and Serilog deletion can proceed while the worker still reads. The hook does not delete that file; Serilog does after gzip returns. Handler failure is logged and does not skip gzip or change ingestion. News continues to use `DailyGzipFastest` directly and is not part of this handoff.
+The handler sees the uncompressed completed file **before** gzip. It opens the file with share-read/write/delete so gzip and the later delete can proceed while the worker still reads. The uncompressed file is deleted only after the `.gz` file is in place. Handler failure is logged and does not skip gzip or change ingestion. With retention 1 the compressed day is then deleted; the worker already holds the open stream. News is not part of this handoff. Its retention is 14, so yesterday's `news-yyyyMMdd.log.gz` stays until it ages out.
 
 When `Nntpd:Top1000` is missing, null, or empty (or only whitespace), ninpaths is disabled and the completed file is not opened for reporting. When recipients remain, the worker streams the file with bounded memory (unique sites and relations only), formats the INN 3.1.1 compact dump (`!!NINP` / `!!NLREC` / `!!NLEND`), and sends one `IEmailService` message to every recipient. Subject is `inpaths {Fqdn}`. The source file is not attached. Ninpaths failures are logged and do not affect NNTP, article ingestion, RabbitMQ handoff, persistence, news logging, or gzip.
 
