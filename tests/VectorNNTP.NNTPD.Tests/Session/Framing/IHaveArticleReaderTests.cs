@@ -38,6 +38,35 @@ public sealed class IHaveArticleReaderTests
     }
 
     [Fact]
+    public async Task DotStuffing_WithinDestuffedLimit_IsRetainedWhenStuffedWireExceedsIt()
+    {
+        var pipe = CreatePipe();
+        var stuffed = string.Concat(Enumerable.Repeat("..\r\n", 10));
+        await pipe.Writer.WriteAsync(Encoding.ASCII.GetBytes(stuffed + ".\r\nDATE\r\n"));
+        await pipe.Writer.FlushAsync();
+
+        var result = await IHaveArticleReader.ReadAsync(pipe.Reader, maxArticleBytes: 35, CancellationToken.None);
+        Assert.Equal(NntpMultilineReadStatus.Completed, result.Status);
+        Assert.Equal(40, result.Payload.Length);
+        Assert.Equal(stuffed, Encoding.ASCII.GetString(result.Payload.Span));
+        Assert.Equal("DATE\r\n", await ReadLeftoverAsync(pipe.Reader));
+    }
+
+    [Fact]
+    public async Task DotStuffing_OverDestuffedLimit_ReturnsTooLarge_AndLeavesNextCommand()
+    {
+        var pipe = CreatePipe();
+        var stuffed = string.Concat(Enumerable.Repeat("..\r\n", 10));
+        await pipe.Writer.WriteAsync(Encoding.ASCII.GetBytes(stuffed + ".\r\nDATE\r\n"));
+        await pipe.Writer.FlushAsync();
+
+        var result = await IHaveArticleReader.ReadAsync(pipe.Reader, maxArticleBytes: 29, CancellationToken.None);
+        Assert.Equal(NntpMultilineReadStatus.TooLarge, result.Status);
+        Assert.Equal(0, result.Payload.Length);
+        Assert.Equal("DATE\r\n", await ReadLeftoverAsync(pipe.Reader));
+    }
+
+    [Fact]
     public async Task Terminator_IsNotStored()
     {
         var pipe = CreatePipe();

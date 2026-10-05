@@ -30,9 +30,9 @@ public static class NntpArticleDestuffer
         }
 
         var length = (int)lineBytes.Length;
-        var leadingDot = NntpDelimiterSearch.FirstByte(lineBytes) == (byte)'.';
-        var contentLength = leadingDot ? length - 1 : length;
-        var needed = contentLength + 2;
+        var leadingDot = length > 0 && NntpDelimiterSearch.FirstByte(lineBytes) == (byte)'.';
+        var needed = DestuffedLineBytes(length, leadingDot);
+        var contentLength = needed - 2;
         if (output.WrittenCount + needed > maxArticleBytes)
         {
             exceeded = true;
@@ -85,9 +85,8 @@ public static class NntpArticleDestuffer
             return;
         }
 
-        var leadingDot = lineBytes.Length > 0 && lineBytes[0] == (byte)'.';
-        var content = leadingDot ? lineBytes[1..] : lineBytes;
-        var needed = content.Length + 2;
+        var needed = DestuffedLineBytes(lineBytes);
+        var content = lineBytes.Length > 0 && lineBytes[0] == (byte)'.' ? lineBytes[1..] : lineBytes;
         if (output.WrittenCount + needed > maxArticleBytes)
         {
             exceeded = true;
@@ -99,6 +98,31 @@ public static class NntpArticleDestuffer
         span[content.Length] = (byte)'\r';
         span[content.Length + 1] = (byte)'\n';
         output.Advance(needed);
+    }
+
+    /// <summary>
+    /// Returns the destuffed size of one content line plus CRLF.
+    /// </summary>
+    /// <param name="lineWithoutCrlf">One stuffed line with the CRLF already removed.</param>
+    /// <returns>
+    /// Content bytes after removing a single leading stuffing dot, plus the two CRLF octets.
+    /// A line that does not begin with <c>.</c> contributes its full length plus CRLF.
+    /// </returns>
+    public static int DestuffedLineBytes(ReadOnlySpan<byte> lineWithoutCrlf) =>
+        DestuffedLineBytes(
+            lineWithoutCrlf.Length,
+            lineWithoutCrlf.Length > 0 && lineWithoutCrlf[0] == (byte)'.');
+
+    /// <summary>
+    /// Returns the destuffed size of one content line plus CRLF.
+    /// </summary>
+    /// <param name="lineLength">Stuffed line length with the CRLF already removed.</param>
+    /// <param name="leadingDot"><see langword="true"/> when the line begins with a stuffing dot.</param>
+    /// <returns>Destuffed content length plus two CRLF octets.</returns>
+    public static int DestuffedLineBytes(int lineLength, bool leadingDot)
+    {
+        var contentLength = leadingDot ? lineLength - 1 : lineLength;
+        return contentLength + 2;
     }
 
     /// <summary>
