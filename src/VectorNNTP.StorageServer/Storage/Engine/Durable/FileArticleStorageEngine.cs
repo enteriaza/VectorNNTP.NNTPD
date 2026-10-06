@@ -2799,6 +2799,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         var notEligible = 0;
         var changed = 0;
         var wrapped = false;
+        long bytesExpired = 0;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -2827,6 +2828,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     if (TryExpireRetentionCandidate(candidate))
                     {
                         expired++;
+                        bytesExpired += candidate.Location.Length;
                     }
                     else
                     {
@@ -2844,7 +2846,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             }
 
             return CreateRetentionResult(
-                visited, evaluated, expired, notEligible, changed, batchSize, started, wrapped);
+                visited, evaluated, expired, notEligible, changed, batchSize, started, wrapped, bytesExpired);
         }
         finally
         {
@@ -3058,7 +3060,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         int changed,
         int batchSize,
         long startedTimestamp,
-        bool wrapped) =>
+        bool wrapped,
+        long bytesExpired) =>
         new(
             visited,
             evaluated,
@@ -3068,7 +3071,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             batchSize,
             Stopwatch.GetElapsedTime(startedTimestamp).TotalMilliseconds,
             wrapped,
-            Disabled: false);
+            Disabled: false,
+            bytesExpired);
 
     private bool IndexExpireWouldAppend(in RetentionScanCandidate candidate) =>
         _index.TryGet(candidate.ArtId, out var existing)

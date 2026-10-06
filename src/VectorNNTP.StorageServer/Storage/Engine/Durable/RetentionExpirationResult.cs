@@ -12,6 +12,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// <param name="DurationMilliseconds">Elapsed time of the batch, including index appends.</param>
 /// <param name="Wrapped">True when the scan cursor reached the end of the retained population.</param>
 /// <param name="Disabled">True when <c>MaxRetentionAge</c> was zero or negative and no rows were examined.</param>
+/// <param name="BytesExpired">
+/// Sum of record lengths for rows this batch transitioned to Evicted. These bytes are logically
+/// unservable. They are not filesystem free space.
+/// </param>
 public readonly record struct RetentionExpirationResult(
     int EntriesVisited,
     int PresentEvaluated,
@@ -21,4 +25,5 @@ public readonly record struct RetentionExpirationResult(
     int BatchSize,
     double DurationMilliseconds,
     bool Wrapped,
-    bool Disabled);
+    bool Disabled,
+    long BytesExpired = 0);

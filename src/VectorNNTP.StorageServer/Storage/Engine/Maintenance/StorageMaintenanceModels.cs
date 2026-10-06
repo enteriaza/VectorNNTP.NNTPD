@@ -96,6 +96,18 @@ public enum StorageMaintenanceOutcome : byte
 /// <param name="BulkEmergencyAdmissionProtectionRequired">
 /// True when the cache volume is in Emergency. Accept does not read this flag.
 /// </param>
+/// <param name="PhysicalFileDeleted">
+/// True only when this cycle deleted the reclaimed segment file. An idempotent
+/// already-gone result stays false, so recovery accounting does not claim those bytes again.
+/// </param>
+/// <param name="FullyDeadFileReclaim">
+/// True when <see cref="PhysicalFileDeleted"/> is a closed fully-dead segment rather than a
+/// retired file or a compaction source.
+/// </param>
+/// <param name="Recovery">
+/// Logical-versus-physical account for this cycle. Null on results built before the cycle
+/// finished. <c>LogicalExpiredBytes</c> is not free space.
+/// </param>
 public readonly record struct StorageMaintenanceResult(
     StorageMaintenanceOutcome Outcome,
     SegmentId SegmentId,
@@ -131,4 +143,7 @@ public readonly record struct StorageMaintenanceResult(
     long? BulkAvailableReserveBytes = null,
     string? BulkMaintenanceMode = null,
     bool BulkRewriteSuppressed = false,
-    bool BulkEmergencyAdmissionProtectionRequired = false);
+    bool BulkEmergencyAdmissionProtectionRequired = false,
+    bool PhysicalFileDeleted = false,
+    bool FullyDeadFileReclaim = false,
+    RetentionRecoveryAccounting? Recovery = null);

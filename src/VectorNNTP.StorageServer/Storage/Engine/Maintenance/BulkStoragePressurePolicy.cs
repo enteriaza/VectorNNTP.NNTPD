@@ -43,7 +43,8 @@ public enum BulkStoragePressureState : byte
 /// </param>
 /// <param name="AccelerateReclamation">
 /// True from <see cref="BulkStoragePressureState.Pressure"/> upward. Maintenance prefers
-/// reclaimable bytes over a new rewrite. It does not expire an article early.
+/// reclaimable bytes over a new rewrite. A separate pass may mark old Present articles
+/// Evicted. This flag does not delete segment bytes.
 /// </param>
 /// <param name="RewriteAllowed">
 /// State-level permission for a new rewrite, before a specific segment's live bytes are

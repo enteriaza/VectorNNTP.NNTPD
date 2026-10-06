@@ -308,4 +308,64 @@ internal static partial class StorageMaintenanceLogMessages
         string State,
         int UsedPercent,
         int RecoveryTargetPercent);
+
+    /// <summary>Debug recovery account when the volume is quiet and this cycle released nothing.</summary>
+    [LoggerMessage(
+        EventId = 3038,
+        Level = LogLevel.Debug,
+        Message = "Retention recovery (PressureBefore={PressureBefore}, PressureAfter={PressureAfter}, FreeBytesBefore={FreeBytesBefore}, FreeBytesAfter={FreeBytesAfter}, LogicalExpiredBytes={LogicalExpiredBytes}, PhysicalReleasedBytes={PhysicalReleasedBytes}, NetPhysicalRecoveryBytes={NetPhysicalRecoveryBytes}, PressureImproved={PressureImproved}, ConsecutiveUnimprovedCycles={ConsecutiveUnimprovedCycles})")]
+    public static partial void RetentionRecoverySummary(
+        ILogger logger,
+        string PressureBefore,
+        string PressureAfter,
+        long FreeBytesBefore,
+        long FreeBytesAfter,
+        long LogicalExpiredBytes,
+        long PhysicalReleasedBytes,
+        long NetPhysicalRecoveryBytes,
+        bool PressureImproved,
+        int ConsecutiveUnimprovedCycles);
+
+    /// <summary>
+    /// Information recovery account when pressure is elevated or this cycle expired or released bytes.
+    /// Logical expired bytes are not free space.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 3039,
+        Level = LogLevel.Information,
+        Message = "Retention recovery attention (PressureBefore={PressureBefore}, PressureAfter={PressureAfter}, FreeBytesBefore={FreeBytesBefore}, FreeBytesAfter={FreeBytesAfter}, AgeExpiredBytes={AgeExpiredBytes}, PressureExpiredBytes={PressureExpiredBytes}, LogicalExpiredBytes={LogicalExpiredBytes}, FullyDeadBytesReclaimed={FullyDeadBytesReclaimed}, CompactionDestinationBytesWritten={CompactionDestinationBytesWritten}, CompactionSourceBytesReclaimed={CompactionSourceBytesReclaimed}, NetPhysicalRecoveryBytes={NetPhysicalRecoveryBytes}, PressureImproved={PressureImproved}, RecoveryTargetReached={RecoveryTargetReached}, ConsecutiveUnimprovedCycles={ConsecutiveUnimprovedCycles})")]
+    public static partial void RetentionRecoveryAttention(
+        ILogger logger,
+        string PressureBefore,
+        string PressureAfter,
+        long FreeBytesBefore,
+        long FreeBytesAfter,
+        long AgeExpiredBytes,
+        long PressureExpiredBytes,
+        long LogicalExpiredBytes,
+        long FullyDeadBytesReclaimed,
+        long CompactionDestinationBytesWritten,
+        long CompactionSourceBytesReclaimed,
+        long NetPhysicalRecoveryBytes,
+        bool PressureImproved,
+        bool RecoveryTargetReached,
+        int ConsecutiveUnimprovedCycles);
+
+    /// <summary>
+    /// Warning when High, Critical, or Emergency persists for another cycle without a physical release.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 3040,
+        Level = LogLevel.Warning,
+        Message = "Retention recovery stalled (PressureBefore={PressureBefore}, PressureAfter={PressureAfter}, FreeBytesBefore={FreeBytesBefore}, FreeBytesAfter={FreeBytesAfter}, LogicalExpiredBytes={LogicalExpiredBytes}, PhysicalReleasedBytes={PhysicalReleasedBytes}, NetPhysicalRecoveryBytes={NetPhysicalRecoveryBytes}, ConsecutiveUnimprovedCycles={ConsecutiveUnimprovedCycles})")]
+    public static partial void RetentionRecoveryStalled(
+        ILogger logger,
+        string PressureBefore,
+        string PressureAfter,
+        long FreeBytesBefore,
+        long FreeBytesAfter,
+        long LogicalExpiredBytes,
+        long PhysicalReleasedBytes,
+        long NetPhysicalRecoveryBytes,
+        int ConsecutiveUnimprovedCycles);
 }

@@ -102,6 +102,31 @@ public sealed class StorageMaintenanceCoordinator
     /// falls below the recovery target. Not persisted.
     /// </summary>
     private bool _pressureExpirationLatched;
+
+    /// <summary>
+    /// Cycles that stayed at Warning or above without a better free-byte or class reading.
+    /// Reset when pressure recovers or the volume is unmeasured. Not a history log.
+    /// </summary>
+    private int _consecutiveUnimprovedPressureCycles;
+
+    /// <summary>Timestamp of the coordinator invocation currently in progress. Zero when idle.</summary>
+    private long _recoveryStartedTimestamp;
+
+    /// <summary>True after this invocation has stored the pre-expiration classification.</summary>
+    private bool _recoveryBeforeReady;
+
+    /// <summary>Capacity sample taken before logical expiration. Default when the cycle has not started.</summary>
+    private CapacityAdmissionPressureSnapshot _recoveryBeforePressure;
+
+    /// <summary>Bulk class of <see cref="_recoveryBeforePressure"/>.</summary>
+    private BulkStoragePressureEvaluation _recoveryBeforeEvaluation;
+
+    /// <summary>Age batch for the invocation in progress.</summary>
+    private RetentionExpirationResult _recoveryAge;
+
+    /// <summary>Pressure window for the invocation in progress. Zero when that pass did not run.</summary>
+    private PressureExpirationResult _recoveryPressure;
+
     private bool _hasObservedBulk;
 
     /// <summary>Creates a coordinator over an open durable engine and a read-only policy.</summary>
@@ -166,6 +191,12 @@ public sealed class StorageMaintenanceCoordinator
     internal Action<SegmentId>? TestHookAfterReclamationVictimSelected { get; set; }
 
     /// <summary>
+    /// Invoked after a fully-dead closed segment is revalidated and before its file is deleted.
+    /// Tests only. A capacity reader that tracks deletions can drop its used bytes here.
+    /// </summary>
+    internal Action<SegmentId>? TestHookBeforeFullyDeadReclaim { get; set; }
+
+    /// <summary>
     /// Invoked after an open uncommitted compaction attempt completes (before yield/return decisions).
     /// Tests only. Arguments: source segment, compaction id, attempt result.
     /// </summary>
@@ -177,6 +208,7 @@ public sealed class StorageMaintenanceCoordinator
 
     /// <summary>
     /// Evaluates current durable state and performs at most one maintenance cycle.
+    /// <see cref="StorageMaintenanceResult.Recovery"/> separates logical expiration from files deleted.
     /// </summary>
     /// <param name="cancellationToken">Cancels the cycle.</param>
     /// <param name="maintenanceRunId">
@@ -186,12 +218,30 @@ public sealed class StorageMaintenanceCoordinator
         CancellationToken cancellationToken,
         ulong maintenanceRunId = 0)
     {
+        _recoveryStartedTimestamp = Stopwatch.GetTimestamp();
+        _recoveryBeforeReady = false;
+        _recoveryAge = default;
+        _recoveryPressure = default;
+        var result = await RunOnceCoreAsync(cancellationToken, maintenanceRunId).ConfigureAwait(false);
+        return FinishRecoveryAccounting(result);
+    }
+
+    /// <summary>
+    /// Performs one cycle. <see cref="RunOnceAsync"/> attaches the recovery account after this returns.
+    /// </summary>
+    private async Task<StorageMaintenanceResult> RunOnceCoreAsync(
+        CancellationToken cancellationToken,
+        ulong maintenanceRunId)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         // Metadata-only. Age expiration stays first. Pressure expiration then marks older Present
         // rows Evicted. Neither pass reads or deletes segment bytes.
         var expirationPressure = _engine.ObserveCapacityAdmissionPressure();
         ObserveBulk(in expirationPressure);
-        _ = _engine.ExpireRetentionBatch(_maxRetentionAge, cancellationToken);
+        _recoveryBeforePressure = expirationPressure;
+        _recoveryBeforeEvaluation = CurrentBulk();
+        _recoveryBeforeReady = true;
+        _recoveryAge = _engine.ExpireRetentionBatch(_maxRetentionAge, cancellationToken);
         ApplyPressureExpiration(cancellationToken);
         TryCheckpointJournal(maintenanceRunId);
         TryCheckpointIndex(maintenanceRunId);
@@ -543,7 +593,7 @@ public sealed class StorageMaintenanceCoordinator
             .ReclaimRetiredSegmentAsync(segmentId, cancellationToken)
             .ConfigureAwait(false);
 
-        return MapReclamationOnly(reclaim, segment.SizeBytes);
+        return MapReclamationOnly(reclaim, segment.SizeBytes, fullyDeadFile: false);
     }
 
     /// <summary>
@@ -619,10 +669,11 @@ public sealed class StorageMaintenanceCoordinator
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        TestHookBeforeFullyDeadReclaim?.Invoke(segment.SegmentId);
         var reclaim = await _engine
             .ReclaimFullyDeadClosedSegmentAsync(segment.SegmentId, segment.Generation, cancellationToken)
             .ConfigureAwait(false);
-        return MapReclamationOnly(reclaim, segment.SizeBytes);
+        return MapReclamationOnly(reclaim, segment.SizeBytes, fullyDeadFile: true);
     }
 
     private async Task<StorageMaintenanceResult> FinishCommittedCompactionAsync(
@@ -974,7 +1025,8 @@ public sealed class StorageMaintenanceCoordinator
                     ReclamationAttempted: true,
                     Reclaimed: true,
                     SkipReason: reclaim.Reason,
-                    ReclaimedSegmentSizeBytes: reclaimedSize),
+                    ReclaimedSegmentSizeBytes: reclaimedSize,
+                    PhysicalFileDeleted: reclaim.PhysicalFileDeleted),
                 compactionExecution,
                 sourceAccountingHint);
         }
@@ -1278,7 +1330,8 @@ public sealed class StorageMaintenanceCoordinator
 
     private static StorageMaintenanceResult MapReclamationOnly(
         ArticleSegmentReclamationResult reclaim,
-        long reclaimedSegmentSizeBytes)
+        long reclaimedSegmentSizeBytes,
+        bool fullyDeadFile)
     {
         return reclaim.Outcome switch
         {
@@ -1295,7 +1348,9 @@ public sealed class StorageMaintenanceCoordinator
                     ReclamationAttempted: true,
                     Reclaimed: true,
                     SkipReason: reclaim.Reason,
-                    ReclaimedSegmentSizeBytes: reclaimedSegmentSizeBytes),
+                    ReclaimedSegmentSizeBytes: reclaimedSegmentSizeBytes,
+                    PhysicalFileDeleted: reclaim.PhysicalFileDeleted,
+                    FullyDeadFileReclaim: fullyDeadFile && reclaim.PhysicalFileDeleted),
 
             ArticleSegmentReclamationOutcome.RejectedPresentRemain
                 or ArticleSegmentReclamationOutcome.RejectedUnexpectedPhysical
@@ -1326,9 +1381,6 @@ public sealed class StorageMaintenanceCoordinator
         return StampBulk(result.WithCapacityPressure(in pressure));
     }
 
-    /// <summary>
-    /// Records the cache-volume class for this snapshot and logs only when that class changes.
-    /// </summary>
     /// <summary>
     /// Expires one bounded window when bulk pressure is active or a previous pass is still above
     /// the recovery target. Does not scan segment payloads and does not delete files.
@@ -1363,14 +1415,110 @@ public sealed class StorageMaintenanceCoordinator
 
         if (!latched)
         {
+            _recoveryPressure = default;
             return;
         }
 
-        _ = _engine.ExpirePressureRetentionBatch(
+        _recoveryPressure = _engine.ExpirePressureRetentionBatch(
             _bulkPolicy.Options.MinimumRetentionAge,
             ArticlePressureRetentionPolicy.ExpirationLimit(bulk.State, mode),
             bulk.State,
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Samples capacity once more and attaches logical-versus-physical recovery. Does not expire
+    /// articles or delete files. Logical expired bytes are not added to free space.
+    /// </summary>
+    private StorageMaintenanceResult FinishRecoveryAccounting(StorageMaintenanceResult result)
+    {
+        var afterPressure = _engine.ObserveCapacityAdmissionPressure();
+        ObserveBulk(in afterPressure);
+        result = StampBulk(result);
+        var before = _recoveryBeforeReady
+            ? _recoveryBeforeEvaluation
+            : BulkStoragePressurePolicy.Unmeasured();
+        var after = CurrentBulk();
+        var age = _recoveryAge;
+        var pressureExpiration = _recoveryPressure;
+        var accounting = RetentionRecoveryAccounting.Compose(
+            in before,
+            in after,
+            in age,
+            in pressureExpiration,
+            in result,
+            ArticlePressureRetentionPolicy.RecoveryTargetPercent(_bulkPolicy.Options),
+            _consecutiveUnimprovedPressureCycles,
+            Stopwatch.GetElapsedTime(_recoveryStartedTimestamp).TotalMilliseconds);
+        _consecutiveUnimprovedPressureCycles = accounting.ConsecutiveUnimprovedCycles;
+        LogRecovery(in accounting);
+        return result with { Recovery = accounting };
+    }
+
+    /// <summary>
+    /// One recovery summary per cycle. Warning and above, or any real expiration or release,
+    /// is Information. A stuck High or worse class with no physical release is Warning.
+    /// </summary>
+    private void LogRecovery(in RetentionRecoveryAccounting accounting)
+    {
+        var released = accounting.FullyDeadBytesReclaimed
+            + accounting.RetiredBytesReclaimed
+            + accounting.CompactionSourceBytesReclaimed;
+        if (accounting.ConsecutiveUnimprovedCycles >= 2
+            && accounting.NetPhysicalRecoveryBytes <= 0
+            && accounting.PressureStateAfter is nameof(BulkStoragePressureState.High)
+                or nameof(BulkStoragePressureState.Critical)
+                or nameof(BulkStoragePressureState.Emergency))
+        {
+            StorageMaintenanceLogMessages.RetentionRecoveryStalled(
+                _logger,
+                accounting.PressureStateBefore,
+                accounting.PressureStateAfter,
+                accounting.FreeBytesBefore,
+                accounting.FreeBytesAfter,
+                accounting.LogicalExpiredBytes,
+                released,
+                accounting.NetPhysicalRecoveryBytes,
+                accounting.ConsecutiveUnimprovedCycles);
+            return;
+        }
+
+        if (!accounting.Measured
+            || accounting.PressureStateAfter is nameof(BulkStoragePressureState.Normal)
+            && accounting.LogicalExpiredBytes == 0
+            && released == 0
+            && !accounting.PressureImproved)
+        {
+            StorageMaintenanceLogMessages.RetentionRecoverySummary(
+                _logger,
+                accounting.PressureStateBefore,
+                accounting.PressureStateAfter,
+                accounting.FreeBytesBefore,
+                accounting.FreeBytesAfter,
+                accounting.LogicalExpiredBytes,
+                released,
+                accounting.NetPhysicalRecoveryBytes,
+                accounting.PressureImproved,
+                accounting.ConsecutiveUnimprovedCycles);
+            return;
+        }
+
+        StorageMaintenanceLogMessages.RetentionRecoveryAttention(
+            _logger,
+            accounting.PressureStateBefore,
+            accounting.PressureStateAfter,
+            accounting.FreeBytesBefore,
+            accounting.FreeBytesAfter,
+            accounting.AgeExpiredBytes,
+            accounting.PressureExpiredBytes,
+            accounting.LogicalExpiredBytes,
+            accounting.FullyDeadBytesReclaimed,
+            accounting.CompactionDestinationBytesWritten,
+            accounting.CompactionSourceBytesReclaimed,
+            accounting.NetPhysicalRecoveryBytes,
+            accounting.PressureImproved,
+            accounting.RecoveryTargetReached,
+            accounting.ConsecutiveUnimprovedCycles);
     }
 
     private void ObserveBulk(in CapacityAdmissionPressureSnapshot pressure)
