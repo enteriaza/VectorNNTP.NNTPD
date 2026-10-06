@@ -30,8 +30,10 @@
         "CriticalPercent": 90,
         "EmergencyPercent": 95,
         "HighPercent": 85,
+        "MinimumRetentionAge": "7.00:00:00",
         "OperationalReservePercent": 5,
         "PressurePercent": 80,
+        "PressureRecoveryMarginPercent": 5,
         "RecoveryReservePercent": 5,
         "RewriteReservePercent": 10,
         "WarningPercent": 75

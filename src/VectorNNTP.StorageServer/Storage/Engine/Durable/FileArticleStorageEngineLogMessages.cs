@@ -347,6 +347,25 @@ internal static partial class FileArticleStorageEngineLogMessages
         bool RecoveryReclaimedSpace,
         string Reason);
 
+    /// <summary>Debug counts for one pressure-expiration window. Idle cycles that examine nothing do not emit this.</summary>
+    [LoggerMessage(
+        EventId = 3438,
+        Level = LogLevel.Debug,
+        Message = "Pressure expiration batch (State={State}, Visited={Visited}, Evaluated={Evaluated}, TooYoung={TooYoung}, MissingArrival={MissingArrival}, FutureArrival={FutureArrival}, Selected={Selected}, Expired={Expired}, BytesLogicallyExpired={BytesLogicallyExpired}, DurationMs={DurationMs}, Wrapped={Wrapped})")]
+    public static partial void PressureExpirationBatch(
+        ILogger logger,
+        string State,
+        int Visited,
+        int Evaluated,
+        int TooYoung,
+        int MissingArrival,
+        int FutureArrival,
+        int Selected,
+        int Expired,
+        long BytesLogicallyExpired,
+        double DurationMs,
+        bool Wrapped);
+
     /// <summary>Error when Emergency or an unmeasured volume rejects a new Accept.</summary>
     [LoggerMessage(
         EventId = 3433,

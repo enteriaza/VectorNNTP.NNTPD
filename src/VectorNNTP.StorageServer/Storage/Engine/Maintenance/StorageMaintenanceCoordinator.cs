@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
@@ -18,7 +19,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// <remarks>
 /// <para>
 /// When <c>MaxRetentionAge</c> is positive, <see cref="RunOnceAsync"/> first expires one bounded
-/// batch of eligible Present articles. That pass reads index metadata only. Zero skips it.
+/// batch of age-eligible Present articles. When bulk pressure is at Pressure or higher, a second
+/// bounded window may logically evict older Present articles. Both passes read index metadata only.
+/// Zero <c>MaxRetentionAge</c> skips only the age pass. Neither pass deletes segment bytes.
 /// One <see cref="RunOnceAsync"/> performs at most one useful maintenance cycle:
 /// reclaim one Retired segment, reclaim one fully-dead Closed segment, or continue/finish
 /// one compaction lifecycle (compact → retire → reclaim). No timers, workers, or hosted-service wiring.
@@ -74,6 +77,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// that would consume the configured reserves or, at Critical, that would not free more bytes
 /// than it copies. Emergency does not enter usage-pressure recovery, so that recovery cannot
 /// logically evict Present articles or start a new rewrite while the volume is in Emergency.
+/// Age expiration still runs first. A second bounded window may then mark Present articles
+/// Evicted when bulk pressure is at Pressure or higher, or while a started pass is still
+/// above the recovery target. That window does not delete segment bytes.
 /// In-progress compaction still finishes. Classification does not delete an acknowledged
 /// ingress article.
 /// </para>
@@ -90,6 +96,12 @@ public sealed class StorageMaintenanceCoordinator
     private readonly object _bulkObservationLock = new();
     private readonly SemaphoreSlim _usagePressureGate = new(1, 1);
     private BulkStoragePressureEvaluation _observedBulk;
+
+    /// <summary>
+    /// True after a pressure-expiration pass has started in this process, until used percent
+    /// falls below the recovery target. Not persisted.
+    /// </summary>
+    private bool _pressureExpirationLatched;
     private bool _hasObservedBulk;
 
     /// <summary>Creates a coordinator over an open durable engine and a read-only policy.</summary>
@@ -134,6 +146,7 @@ public sealed class StorageMaintenanceCoordinator
         _logger = logger ?? NullLogger.Instance;
         _bulkPolicy = new BulkStoragePressurePolicy(bulkPressure);
         _observedBulk = BulkStoragePressurePolicy.Unmeasured();
+        _pressureExpirationLatched = false;
         _engine.UsagePressureRecovery = RunAdmissionRecoveryAsync;
     }
 
@@ -174,8 +187,12 @@ public sealed class StorageMaintenanceCoordinator
         ulong maintenanceRunId = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        // Metadata-only. Runs before segment accounting so expiration does not wait on physical scans.
+        // Metadata-only. Age expiration stays first. Pressure expiration then marks older Present
+        // rows Evicted. Neither pass reads or deletes segment bytes.
+        var expirationPressure = _engine.ObserveCapacityAdmissionPressure();
+        ObserveBulk(in expirationPressure);
         _ = _engine.ExpireRetentionBatch(_maxRetentionAge, cancellationToken);
+        ApplyPressureExpiration(cancellationToken);
         TryCheckpointJournal(maintenanceRunId);
         TryCheckpointIndex(maintenanceRunId);
 
@@ -1312,6 +1329,50 @@ public sealed class StorageMaintenanceCoordinator
     /// <summary>
     /// Records the cache-volume class for this snapshot and logs only when that class changes.
     /// </summary>
+    /// <summary>
+    /// Expires one bounded window when bulk pressure is active or a previous pass is still above
+    /// the recovery target. Does not scan segment payloads and does not delete files.
+    /// </summary>
+    private void ApplyPressureExpiration(CancellationToken cancellationToken)
+    {
+        var bulk = CurrentBulk();
+        var mode = ArticlePressureRetentionPolicy.Mode(in bulk, _pressureExpirationLatched, _bulkPolicy.Options);
+        var latched = mode != PressureExpirationMode.None;
+        if (latched != _pressureExpirationLatched)
+        {
+            _pressureExpirationLatched = latched;
+            var target = ArticlePressureRetentionPolicy.RecoveryTargetPercent(_bulkPolicy.Options);
+            if (latched)
+            {
+                StorageMaintenanceLogMessages.PressureExpirationStarted(
+                    _logger,
+                    bulk.State.ToString(),
+                    bulk.UsedPercent,
+                    target,
+                    _bulkPolicy.Options.MinimumRetentionAge);
+            }
+            else
+            {
+                StorageMaintenanceLogMessages.PressureExpirationStopped(
+                    _logger,
+                    bulk.State.ToString(),
+                    bulk.UsedPercent,
+                    target);
+            }
+        }
+
+        if (!latched)
+        {
+            return;
+        }
+
+        _ = _engine.ExpirePressureRetentionBatch(
+            _bulkPolicy.Options.MinimumRetentionAge,
+            ArticlePressureRetentionPolicy.ExpirationLimit(bulk.State, mode),
+            bulk.State,
+            cancellationToken);
+    }
+
     private void ObserveBulk(in CapacityAdmissionPressureSnapshot pressure)
     {
         var evaluation = _bulkPolicy.Evaluate(pressure.TotalBytes, pressure.UsedBytes, pressure.AvailableBytes);

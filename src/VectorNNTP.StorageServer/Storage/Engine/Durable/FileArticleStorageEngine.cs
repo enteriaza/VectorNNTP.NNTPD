@@ -2880,6 +2880,176 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         }
     }
 
+    /// <summary>
+    /// Logically expires at most <paramref name="maxExpire"/> Present articles in one index window
+    /// whose durable arrival age has reached <paramref name="minimumRetentionAge"/>.
+    /// </summary>
+    /// <param name="minimumRetentionAge">Pressure grace. Negative is rejected. Zero allows any known past arrival.</param>
+    /// <param name="maxExpire">How many eligible rows this window may expire. Zero examines nothing.</param>
+    /// <param name="state">Bulk class for the batch log. This method does not reclassify the volume.</param>
+    /// <param name="cancellationToken">Stops the window between articles. Completed tombstones stay durable.</param>
+    /// <param name="batchSize">Maximum rows to examine. Defaults to <see cref="RetentionScanBatchSize"/>.</param>
+    /// <returns>Counts for this window. Segment files are not read or deleted.</returns>
+    /// <remarks>
+    /// Uses the same cursor and <see cref="TryExpireRetentionCandidate"/> as age expiration.
+    /// Ingress-only articles have no Present row and are not visited. Ranking is inside this window only.
+    /// </remarks>
+    internal PressureExpirationResult ExpirePressureRetentionBatch(
+        TimeSpan minimumRetentionAge,
+        int maxExpire,
+        BulkStoragePressureState state,
+        CancellationToken cancellationToken,
+        int batchSize = RetentionScanBatchSize)
+    {
+        if (batchSize <= 0 || batchSize > MaxRetentionScanBatchSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(batchSize));
+        }
+
+        if (minimumRetentionAge < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(minimumRetentionAge));
+        }
+
+        if (maxExpire < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxExpire));
+        }
+
+        if (maxExpire == 0)
+        {
+            return new PressureExpirationResult(
+                0, 0, 0, 0, 0, 0, 0, 0, 0, batchSize, 0, false, state);
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var visited = 0;
+        var evaluated = 0;
+        var tooYoung = 0;
+        var missingArrival = 0;
+        var futureArrival = 0;
+        var selected = 0;
+        var expired = 0;
+        long bytes = 0;
+        var changed = 0;
+        var wrapped = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var present = new RetentionScanCandidate[batchSize];
+            var copied = _index.CopyRetentionWindow(batchSize, present, out visited, out wrapped);
+            var now = _timeProvider.GetUtcNow();
+            var eligible = new RetentionScanCandidate[copied];
+            var eligibleCount = 0;
+            for (var i = 0; i < copied; i++)
+            {
+                evaluated++;
+                var candidate = present[i];
+                if (candidate.AcceptedUtc == DateTimeOffset.MinValue)
+                {
+                    missingArrival++;
+                    continue;
+                }
+
+                if (candidate.AcceptedUtc.UtcTicks > now.UtcTicks)
+                {
+                    futureArrival++;
+                    continue;
+                }
+
+                if (!ArticlePressureRetentionPolicy.IsPressureExpirationEligible(
+                        bulkCommitted: true,
+                        candidate.AcceptedUtc,
+                        minimumRetentionAge,
+                        now))
+                {
+                    tooYoung++;
+                    continue;
+                }
+
+                eligible[eligibleCount++] = candidate;
+            }
+
+            if (eligibleCount > 1)
+            {
+                Array.Sort(
+                    eligible,
+                    0,
+                    eligibleCount,
+                    Comparer<RetentionScanCandidate>.Create((left, right) =>
+                        ArticlePressureRetentionPolicy.CompareExpirationOrder(
+                            in left,
+                            in right,
+                            now,
+                            minimumRetentionAge)));
+            }
+
+            var limit = Math.Min(maxExpire, eligibleCount);
+            for (var i = 0; i < limit; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var candidate = eligible[i];
+                selected++;
+                TestHookBeforeRetentionExpire?.Invoke(candidate);
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (TryExpireRetentionCandidate(candidate))
+                    {
+                        expired++;
+                        bytes += candidate.Location.Length;
+                    }
+                    else
+                    {
+                        changed++;
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    FileArticleStorageEngineLogMessages.RetentionExpirationFailed(
+                        _logger,
+                        ex,
+                        candidate.ArtId.ToString() ?? string.Empty);
+                    throw;
+                }
+            }
+
+            return new PressureExpirationResult(
+                visited,
+                evaluated,
+                tooYoung,
+                missingArrival,
+                futureArrival,
+                selected,
+                expired,
+                bytes,
+                changed,
+                batchSize,
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                wrapped,
+                state);
+        }
+        finally
+        {
+            if (visited > 0)
+            {
+                FileArticleStorageEngineLogMessages.PressureExpirationBatch(
+                    _logger,
+                    state.ToString(),
+                    visited,
+                    evaluated,
+                    tooYoung,
+                    missingArrival,
+                    futureArrival,
+                    selected,
+                    expired,
+                    bytes,
+                    Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                    wrapped);
+            }
+        }
+    }
+
     private static RetentionExpirationResult CreateRetentionResult(
         int visited,
         int evaluated,

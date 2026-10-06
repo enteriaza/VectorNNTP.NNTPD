@@ -772,7 +772,8 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
                         metadata.ArtId,
                         metadata.Location,
                         metadata.Sequence,
-                        metadata.AcceptedUtc);
+                        metadata.AcceptedUtc,
+                        metadata.LastAccessUtc);
                 }
 
                 if (_scanCursor is null)
@@ -2108,8 +2109,12 @@ internal readonly record struct RetainedIndexFrame(
 /// <param name="Location">Location at the copy. A later relocation makes expiration a no-op.</param>
 /// <param name="Sequence">Journal sequence at the copy. A newer Accept makes expiration a no-op.</param>
 /// <param name="AcceptedUtc">Arrival instant at the copy. Expiration does not replace it.</param>
+/// <param name="LastAccessUtc">
+/// Soft access hint at the copy. Missing or equal to <paramref name="AcceptedUtc"/> is not a cold access.
+/// </param>
 internal readonly record struct RetentionScanCandidate(
     ArticleId ArtId,
     StoredArticleLocation Location,
     ulong Sequence,
-    DateTimeOffset AcceptedUtc);
+    DateTimeOffset AcceptedUtc,
+    DateTimeOffset LastAccessUtc = default);

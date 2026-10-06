@@ -285,4 +285,27 @@ internal static partial class StorageMaintenanceLogMessages
         long LiveBytes,
         long DeadBytes,
         long AvailableReserveBytes);
+
+    /// <summary>Information log when a pressure-expiration pass starts. Not emitted on later cycles of the same pass.</summary>
+    [LoggerMessage(
+        EventId = 3036,
+        Level = LogLevel.Information,
+        Message = "Pressure expiration started (State={State}, UsedPercent={UsedPercent}, RecoveryTargetPercent={RecoveryTargetPercent}, MinimumRetentionAge={MinimumRetentionAge})")]
+    public static partial void PressureExpirationStarted(
+        ILogger logger,
+        string State,
+        int UsedPercent,
+        int RecoveryTargetPercent,
+        TimeSpan MinimumRetentionAge);
+
+    /// <summary>Information log when a pressure-expiration pass stops because the volume is below the recovery target.</summary>
+    [LoggerMessage(
+        EventId = 3037,
+        Level = LogLevel.Information,
+        Message = "Pressure expiration stopped (State={State}, UsedPercent={UsedPercent}, RecoveryTargetPercent={RecoveryTargetPercent})")]
+    public static partial void PressureExpirationStopped(
+        ILogger logger,
+        string State,
+        int UsedPercent,
+        int RecoveryTargetPercent);
 }

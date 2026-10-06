@@ -22,8 +22,10 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// recovery reserve. Operational and rewrite reserves are not subtracted from Accept.
 /// </para>
 /// <para>
-/// Classification does not delete a live acknowledged article. An article that has been
-/// accepted and is still only in the ingress journal stays recoverable.
+/// Pressure-driven expiration, when the volume is at Pressure or higher, logically evicts
+/// Present articles older than <see cref="MinimumRetentionAge"/>. It does not delete segment
+/// bytes and it does not expire an article that is still only in the ingress journal.
+/// <see cref="ArticleStorageOptions.MaxRetentionAge"/> remains a separate predicate.
 /// </para>
 /// </remarks>
 public sealed class BulkStoragePressureOptions
@@ -55,6 +57,20 @@ public sealed class BulkStoragePressureOptions
     /// </summary>
     public const int DefaultRewriteReservePercent = 10;
 
+    /// <summary>
+    /// Youngest arrival age that pressure-driven expiration may select.
+    /// Seven days. <see cref="ArticleStorageOptions.MaxRetentionAge"/> is a separate policy and
+    /// defaults to disabled. There is no other finite retention age in this configuration.
+    /// </summary>
+    public static readonly TimeSpan DefaultMinimumRetentionAge = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// Used-percent points below <see cref="DefaultPressurePercent"/> at which a pressure-expiration
+    /// pass that has already started will stop. Five points lands on the Warning watermark when
+    /// both defaults are left in place.
+    /// </summary>
+    public const int DefaultPressureRecoveryMarginPercent = 5;
+
     /// <summary>Gets or sets the Warning used-percent. Default <see cref="DefaultWarningPercent"/>.</summary>
     public int WarningPercent { get; set; } = DefaultWarningPercent;
 
@@ -85,4 +101,17 @@ public sealed class BulkStoragePressureOptions
     /// Gets or sets the rewrite/reclamation reserve percent. Default <see cref="DefaultRewriteReservePercent"/>.
     /// </summary>
     public int RewriteReservePercent { get; set; } = DefaultRewriteReservePercent;
+
+    /// <summary>
+    /// Gets or sets the minimum durable arrival age for pressure-driven expiration.
+    /// Default <see cref="DefaultMinimumRetentionAge"/>. Zero allows any known past arrival.
+    /// This does not change <see cref="ArticleStorageOptions.MaxRetentionAge"/>.
+    /// </summary>
+    public TimeSpan MinimumRetentionAge { get; set; } = DefaultMinimumRetentionAge;
+
+    /// <summary>
+    /// Gets or sets how many used-percent points below <see cref="PressurePercent"/> a started
+    /// pressure-expiration pass must reach before it stops. Default <see cref="DefaultPressureRecoveryMarginPercent"/>.
+    /// </summary>
+    public int PressureRecoveryMarginPercent { get; set; } = DefaultPressureRecoveryMarginPercent;
 }
