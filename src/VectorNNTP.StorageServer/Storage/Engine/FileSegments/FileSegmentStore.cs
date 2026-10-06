@@ -899,47 +899,107 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
         catch (Exception ex) when (ex is not UnreconciledDurableTailException)
         {
-            var outcome = InspectSegmentAppend(runtime, offset, recordLength, header, artData.Span, crc);
-            if (outcome == AmbiguousAppend.Growth.CompleteExpected)
+            if (TryRecoverFailedActiveWrite(
+                    runtime,
+                    offset,
+                    recordLength,
+                    framedHash,
+                    artId,
+                    artHash,
+                    artData.Length,
+                    header,
+                    artData.Span,
+                    crc,
+                    publishActivation: true,
+                    allowPending: true,
+                    out var recovered))
             {
-                if (runtime.Stream.Length > offset + recordLength)
-                {
-                    try
-                    {
-                        TruncateSegmentOrBlock(runtime, offset + recordLength, createdByThisCall: true);
-                    }
-                    catch (UnreconciledDurableTailException)
-                    {
-                        runtime.PendingRecord = new PendingSegmentRecord(
-                            offset, recordLength, framedHash, artId, artHash, artData.Length);
-                        throw;
-                    }
-                }
-
-                try
-                {
-                    DurableSegmentFlush(runtime.Stream);
-                }
-                catch (Exception flushEx) when (flushEx is not UnreconciledDurableTailException)
-                {
-                    runtime.PendingRecord = new PendingSegmentRecord(
-                        offset, recordLength, framedHash, artId, artHash, artData.Length);
-                    throw new UnreconciledDurableTailException(
-                        $"Active segment {runtime.SegmentId.Value} record is present but not durable.",
-                        flushEx,
-                        createdByThisCall: true);
-                }
-
-                return CommitActiveAppend(runtime, offset, recordLength, ambiguousComplete: false, artId, artHash, artData.Length);
-            }
-
-            if (outcome == AmbiguousAppend.Growth.IncompleteGrowth)
-            {
-                TruncateSegmentOrBlock(runtime, offset, createdByThisCall: true);
+                return recovered;
             }
 
             throw;
         }
+    }
+
+    /// <summary>
+    /// Applies the single-writer ambiguous-append rules after a write or length check threw.
+    /// A complete matching record is durability-flushed and committed, or retained as
+    /// <see cref="PendingSegmentRecord"/> when that flush fails. A partial or mismatched tail
+    /// is truncated to <paramref name="offset"/> when <paramref name="allowPending"/> is true,
+    /// or to the committed cursor when it is false. Returns false when the caller must rethrow
+    /// the original failure. Does not claim durability without a successful <c>Flush(true)</c>.
+    /// </summary>
+    private bool TryRecoverFailedActiveWrite(
+        SegmentRuntime runtime,
+        long offset,
+        int recordLength,
+        ulong framedHash,
+        ArticleId artId,
+        ulong artHash,
+        int artSize,
+        ReadOnlySpan<byte> header,
+        ReadOnlySpan<byte> artData,
+        ReadOnlySpan<byte> crc,
+        bool publishActivation,
+        bool allowPending,
+        out ActiveSegmentAppend recovered)
+    {
+        recovered = default;
+        if (!allowPending)
+        {
+            TruncateSegmentOrBlock(runtime, runtime.SizeBytes, createdByThisCall: true);
+            return false;
+        }
+
+        var outcome = InspectSegmentAppend(runtime, offset, recordLength, header, artData, crc);
+        if (outcome == AmbiguousAppend.Growth.CompleteExpected)
+        {
+            if (runtime.Stream.Length > offset + recordLength)
+            {
+                try
+                {
+                    TruncateSegmentOrBlock(runtime, offset + recordLength, createdByThisCall: true);
+                }
+                catch (UnreconciledDurableTailException)
+                {
+                    runtime.PendingRecord = new PendingSegmentRecord(
+                        offset, recordLength, framedHash, artId, artHash, artSize);
+                    throw;
+                }
+            }
+
+            try
+            {
+                DurableSegmentFlush(runtime.Stream);
+            }
+            catch (Exception flushEx) when (flushEx is not UnreconciledDurableTailException)
+            {
+                runtime.PendingRecord = new PendingSegmentRecord(
+                    offset, recordLength, framedHash, artId, artHash, artSize);
+                throw new UnreconciledDurableTailException(
+                    $"Active segment {runtime.SegmentId.Value} record is present but not durable.",
+                    flushEx,
+                    createdByThisCall: true);
+            }
+
+            recovered = CommitActiveAppend(
+                runtime,
+                offset,
+                recordLength,
+                ambiguousComplete: false,
+                artId,
+                artHash,
+                artSize,
+                publishActivation);
+            return true;
+        }
+
+        if (outcome == AmbiguousAppend.Growth.IncompleteGrowth)
+        {
+            TruncateSegmentOrBlock(runtime, offset, createdByThisCall: true);
+        }
+
+        return false;
     }
 
     private ActiveSegmentAppend FinishPendingSegmentRecord(
@@ -948,7 +1008,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         ulong framedHash,
         ArticleId artId,
         ulong artHash,
-        int artSize)
+        int artSize,
+        bool publishActivation = true)
     {
         var pending = runtime.PendingRecord
             ?? throw new InvalidOperationException("No pending segment record.");
@@ -990,7 +1051,15 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
 
         runtime.PendingRecord = null;
-        return CommitActiveAppend(runtime, pending.Offset, recordLength, ambiguousComplete: false, artId, artHash, artSize);
+        return CommitActiveAppend(
+            runtime,
+            pending.Offset,
+            recordLength,
+            ambiguousComplete: false,
+            artId,
+            artHash,
+            artSize,
+            publishActivation);
     }
 
     private void DurableSegmentFlush(FileStream stream)
@@ -1131,7 +1200,51 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
         catch (AggregateException ex)
         {
-            throw ex.InnerExceptions.Count == 1 ? ex.InnerExceptions[0] : ex;
+            // One writer already surfaces its own exception. Several writers failing together
+            // must still look like one filesystem failure so persist retries the batch.
+            var flat = ex.Flatten();
+            if (flat.InnerExceptions.Count == 1)
+            {
+                throw flat.InnerExceptions[0];
+            }
+
+            var allUnreconciled = true;
+            var createdPending = false;
+            foreach (var inner in flat.InnerExceptions)
+            {
+                if (inner is not UnreconciledDurableTailException unreconciled)
+                {
+                    allUnreconciled = false;
+                    break;
+                }
+
+                createdPending |= unreconciled.CreatedByThisCall;
+            }
+
+            if (allUnreconciled)
+            {
+                throw new UnreconciledDurableTailException(
+                    "One or more active segment writers left a record that is not durable.",
+                    ex,
+                    createdPending);
+            }
+
+            var allIo = true;
+            foreach (var inner in flat.InnerExceptions)
+            {
+                if (inner is not IOException)
+                {
+                    allIo = false;
+                    break;
+                }
+            }
+
+            if (allIo)
+            {
+                throw new IOException("One or more active segment writers failed.", ex);
+            }
+
+            throw;
         }
         finally
         {
@@ -1194,33 +1307,80 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         var end = start + count;
         while (index < end)
         {
-            var chunk = new List<ActiveSegmentAppend>();
+            var chunk = new List<PinnedChunkItem>();
             lock (runtime.Sync)
             {
-                while (index < end && NextRecordFits(runtime, articles[index]))
+                var committed = runtime.SizeBytes;
+                var logical = committed;
+                try
                 {
-                    chunk.Add(AppendPinned(runtime, articles[index]));
-                    index++;
-                }
-
-                if (chunk.Count > 0)
-                {
-                    DurableSegmentFlush(runtime.Stream);
-                    foreach (var append in chunk)
+                    while (index < end && NextRecordFitsAt(runtime, logical, articles[index]))
                     {
-                        if (!HeaderMatches(runtime, append.Location, append.ArtId, append.ArtHash, append.ArtSize))
+                        var pinned = AppendPinned(runtime, articles[index], logical);
+                        logical += pinned.Append.Location.Length;
+                        chunk.Add(pinned);
+                        if (pinned.Published)
                         {
-                            throw new IOException(
-                                $"Flushed segment record at {append.Location.SegmentId.Value}:{append.Location.Offset} does not match the written article header.");
+                            committed = runtime.SizeBytes;
                         }
 
-                        receipts[start] = new FlushedSegmentAppend(
-                            append.Location,
-                            append.ArtId,
-                            append.ArtHash,
-                            append.ArtSize);
-                        start++;
+                        index++;
                     }
+
+                    if (chunk.Count > 0)
+                    {
+                        var needsFlush = false;
+                        foreach (var pinned in chunk)
+                        {
+                            if (!pinned.Published)
+                            {
+                                needsFlush = true;
+                                break;
+                            }
+                        }
+
+                        // A recovered pending record was already flushed inside FinishPending.
+                        if (needsFlush)
+                        {
+                            DurableSegmentFlush(runtime.Stream);
+                        }
+
+                        foreach (var pinned in chunk)
+                        {
+                            var append = pinned.Append;
+                            if (!pinned.Published)
+                            {
+                                CommitActiveAppend(
+                                    runtime,
+                                    append.Location.Offset,
+                                    append.Location.Length,
+                                    append.AmbiguousComplete,
+                                    append.ArtId,
+                                    append.ArtHash,
+                                    append.ArtSize,
+                                    publishActivation: false);
+                                committed = runtime.SizeBytes;
+                            }
+
+                            if (!HeaderMatches(runtime, append.Location, append.ArtId, append.ArtHash, append.ArtSize))
+                            {
+                                throw new IOException(
+                                    $"Flushed segment record at {append.Location.SegmentId.Value}:{append.Location.Offset} does not match the written article header.");
+                            }
+
+                            receipts[start] = new FlushedSegmentAppend(
+                                append.Location,
+                                append.ArtId,
+                                append.ArtHash,
+                                append.ArtSize);
+                            start++;
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+                {
+                    StabilizePinnedChunkFailure(runtime, committed, chunk, ex);
+                    throw;
                 }
             }
 
@@ -1252,15 +1412,23 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// An empty segment accepts one record even when that record exceeds the size target.
     /// Caller holds <see cref="SegmentRuntime.Sync"/>.
     /// </summary>
-    private bool NextRecordFits(SegmentRuntime runtime, ReadOnlyMemory<byte> article)
+    private bool NextRecordFits(SegmentRuntime runtime, ReadOnlyMemory<byte> article) =>
+        NextRecordFitsAt(runtime, runtime.SizeBytes, article);
+
+    /// <summary>
+    /// Same fit rule as <see cref="NextRecordFits"/> using <paramref name="logicalSize"/> instead of
+    /// the committed cursor. A multi-writer chunk tracks bytes written but not yet flushed there.
+    /// Caller holds <see cref="SegmentRuntime.Sync"/>.
+    /// </summary>
+    private bool NextRecordFitsAt(SegmentRuntime runtime, long logicalSize, ReadOnlyMemory<byte> article)
     {
-        if (runtime.SizeBytes == 0 || _targetSegmentBytes == long.MaxValue)
+        if (logicalSize == 0 || _targetSegmentBytes == long.MaxValue)
         {
             return true;
         }
 
         var recordLength = SegmentRecordCodec.RecordLengthForArtSize(article.Length);
-        if (runtime.SizeBytes + recordLength > _targetSegmentBytes)
+        if (logicalSize + recordLength > _targetSegmentBytes)
         {
             return false;
         }
@@ -1285,10 +1453,17 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     }
 
     /// <summary>
-    /// Appends one record to <paramref name="runtime"/>. Caller holds <see cref="SegmentRuntime.Sync"/>.
-    /// Does not rotate the segment and does not arm its seal timer.
+    /// Appends one record to <paramref name="runtime"/> at <paramref name="expectedOffset"/>.
+    /// Caller holds <see cref="SegmentRuntime.Sync"/>. Does not rotate the segment and does not
+    /// arm its seal timer. A successful write is not catalogue-committed until the chunk flush
+    /// returns. A write or flush failure uses <see cref="TryRecoverFailedActiveWrite"/> so a
+    /// partial tail is truncated and a complete undurable record becomes
+    /// <see cref="PendingSegmentRecord"/> instead of wedging the writer.
     /// </summary>
-    private ActiveSegmentAppend AppendPinned(SegmentRuntime runtime, ReadOnlyMemory<byte> artData)
+    private PinnedChunkItem AppendPinned(
+        SegmentRuntime runtime,
+        ReadOnlyMemory<byte> artData,
+        long expectedOffset)
     {
         PhysicalProofProbe.BeginAppend();
         try
@@ -1312,43 +1487,239 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
             Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
             Span<byte> crc = stackalloc byte[4];
-            SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc, out _);
+            SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc, out var framedHash);
             var recordLength = SegmentRecordCodec.RecordLengthForArtSize(artData.Length);
-            var offset = runtime.SizeBytes;
-            if (runtime.Stream.Length != offset)
+            if (runtime.PendingRecord is not null)
             {
-                runtime.TailUnreconciled = true;
-                runtime.TailValidEnd = offset;
-                throw new UnreconciledDurableTailException(
-                    $"Active segment {runtime.SegmentId.Value} length {runtime.Stream.Length} does not match logical size {offset}.",
-                    new IOException("Active segment cursor and file length diverged."));
+                var finished = FinishPendingSegmentRecord(
+                    runtime,
+                    recordLength,
+                    framedHash,
+                    artId,
+                    artHash,
+                    artData.Length,
+                    publishActivation: false);
+                return new PinnedChunkItem(finished, published: true);
             }
 
-            runtime.Stream.Position = offset;
-            runtime.Stream.Write(header);
-            runtime.Stream.Write(artData.Span);
-            runtime.Stream.Write(crc);
-            TestAfterWriteBeforeFlush?.Invoke(runtime.Stream, offset, recordLength);
-            var end = offset + recordLength;
-            if (runtime.Stream.Position != end || runtime.Stream.Length < end)
+            if (runtime.TailUnreconciled)
             {
+                ReconcileBlockedSegmentTail(runtime);
+            }
+
+            if (runtime.Stream.Length != expectedOffset)
+            {
+                if (expectedOffset == runtime.SizeBytes)
+                {
+                    runtime.TailUnreconciled = true;
+                    runtime.TailValidEnd = runtime.SizeBytes;
+                    throw new UnreconciledDurableTailException(
+                        $"Active segment {runtime.SegmentId.Value} length {runtime.Stream.Length} does not match logical size {expectedOffset}.",
+                        new IOException("Active segment cursor and file length diverged."));
+                }
+
                 throw new IOException(
-                    $"Active segment {runtime.SegmentId.Value} append at offset {offset} ended at position {runtime.Stream.Position}, length {runtime.Stream.Length}, expected {end}.");
+                    $"Active segment {runtime.SegmentId.Value} append at offset {expectedOffset} ended at position {runtime.Stream.Position}, length {runtime.Stream.Length}, expected {expectedOffset + recordLength}.");
             }
 
-            return CommitActiveAppend(
-                runtime,
-                offset,
-                recordLength,
-                ambiguousComplete: false,
-                artId,
-                artHash,
-                artData.Length,
-                publishActivation: false);
+            var allowPending = expectedOffset == runtime.SizeBytes;
+            try
+            {
+                runtime.Stream.Position = expectedOffset;
+                runtime.Stream.Write(header);
+                runtime.Stream.Write(artData.Span);
+                runtime.Stream.Write(crc);
+                TestAfterWriteBeforeFlush?.Invoke(runtime.Stream, expectedOffset, recordLength);
+                var end = expectedOffset + recordLength;
+                if (runtime.Stream.Position != end || runtime.Stream.Length < end)
+                {
+                    throw new IOException(
+                        $"Active segment {runtime.SegmentId.Value} append at offset {expectedOffset} ended at position {runtime.Stream.Position}, length {runtime.Stream.Length}, expected {end}.");
+                }
+
+                return new PinnedChunkItem(
+                    new ActiveSegmentAppend(
+                        new StoredArticleLocation(runtime.SegmentId, expectedOffset, recordLength),
+                        AmbiguousComplete: false,
+                        artId,
+                        artHash,
+                        artData.Length),
+                    published: false);
+            }
+            catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+            {
+                if (TryRecoverFailedActiveWrite(
+                        runtime,
+                        expectedOffset,
+                        recordLength,
+                        framedHash,
+                        artId,
+                        artHash,
+                        artData.Length,
+                        header,
+                        artData.Span,
+                        crc,
+                        publishActivation: false,
+                        allowPending,
+                        out var recovered))
+                {
+                    return new PinnedChunkItem(recovered, published: true);
+                }
+
+                throw;
+            }
         }
         finally
         {
             PhysicalProofProbe.EndAppend();
+        }
+    }
+
+    /// <summary>
+    /// Restores <paramref name="runtime"/> after a multi-writer chunk failed before its receipts
+    /// were published. A complete record at the committed cursor becomes one pending record.
+    /// Every other unpublished tail is truncated. Caller holds <see cref="SegmentRuntime.Sync"/>.
+    /// </summary>
+    private void StabilizePinnedChunkFailure(
+        SegmentRuntime runtime,
+        long committed,
+        List<PinnedChunkItem> chunk,
+        Exception failure)
+    {
+        if (runtime.PendingRecord is { } pending && pending.Offset == committed)
+        {
+            KeepPendingRecord(runtime, pending, committed);
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} record is present but not durable.",
+                failure,
+                createdByThisCall: true);
+        }
+
+        var retainFirst = chunk.Count > 0 && !chunk[0].Published && chunk[0].Append.Location.Offset == committed;
+        if (retainFirst)
+        {
+            foreach (var pinned in chunk)
+            {
+                if (pinned.Published)
+                {
+                    retainFirst = false;
+                    break;
+                }
+            }
+        }
+
+        if (retainFirst && TryRetainCompleteChunkRecord(runtime, chunk[0].Append, committed))
+        {
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} record is present but not durable.",
+                failure,
+                createdByThisCall: true);
+        }
+
+        runtime.PendingRecord = null;
+        if (runtime.Stream.Length != committed || runtime.SizeBytes != committed)
+        {
+            TruncateSegmentOrBlock(runtime, committed, createdByThisCall: true);
+        }
+
+        runtime.TailUnreconciled = false;
+    }
+
+    /// <summary>
+    /// Leaves <paramref name="pending"/> on <paramref name="runtime"/> and drops bytes past it.
+    /// The committed cursor stays at the pending offset so the record is not durable yet.
+    /// </summary>
+    private void KeepPendingRecord(SegmentRuntime runtime, PendingSegmentRecord pending, long committed)
+    {
+        var end = pending.Offset + pending.Length;
+        if (runtime.Stream.Length != end)
+        {
+            TruncateSegmentOrBlock(runtime, end, createdByThisCall: true);
+        }
+
+        runtime.SizeBytes = committed;
+        runtime.PendingRecord = pending;
+        runtime.TailUnreconciled = false;
+    }
+
+    /// <summary>
+    /// Retains <paramref name="append"/> as <see cref="PendingSegmentRecord"/> when the file
+    /// still contains that exact record at the committed cursor. Extra bytes are truncated.
+    /// </summary>
+    private bool TryRetainCompleteChunkRecord(
+        SegmentRuntime runtime,
+        ActiveSegmentAppend append,
+        long committed)
+    {
+        var offset = append.Location.Offset;
+        var length = append.Location.Length;
+        if (offset != committed || length < SegmentRecordCodec.FixedHeaderLength + 4)
+        {
+            return false;
+        }
+
+        try
+        {
+            runtime.Stream.Flush(flushToDisk: false);
+            if (runtime.Stream.Length < offset + length)
+            {
+                return false;
+            }
+
+            var observed = ReadExact(runtime.Stream, offset, length);
+            if (observed.Length != length)
+            {
+                return false;
+            }
+
+            if (!SegmentRecordCodec.TryConfirmRecordHeader(
+                    observed.AsSpan(0, SegmentRecordCodec.FixedHeaderLength),
+                    length,
+                    append.ArtId,
+                    append.ArtHash,
+                    append.ArtSize))
+            {
+                return false;
+            }
+
+            var payload = observed.AsSpan(SegmentRecordCodec.FixedHeaderLength, append.ArtSize);
+            if (XxHash3.HashToUInt64(payload) != append.ArtHash)
+            {
+                return false;
+            }
+
+            var crcOffset = length - 4;
+            var actualCrc = Crc32.HashToUInt32(observed.AsSpan(0, crcOffset));
+            var expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(observed.AsSpan(crcOffset, 4));
+            if (actualCrc != expectedCrc)
+            {
+                return false;
+            }
+
+            if (runtime.Stream.Length > offset + length)
+            {
+                TruncateSegmentOrBlock(runtime, offset + length, createdByThisCall: true);
+            }
+
+            runtime.SizeBytes = committed;
+            runtime.PendingRecord = new PendingSegmentRecord(
+                offset,
+                length,
+                XxHash3.HashToUInt64(observed),
+                append.ArtId,
+                append.ArtHash,
+                append.ArtSize);
+            runtime.TailUnreconciled = false;
+            return true;
+        }
+        catch (Exception ex) when (ex is not UnreconciledDurableTailException)
+        {
+            runtime.TailUnreconciled = true;
+            runtime.TailValidEnd = committed;
+            throw new UnreconciledDurableTailException(
+                $"Active segment {runtime.SegmentId.Value} length could not be inspected after an ambiguous append.",
+                ex,
+                createdByThisCall: true);
         }
     }
 
@@ -1426,11 +1797,11 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             throw new InvalidOperationException($"Segment {segmentId} is not an active writer.");
         }
 
+        // A pending record or torn tail is reconciled by the append that holds this segment,
+        // not refused here. Refusing it left the writer wedged until process restart.
         if (runtime.PendingRecord is not null || runtime.TailUnreconciled)
         {
-            throw new UnreconciledDurableTailException(
-                $"Active segment {segmentId} cannot take a parallel append while a physical append is pending.",
-                new IOException("pending-segment-record"));
+            return runtime;
         }
 
         if (runtime.SizeBytes > 0
@@ -3284,6 +3655,23 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             ReadOnlyMemory<byte> artData,
             CancellationToken cancellationToken) =>
             owner.AppendToActiveAsync(artData, cancellationToken);
+    }
+
+    /// <summary>
+    /// One multi-writer record that has been framed. <see cref="Published"/> is true when the
+    /// catalogue already includes it, which is only after a successful durability flush.
+    /// </summary>
+    private readonly struct PinnedChunkItem
+    {
+        internal PinnedChunkItem(ActiveSegmentAppend append, bool published)
+        {
+            Append = append;
+            Published = published;
+        }
+
+        internal ActiveSegmentAppend Append { get; }
+
+        internal bool Published { get; }
     }
 
     private sealed class SegmentRuntime(
