@@ -1695,14 +1695,18 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <summary>
     /// Replaces DeadBytes on each Closed segment from one complete physical proof plus the
     /// durable index. Not part of storage-engine readiness. Skips Active and Retired.
-    /// The proof reads a private stream and does not hold the segment write gate. The
-    /// catalogue commit still requires the segment to be Closed and the current index to
-    /// balance. A segment that cannot be proved, or that changed before commit, is left
-    /// at its index-derived DeadBytes. A second successful scan does not add the same orphan again.
+    /// The proof reads a private stream and does not hold the segment write gate or the
+    /// index lock. One index classification covers every Closed segment in the pass.
+    /// The catalogue commit still requires the segment to be Closed and the current index
+    /// to balance. A segment that cannot be proved, or whose index changed before commit,
+    /// is left at its index-derived DeadBytes. A second successful scan does not add the
+    /// same orphan again.
     /// </summary>
     internal void CompleteUnreferencedExtentAccounting()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        var eligible = new HashSet<ulong>();
+        var pending = new List<SegmentId>();
         foreach (var info in Catalogue.Snapshot())
         {
             if (info.State != SegmentState.Closed || info.ExtentAccountingComplete)
@@ -1710,11 +1714,23 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 continue;
             }
 
-            if (!_segments.TryReadClosedProvedExtents(info.SegmentId, out var extents))
+            _ = eligible.Add(info.SegmentId.Value);
+            pending.Add(info.SegmentId);
+        }
+
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        var classified = _index.CopyClosedSegmentAccounting(eligible);
+        foreach (var segmentId in pending)
+        {
+            if (!_segments.TryReadClosedProvedExtents(segmentId, out var extents))
             {
                 FileArticleStorageEngineLogMessages.ClosedExtentAccountingIncomplete(
                     _logger,
-                    info.SegmentId.Value);
+                    segmentId.Value);
                 continue;
             }
 
@@ -1724,15 +1740,20 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             }
 
             var proved = extents;
-            Catalogue.ExecuteLocked(() => CommitClosedExtentAccounting(info.SegmentId, proved));
+            Catalogue.ExecuteLocked(() => CommitClosedExtentAccounting(segmentId, proved, eligible, ref classified));
         }
     }
 
     /// <summary>
     /// Caller holds the catalogue lock. Classification, DeadBytes replacement, and the
-    /// accounted bit are published before that lock is released.
+    /// accounted bit are published before that lock is released. The shared index view is
+    /// refreshed when a row was added, removed, relocated, or changed state after it was built.
     /// </summary>
-    private void CommitClosedExtentAccounting(SegmentId segmentId, List<ProvenSegmentExtent> proved)
+    private void CommitClosedExtentAccounting(
+        SegmentId segmentId,
+        List<ProvenSegmentExtent> proved,
+        HashSet<ulong> eligible,
+        ref ClosedSegmentAccountingView classified)
     {
         TestHookDuringClosedAccountingCommit?.Invoke();
         if (!Catalogue.TryGet(segmentId, out var current)
@@ -1742,25 +1763,30 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             return;
         }
 
+        if (classified.Generation != _index.StructuralGeneration)
+        {
+            classified = _index.CopyClosedSegmentAccounting(eligible);
+            if (classified.Generation != _index.StructuralGeneration)
+            {
+                FileArticleStorageEngineLogMessages.ClosedExtentAccountingIncomplete(
+                    _logger,
+                    current.SegmentId.Value);
+                return;
+            }
+        }
+
         long indexLive = 0;
         long indexDead = 0;
-        var named = new HashSet<StoredArticleLocation>();
-        foreach (var row in _index.Snapshot())
+        HashSet<StoredArticleLocation> named;
+        if (classified.TryGetRows(current.SegmentId.Value, out var rows))
         {
-            if (row.Location.SegmentId != current.SegmentId)
-            {
-                continue;
-            }
-
-            named.Add(row.Location);
-            if (row.State == ArticleStorageState.Present)
-            {
-                indexLive += row.Location.Length;
-            }
-            else if (row.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid)
-            {
-                indexDead += row.Location.Length;
-            }
+            indexLive = rows.PresentBytes;
+            indexDead = rows.DeadBytes;
+            named = rows.Named;
+        }
+        else
+        {
+            named = [];
         }
 
         if (current.LiveBytes != indexLive)

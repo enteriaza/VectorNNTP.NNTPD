@@ -68,6 +68,9 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     private long _touchHintCount;
     private readonly Dictionary<ArticleId, long> _useCounts = new();
     private ulong _installedSnapshotGeneration;
+    private long _structuralGeneration;
+    private long _snapshotCallCount;
+    private long _closedAccountingIndexCopies;
     private ArticleId[] _snapshotArticleIds = [];
     private CheckpointCapacityReservation? _checkpointCapacity;
     private int _snapshotWriters;
@@ -311,8 +314,72 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            _ = Interlocked.Increment(ref _snapshotCallCount);
             return _entries.Values.ToArray();
         }
+    }
+
+    /// <summary>Times <see cref="Snapshot"/> has copied the entry dictionary. Tests only.</summary>
+    internal long SnapshotCallCount => Volatile.Read(ref _snapshotCallCount);
+
+    /// <summary>
+    /// Times closed-segment accounting has classified the index. One maintenance pass
+    /// copies once while the index is unchanged. Tests only.
+    /// </summary>
+    internal long ClosedAccountingIndexCopies => Volatile.Read(ref _closedAccountingIndexCopies);
+
+    /// <summary>
+    /// Changes when a row is added, removed, relocated, or changes state.
+    /// <see cref="TouchHint"/> does not change it.
+    /// </summary>
+    internal long StructuralGeneration => Volatile.Read(ref _structuralGeneration);
+
+    /// <summary>
+    /// One pass over the index. Rows whose segment is not in <paramref name="segmentIds"/>
+    /// are omitted. The caller must not use the result after <see cref="StructuralGeneration"/>
+    /// changes.
+    /// </summary>
+    internal ClosedSegmentAccountingView CopyClosedSegmentAccounting(HashSet<ulong> segmentIds)
+    {
+        ArgumentNullException.ThrowIfNull(segmentIds);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var rows = new Dictionary<ulong, ClosedSegmentAccountingView.SegmentRows>(segmentIds.Count);
+            foreach (var metadata in _entries.Values)
+            {
+                var segmentId = metadata.Location.SegmentId.Value;
+                if (!segmentIds.Contains(segmentId))
+                {
+                    continue;
+                }
+
+                if (!rows.TryGetValue(segmentId, out var bucket))
+                {
+                    bucket = new ClosedSegmentAccountingView.SegmentRows();
+                    rows[segmentId] = bucket;
+                }
+
+                _ = bucket.Named.Add(metadata.Location);
+                if (metadata.State == ArticleStorageState.Present)
+                {
+                    bucket.PresentBytes += metadata.Location.Length;
+                }
+                else if (metadata.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid)
+                {
+                    bucket.DeadBytes += metadata.Location.Length;
+                }
+            }
+
+            _ = Interlocked.Increment(ref _closedAccountingIndexCopies);
+            return new ClosedSegmentAccountingView(_structuralGeneration, rows);
+        }
+    }
+
+    /// <summary>Caller holds <see cref="_gate"/>.</summary>
+    private void NoteStructuralChangeUnlocked()
+    {
+        _ = Interlocked.Increment(ref _structuralGeneration);
     }
 
     /// <summary>
@@ -379,6 +446,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             frameOffset = _stream.Length;
             AppendDurableUnlocked(metadata);
             _entries[metadata.ArtId] = metadata;
+            NoteStructuralChangeUnlocked();
             return DurableIndexAppend.Appended;
         }
     }
@@ -454,6 +522,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             foreach (var entry in pending)
             {
                 _entries[entry.Metadata.ArtId] = entry.Metadata;
+                NoteStructuralChangeUnlocked();
                 results[entry.Index] = DurableIndexAppend.Appended;
                 _durableWriteCount++;
             }
@@ -515,6 +584,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             frameOffset = _stream.Length;
             AppendDurableUnlocked(updated);
             _entries[artId] = updated;
+            NoteStructuralChangeUnlocked();
             return ArticleRelocateOutcome.Relocated;
         }
     }
@@ -570,6 +640,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             frameOffset = _stream.Length;
             AppendDurableUnlocked(transitioned);
             _entries[artId] = transitioned;
+            NoteStructuralChangeUnlocked();
             return true;
         }
     }
@@ -639,6 +710,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             frameOffset = _stream.Length;
             AppendDurableUnlocked(updated);
             _entries[artId] = updated;
+            NoteStructuralChangeUnlocked();
             transitioned = updated;
             return true;
         }
@@ -755,6 +827,8 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             _ = _entries.Remove(artId);
             _ = _useCounts.Remove(artId);
         }
+
+        NoteStructuralChangeUnlocked();
 
         DropOrphanUseCountsUnlocked();
         FileArticleIndexLogMessages.ReclaimedRowsForgotten(_logger, _indexPath, drop.Count);
@@ -1792,6 +1866,36 @@ internal enum DurableIndexAppend
 
     /// <summary>A new Present frame was appended.</summary>
     Appended = 2,
+}
+
+/// <summary>
+/// Index rows grouped by segment for one closed-segment accounting pass.
+/// Built under the index lock and safe to read after that lock is released
+/// until <see cref="FileArticleIndex.StructuralGeneration"/> changes.
+/// </summary>
+internal sealed class ClosedSegmentAccountingView
+{
+    private readonly Dictionary<ulong, SegmentRows> _rows;
+
+    internal ClosedSegmentAccountingView(long generation, Dictionary<ulong, SegmentRows> rows)
+    {
+        Generation = generation;
+        _rows = rows;
+    }
+
+    internal long Generation { get; }
+
+    internal bool TryGetRows(ulong segmentId, out SegmentRows rows) => _rows.TryGetValue(segmentId, out rows!);
+
+    /// <summary>Locations and byte totals for one segment. Mutated only while the view is built.</summary>
+    internal sealed class SegmentRows
+    {
+        internal long PresentBytes { get; set; }
+
+        internal long DeadBytes { get; set; }
+
+        internal HashSet<StoredArticleLocation> Named { get; } = [];
+    }
 }
 
 /// <summary>Physical index frames that survived an installed index replacement.</summary>
