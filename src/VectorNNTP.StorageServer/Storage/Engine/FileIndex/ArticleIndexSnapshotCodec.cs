@@ -8,12 +8,13 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// On-disk form of one compacted <see cref="FileArticleIndex"/> projection.
 /// </summary>
 /// <remarks>
-/// Little-endian header, then <see cref="ArticleIndexRecordCodec.RecordLength"/>-byte frames,
-/// then a trailer CRC. The magic is ASCII <c>VNIS</c>, which is not a little-endian 96,
-/// so a snapshot cannot be mistaken for a legacy index frame.
+/// Little-endian header, then one current index frame per row, then a trailer CRC.
+/// Version 3 bodies are schema 3 frames. Version 2 bodies are schema 2 frames and are still read;
+/// those rows have no arrival instant. The magic is ASCII <c>VNIS</c>, which is not a little-endian
+/// frame length, so a snapshot cannot be mistaken for a legacy index frame.
 /// <list type="table">
 /// <item><term>0</term><description>4 ASCII magic <c>VNIS</c></description></item>
-/// <item><term>4</term><description>u32 version (2)</description></item>
+/// <item><term>4</term><description>u32 version (3; version 2 snapshots are still read)</description></item>
 /// <item><term>8</term><description>u64 snapshot generation</description></item>
 /// <item><term>16</term><description>u64 covered delta generation (0 while <c>article.index</c> has no generation header)</description></item>
 /// <item><term>24</term><description>u64 covered <c>article.index</c> length at the dictionary copy</description></item>
@@ -28,8 +29,14 @@ internal static class ArticleIndexSnapshotCodec
     /// <summary>ASCII <c>VNIS</c>.</summary>
     public static ReadOnlySpan<byte> Magic => "VNIS"u8;
 
-    /// <summary>Current snapshot version. Version 1 snapshots use 88-byte records and are rejected.</summary>
-    public const uint Version = 2;
+    /// <summary>
+    /// Current snapshot version. Version 2 snapshots store schema 2 frames and are still read.
+    /// Version 1 snapshots use 88-byte records and are rejected.
+    /// </summary>
+    public const uint Version = 3;
+
+    /// <summary>Snapshot version whose body frames are schema 2.</summary>
+    public const uint Schema2Version = 2;
 
     /// <summary>
     /// Covered delta generation written while <c>article.index</c> is still an unheadered frame log.
@@ -121,13 +128,13 @@ internal static class ArticleIndexSnapshotCodec
         ArgumentNullException.ThrowIfNull(accept);
         using var stream = OpenRead(path);
         var length = stream.Length;
-        var header = ReadHeader(stream, length, path);
+        var header = ReadHeader(stream, length, path, out var frameLength);
         var count = checked((int)header.RecordCount);
-        var frame = new byte[ArticleIndexRecordCodec.RecordLength];
+        var frame = new byte[frameLength];
         var bodyCrc = new Crc32();
         for (var i = 0; i < count; i++)
         {
-            var frameOffset = HeaderLength + ((long)i * ArticleIndexRecordCodec.RecordLength);
+            var frameOffset = HeaderLength + ((long)i * frameLength);
             ReadExact(stream, frame, path, frameOffset);
             bodyCrc.Append(frame);
             if (!ArticleIndexRecordCodec.TryDecode(frame, out _, out var metadata, out var error))
@@ -159,10 +166,10 @@ internal static class ArticleIndexSnapshotCodec
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         using var stream = OpenRead(path);
-        return ReadHeader(stream, stream.Length, path);
+        return ReadHeader(stream, stream.Length, path, out _);
     }
 
-    private static ArticleIndexSnapshotHeader ReadHeader(Stream stream, long length, string path)
+    private static ArticleIndexSnapshotHeader ReadHeader(Stream stream, long length, string path, out int frameLength)
     {
         if (length < HeaderLength)
         {
@@ -179,7 +186,13 @@ internal static class ArticleIndexSnapshotCodec
         }
 
         var version = BinaryPrimitives.ReadUInt32LittleEndian(header[4..]);
-        if (version != Version)
+        frameLength = version switch
+        {
+            Version => ArticleIndexRecordCodec.RecordLength,
+            Schema2Version => ArticleIndexRecordCodec.Schema2RecordLength,
+            _ => 0,
+        };
+        if (frameLength == 0)
         {
             throw new ArticleIndexCorruptException(
                 $"Article index snapshot version {version} is not supported.",
@@ -205,7 +218,7 @@ internal static class ArticleIndexSnapshotCodec
         }
 
         if (recordCount > int.MaxValue
-            || HeaderLength + (recordCount * (ulong)ArticleIndexRecordCodec.RecordLength) + TrailerLength != (ulong)length)
+            || HeaderLength + (recordCount * (ulong)frameLength) + TrailerLength != (ulong)length)
         {
             throw new ArticleIndexCorruptException(
                 $"Article index snapshot length {length} does not match record count {recordCount}.",

@@ -7,9 +7,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// Streams a legacy append-only <c>article.index</c> one fixed frame at a time.
 /// </summary>
 /// <remarks>
-/// The frame layout is <see cref="ArticleIndexRecordCodec.RecordLength"/> bytes.
+/// Each frame declares its length. Schema 3 is <see cref="ArticleIndexRecordCodec.RecordLength"/>
+/// bytes. Schema 2 is <see cref="ArticleIndexRecordCodec.Schema2RecordLength"/> bytes and is still read.
 /// The file length stays a <see cref="long"/> and is never used as a buffer size.
-/// A declared length other than the fixed record size fails closed before any further read.
+/// A declared length other than those two sizes fails closed before any further read.
 /// </remarks>
 internal static class ArticleIndexReplayer
 {
@@ -54,7 +55,7 @@ internal static class ArticleIndexReplayer
             _ = stream.Seek(startOffset, SeekOrigin.Begin);
         }
 
-        var frame = new byte[ArticleIndexRecordCodec.RecordLength];
+        var frame = new byte[ArticleIndexRecordCodec.MaxFrameLength];
         var offset = startOffset;
         while (offset < fileLength)
         {
@@ -67,21 +68,21 @@ internal static class ArticleIndexReplayer
 
             ReadExact(stream, frame, 0, 4);
             var declared = BinaryPrimitives.ReadUInt32LittleEndian(frame);
-            if (declared != (uint)ArticleIndexRecordCodec.RecordLength)
+            if (!ArticleIndexRecordCodec.IsAcceptedFrameLength(declared))
             {
                 onFailure(offset, fileLength, ArticleIndexFrameError.CorruptLength);
                 return;
             }
 
-            if (remaining < ArticleIndexRecordCodec.RecordLength)
+            if (remaining < declared)
             {
                 onFailure(offset, fileLength, ArticleIndexFrameError.Incomplete);
                 return;
             }
 
-            ReadExact(stream, frame, 4, ArticleIndexRecordCodec.RecordLength - 4);
+            ReadExact(stream, frame, 4, (int)declared - 4);
             if (!ArticleIndexRecordCodec.TryDecode(
-                    frame,
+                    frame.AsSpan(0, (int)declared),
                     out var frameLength,
                     out var metadata,
                     out var error))

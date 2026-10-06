@@ -21,6 +21,8 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(0, storage.JournalCheckpointThresholdBytes);
         Assert.Equal(0, storage.IndexCheckpointThresholdBytes);
         Assert.Equal(256L * 1024 * 1024, storage.SegmentTargetSizeBytes);
+        Assert.Equal(ArticleStorageOptions.DefaultMaxRetentionAge, storage.MaxRetentionAge);
+        Assert.Equal(TimeSpan.Zero, storage.MaxRetentionAge);
         Assert.Equal(ArticleStorageOptions.DefaultMaxSegmentSealDelay, storage.MaxSegmentSealDelay);
         Assert.Equal(TimeSpan.FromSeconds(60), storage.MaxSegmentSealDelay);
         Assert.Equal(ArticleStorageOptions.DefaultActiveSegmentCount, storage.ActiveSegmentCount);

@@ -45,6 +45,11 @@ public sealed class ArticleStorageOptions
     public static readonly TimeSpan DefaultMaxSegmentSealDelay = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// Default maximum retention age. <see cref="TimeSpan.Zero"/> disables age-based expiration.
+    /// </summary>
+    public static readonly TimeSpan DefaultMaxRetentionAge = TimeSpan.Zero;
+
+    /// <summary>
     /// Default number of segment files that may accept appends at the same time.
     /// </summary>
     public const int DefaultActiveSegmentCount = 1;
@@ -148,6 +153,23 @@ public sealed class ArticleStorageOptions
     /// </para>
     /// </remarks>
     public TimeSpan MaxSegmentSealDelay { get; set; } = DefaultMaxSegmentSealDelay;
+
+    /// <summary>
+    /// Gets or sets the maximum age of a bulk-committed article before it is eligible to leave retention.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>00:00:00</c> disables age-based expiration. Negative values are rejected. There is no
+    /// finite default. Age is measured from durable Accept arrival, not from a Message-ID or
+    /// Date header and not from index <c>LastAccessUtc</c>.
+    /// </para>
+    /// <para>
+    /// The option does not delete segments, rewrite articles, or change index state. A later
+    /// executor would turn eligibility into an <c>Evicted</c> tombstone.
+    /// An article whose arrival time cannot be reconstructed is not eligible.
+    /// </para>
+    /// </remarks>
+    public TimeSpan MaxRetentionAge { get; set; } = DefaultMaxRetentionAge;
 
     /// <summary>
     /// Gets or sets how many segment files may accept appends concurrently.

@@ -285,7 +285,8 @@ public sealed class MemoryArticleStorageEngine : IArticleStorageEngine, IArticle
                 new StoredArticleLocation(default, 0, accept.ArtSize),
                 ArticleStorageState.Present,
                 accept.AcceptedUtc,
-                accept.Sequence),
+                accept.Sequence,
+                accept.AcceptedUtc),
             bytes);
         return true;
     }
@@ -383,7 +384,8 @@ public sealed class MemoryArticleStorageEngine : IArticleStorageEngine, IArticle
             written.Location,
             ArticleStorageState.Present,
             _timeProvider.GetUtcNow(),
-            accept.Sequence);
+            accept.Sequence,
+            accept.AcceptedUtc);
 
         if (!_index.TryCommitPresent(in metadata))
         {

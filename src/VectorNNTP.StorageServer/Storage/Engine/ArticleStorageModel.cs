@@ -389,6 +389,12 @@ public readonly record struct StoredArticleLocation(SegmentId SegmentId, long Of
 /// Journal Accept sequence that established this logical state. Relocation and death copy it.
 /// A newer Accept replaces it. Zero is not a journal sequence; allocation starts at 1.
 /// </param>
+/// <param name="AcceptedUtc">
+/// Original local arrival instant from the journal Accept that established the row.
+/// Relocation, eviction, invalidation, checkpoint, and replay copy it. They do not replace it
+/// with publication, access, or restart time. <see cref="DateTimeOffset.MinValue"/> means the
+/// instant was not stored (a schema 2 index row). It is not an arrival time.
+/// </param>
 public readonly record struct StoredArticleMetadata(
     ArticleId ArtId,
     ulong ArtHash,
@@ -396,7 +402,8 @@ public readonly record struct StoredArticleMetadata(
     StoredArticleLocation Location,
     ArticleStorageState State,
     DateTimeOffset LastAccessUtc,
-    ulong Sequence);
+    ulong Sequence,
+    DateTimeOffset AcceptedUtc = default);
 
 /// <summary>
 /// Segment catalogue entry with live/dead accounting and retirement fencing.

@@ -200,6 +200,12 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
                 "StorageServer:Storage:MaxSegmentSealDelay must be greater than or equal to 00:00:00. 00:00:00 disables age sealing.");
         }
 
+        if (options.Storage.MaxRetentionAge < TimeSpan.Zero)
+        {
+            failures.Add(
+                "StorageServer:Storage:MaxRetentionAge must be greater than or equal to 00:00:00. 00:00:00 disables age-based retention.");
+        }
+
         if (options.Storage.JournalCheckpointThresholdBytes < 0)
         {
             failures.Add(

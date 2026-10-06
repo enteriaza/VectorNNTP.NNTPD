@@ -2148,7 +2148,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         cachedIndexMeta.Location,
                         ArticleStorageState.Present,
                         _timeProvider.GetUtcNow(),
-                        cachedIndexMeta.Sequence),
+                        cachedIndexMeta.Sequence,
+                        cachedIndexMeta.AcceptedUtc),
                     cached.ArtData);
                 Interlocked.Increment(ref _cacheArticleReadCount);
                 return true;
@@ -2306,7 +2307,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             new StoredArticleLocation(default, 0, accept.ArtSize),
             ArticleStorageState.Present,
             accept.AcceptedUtc,
-            accept.Sequence);
+            accept.Sequence,
+            accept.AcceptedUtc);
 
     /// <summary>
     /// Reads <paramref name="snapshot"/> without holding the index lock across segment IO.
@@ -3166,7 +3168,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     written.Location,
                     ArticleStorageState.Present,
                     _timeProvider.GetUtcNow(),
-                    accept.Sequence);
+                    accept.Sequence,
+                    accept.AcceptedUtc);
                 if (!PublishPresentFrame(accept.Sequence, in metadata)
                     && !ShouldFinishPhysicalWrittenWithoutPublishing(accept, written.Location))
                 {
@@ -3272,7 +3275,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             indexed.Location,
             ArticleStorageState.Present,
             _timeProvider.GetUtcNow(),
-            indexed.Sequence);
+            indexed.Sequence,
+            indexed.AcceptedUtc);
         var createAllocBefore = IndexCommittedProbe.Allocated();
         var createStart = IndexCommittedProbe.MarkArticle();
         IndexCommittedProbe.EnterCreateProof();

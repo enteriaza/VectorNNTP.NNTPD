@@ -30,11 +30,11 @@ public sealed class IndexSequenceProvenanceTests
             new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero),
             42UL);
         var encoded = ArticleIndexRecordCodec.Encode(metadata);
-        Assert.Equal(96, encoded.Length);
+        Assert.Equal(104, encoded.Length);
         Assert.Equal(ArticleIndexRecordCodec.RecordLength, encoded.Length);
         Assert.True(ArticleIndexRecordCodec.TryDecode(encoded, out var length, out var decoded, out var error));
         Assert.Equal(ArticleIndexFrameError.None, error);
-        Assert.Equal(96, length);
+        Assert.Equal(104, length);
         Assert.Equal(metadata, decoded);
 
         encoded[4] = 1;
@@ -77,7 +77,7 @@ public sealed class IndexSequenceProvenanceTests
             Assert.True(index.TryCommitPresent(row with { State = ArticleStorageState.Present }));
             Assert.True(index.TrySetState(row.ArtId, ArticleStorageState.Evicted, row.LastAccessUtc));
             _ = index.WriteSnapshot();
-            Assert.Equal(2u, ArticleIndexSnapshotCodec.Version);
+            Assert.Equal(3u, ArticleIndexSnapshotCodec.Version);
             Assert.Equal(2u, ArticleIndexDeltaFile.Version);
             _ = index.Checkpoint();
         }

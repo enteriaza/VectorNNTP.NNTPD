@@ -502,7 +502,8 @@ public sealed partial class FileArticleStorageEngine
             item.Location,
             ArticleStorageState.Present,
             _timeProvider.GetUtcNow(),
-            item.Sequence));
+            item.Sequence,
+            item.Accept.AcceptedUtc));
         publishing.Add(item);
     }
 

@@ -17,9 +17,9 @@ public sealed class IndexEntryCapacityReservationTests
     private const long IndexBytes = ArticleIndexRecordCodec.RecordLength;
 
     [Fact]
-    public void Present_frame_is_96_bytes()
+    public void Present_frame_is_104_bytes()
     {
-        Assert.Equal(96, ArticleIndexRecordCodec.RecordLength);
+        Assert.Equal(104, ArticleIndexRecordCodec.RecordLength);
         Assert.Equal(IndexBytes, ArticleIndexRecordCodec.RecordLength);
     }
 

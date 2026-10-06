@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
@@ -12,8 +13,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// <para>
 /// Single append-only file <c>article.index</c>. Each durable mutation appends a full
 /// <see cref="StoredArticleMetadata"/> snapshot; replay is last-write-wins per
-/// <see cref="ArticleId"/>. Startup reads one
-/// <see cref="ArticleIndexRecordCodec.RecordLength"/>-byte frame at a time, so the
+/// <see cref="ArticleId"/>. Startup reads one schema 2 or schema 3 frame at a time, so the
 /// file-byte working set does not grow with the file. Durability uses
 /// <see cref="FileStream.Flush(bool)"/> with <c>flushToDisk: true</c>.
 /// </para>
@@ -1145,7 +1145,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             ObjectDisposedException.ThrowIf(_disposed, this);
             var frameBase = FrameBaseUnlocked();
             var length = _stream.Length;
-            if (length < frameBase || (length - frameBase) % ArticleIndexRecordCodec.RecordLength != 0)
+            if (length < frameBase || !ArticleIndexRecordCodec.EndsOnFrameBoundary(_stream, frameBase, length))
             {
                 throw new ArticleIndexCorruptException(
                     $"Article index length {length} is not an aligned checkpoint boundary.",
@@ -1637,14 +1637,15 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         try
         {
             _stream.Position = start;
-            var frame = new byte[ArticleIndexRecordCodec.RecordLength];
+            var frame = new byte[ArticleIndexRecordCodec.MaxFrameLength];
             var offset = start;
-            while (offset + frame.Length <= length)
+            while (offset + 4 <= length)
             {
+                _stream.Position = offset;
                 var filled = 0;
-                while (filled < frame.Length)
+                while (filled < 4)
                 {
-                    var read = _stream.Read(frame, filled, frame.Length - filled);
+                    var read = _stream.Read(frame, filled, 4 - filled);
                     if (read == 0)
                     {
                         return;
@@ -1653,12 +1654,29 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
                     filled += read;
                 }
 
-                if (ArticleIndexRecordCodec.TryDecode(frame, out _, out var metadata, out _))
+                var declared = BinaryPrimitives.ReadUInt32LittleEndian(frame);
+                if (!ArticleIndexRecordCodec.IsAcceptedFrameLength(declared) || offset + declared > length)
+                {
+                    return;
+                }
+
+                while (filled < declared)
+                {
+                    var read = _stream.Read(frame, filled, (int)declared - filled);
+                    if (read == 0)
+                    {
+                        return;
+                    }
+
+                    filled += read;
+                }
+
+                if (ArticleIndexRecordCodec.TryDecode(frame.AsSpan(0, (int)declared), out _, out var metadata, out _))
                 {
                     frames.Add(new RetainedIndexFrame(metadata.ArtId, offset, SnapshotGeneration: 0));
                 }
 
-                offset += frame.Length;
+                offset += declared;
             }
         }
         finally
@@ -1766,7 +1784,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         return snapshot.CoveredIndexLength;
     }
 
-    private static void ValidateSnapshotCoverage(long coveredIndexLength, long indexLength, long frameBase)
+    private void ValidateSnapshotCoverage(long coveredIndexLength, long indexLength, long frameBase)
     {
         if (coveredIndexLength < frameBase || coveredIndexLength > indexLength)
         {
@@ -1775,10 +1793,10 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
                 coveredIndexLength);
         }
 
-        if ((coveredIndexLength - frameBase) % ArticleIndexRecordCodec.RecordLength != 0)
+        if (!ArticleIndexRecordCodec.EndsOnFrameBoundary(_stream, frameBase, coveredIndexLength))
         {
             throw new ArticleIndexCorruptException(
-                $"Article index snapshot covered length {coveredIndexLength} is not aligned to an {ArticleIndexRecordCodec.RecordLength}-byte frame.",
+                $"Article index snapshot covered length {coveredIndexLength} is not aligned to a frame boundary.",
                 coveredIndexLength);
         }
     }
@@ -1791,7 +1809,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         switch (error)
         {
             case ArticleIndexFrameError.Incomplete:
-                // Fixed RecordLength: fewer than RecordLength bytes at EOF is a genuine torn write.
+                // Fewer than the declared frame length at EOF is a genuine torn write.
                 TruncateTornTailUnlocked(offset, fileLength, "incomplete-final-frame");
                 return;
 
