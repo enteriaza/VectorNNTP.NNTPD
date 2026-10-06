@@ -1639,21 +1639,18 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>
     /// True when <paramref name="metadata"/> names a segment record that proves that identity.
-    /// Uses the same read proof as an indexed article read. Does not modify index or catalogue state.
+    /// Uses the same single record proof as an indexed article read. Does not modify index or catalogue state.
     /// </summary>
     private bool PresentLocationProves(in StoredArticleMetadata metadata)
     {
+        // TryReadProven already proved this record: CRC, header identity, one XxHash3,
+        // and one Message-ID derivation. The returned copy is not used here.
         return _segments.TryReadProven(
-                metadata.Location,
-                metadata.ArtId,
-                metadata.ArtHash,
-                metadata.ArtSize,
-                out var artData)
-            && ArticleStorageIntegrity.TryProve(
-                artData.Span,
-                metadata.ArtId,
-                metadata.ArtHash,
-                metadata.ArtSize);
+            metadata.Location,
+            metadata.ArtId,
+            metadata.ArtHash,
+            metadata.ArtSize,
+            out _);
     }
 
     /// <summary>
@@ -2331,18 +2328,15 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             TestHookBeforeProvenSegmentRead?.Invoke();
         }
 
+        // TryReadProven returns a private payload copy already proved against this identity.
+        // Nothing else can see that array before the checks below, so it is not hashed again.
         if (failProvenRead
             || !_segments.TryReadProven(
                 snapshot.Location,
                 snapshot.ArtId,
                 snapshot.ArtHash,
                 snapshot.ArtSize,
-                out var artData)
-            || !ArticleStorageIntegrity.TryProve(
-                artData.Span,
-                snapshot.ArtId,
-                snapshot.ArtHash,
-                snapshot.ArtSize))
+                out var artData))
         {
             if (!_index.TryGet(snapshot.ArtId, out var current)
                 || current.State != ArticleStorageState.Present)
@@ -3670,7 +3664,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// Builds a CanonicalV1 <see cref="ArticleRecord"/> for cache insertion from durable bytes.
     /// </summary>
     /// <remarks>
-    /// The returned record owns a new payload buffer. The caller transfers that buffer with
+    /// <paramref name="artData"/> is the private copy already proved by
+    /// <see cref="FileSegmentStore.TryReadProven"/> against <paramref name="metadata"/>.
+    /// This method does not hash it again. It copies those bytes into a cache-owned buffer.
+    /// Cache insertion proves that owned buffer. The caller transfers the new record with
     /// <see cref="PublishCreatedCacheRecord"/> and does not mutate, reuse, or retain it.
     /// Journal IndexCommitted population uses <see cref="TryCreateCacheRecordFromDetachedJournalPayload"/>
     /// so the Accept buffer is not copied again.
@@ -3681,19 +3678,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         out ArticleRecord record)
     {
         record = default;
-        var proveStart = IndexCommittedProbe.MarkArticle();
-        if (artData.Length != metadata.ArtSize
-            || !ArticleStorageIntegrity.TryProve(
-                artData.Span,
-                metadata.ArtId,
-                metadata.ArtHash,
-                metadata.ArtSize))
+        if (artData.Length != metadata.ArtSize || artData.Length < 1)
         {
-            IndexCommittedProbe.AddCreateProve(proveStart);
             return false;
         }
 
-        IndexCommittedProbe.AddCreateProve(proveStart);
         var copyStart = IndexCommittedProbe.MarkArticle();
         var bytes = artData.ToArray();
         IndexCommittedProbe.AddCreateCopy(copyStart, bytes.Length);
