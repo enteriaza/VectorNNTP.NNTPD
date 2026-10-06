@@ -270,4 +270,23 @@ internal static partial class FileArticleStorageEngineLogMessages
         Level = LogLevel.Error,
         Message = "Retention expiration failed (artId={ArtId})")]
     public static partial void RetentionExpirationFailed(ILogger logger, Exception ex, string ArtId);
+
+    [LoggerMessage(
+        EventId = 3429,
+        Level = LogLevel.Information,
+        Message = "Fully-dead segment reclaimed (segmentId={SegmentId}, bytes={Bytes}, reason={Reason})")]
+    public static partial void FullyDeadSegmentReclaimed(
+        ILogger logger,
+        ulong SegmentId,
+        long Bytes,
+        string Reason);
+
+    [LoggerMessage(
+        EventId = 3430,
+        Level = LogLevel.Error,
+        Message = "Fully-dead segment deletion failed (segmentId={SegmentId}, reason={Reason})")]
+    public static partial void FullyDeadSegmentReclamationFailed(
+        ILogger logger,
+        ulong SegmentId,
+        string Reason);
 }

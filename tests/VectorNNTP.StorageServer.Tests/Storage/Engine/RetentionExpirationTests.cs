@@ -310,11 +310,12 @@ public sealed class RetentionExpirationTests
         await using var engine = FileArticleStorageEngine.Open(dir.Options, timeProvider: time);
         var record = await PublishAsync(engine, "<phase23-maint@seg.test>");
         Assert.True(engine.Index.TryGet(record.ArtId, out var published));
-        time.Advance(MaxAge);
+        var age = TimeSpan.FromMinutes(1);
+        time.Advance(age);
         var coordinator = new StorageMaintenanceCoordinator(
             engine,
             new ArticleSegmentPolicy(long.MaxValue, 100),
-            maxRetentionAge: MaxAge);
+            maxRetentionAge: age);
         var maintenance = await coordinator.RunOnceAsync(CancellationToken.None);
         Assert.False(maintenance.ReclamationAttempted);
         Assert.False(maintenance.CompactionAttempted);

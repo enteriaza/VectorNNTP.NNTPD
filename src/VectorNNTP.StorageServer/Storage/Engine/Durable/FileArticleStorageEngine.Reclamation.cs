@@ -171,6 +171,252 @@ public sealed partial class FileArticleStorageEngine
         }
     }
 
+    /// <summary>
+    /// Deletes one Closed segment whose catalogue accounting shows zero live bytes and no
+    /// unclassified gap, then forgets Evicted and Invalid index rows for that segment.
+    /// </summary>
+    /// <remarks>
+    /// Refuses Active segments, Retired segments, and any Closed segment that still has a
+    /// Present row, pending publication, or a catalogue generation other than
+    /// <paramref name="expectedGeneration"/>. The physical file is deleted before the catalogue
+    /// entry and before index rows are forgotten. A failed delete leaves the file, catalogue,
+    /// and index rows in place.
+    /// </remarks>
+    /// <param name="segmentId">Closed segment selected as fully dead.</param>
+    /// <param name="expectedGeneration">Catalogue generation observed when the segment was selected.</param>
+    /// <param name="cancellationToken">Cancels before the physical delete.</param>
+    /// <returns>The reclamation outcome. <see cref="ArticleSegmentReclamationOutcome.Reclaimed"/> means the file was deleted.</returns>
+    public Task<ArticleSegmentReclamationResult> ReclaimFullyDeadClosedSegmentAsync(
+        SegmentId segmentId,
+        ulong expectedGeneration,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var closedPath = Path.Combine(
+            _segments.RootPath,
+            SegmentFileNames.Format(segmentId, SegmentFileKind.Closed));
+        var activePath = Path.Combine(
+            _segments.RootPath,
+            SegmentFileNames.Format(segmentId, SegmentFileKind.Active));
+        var retiredPath = Path.Combine(
+            _segments.RootPath,
+            SegmentFileNames.Format(segmentId, SegmentFileKind.Retired));
+
+        if (!Catalogue.TryGet(segmentId, out var info))
+        {
+            if (!File.Exists(closedPath) && !File.Exists(activePath) && !File.Exists(retiredPath))
+            {
+                _ = _index.ForgetReclaimedSegment(segmentId);
+                return Task.FromResult(new ArticleSegmentReclamationResult(
+                    ArticleSegmentReclamationOutcome.IdempotentAlreadyReclaimed,
+                    segmentId,
+                    PhysicalFileDeleted: false,
+                    CatalogueEntryRemoved: true,
+                    Reason: "already-reclaimed"));
+            }
+
+            return Task.FromResult(new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.RejectedMissing,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: "catalogue-missing"));
+        }
+
+        if (info.State == SegmentState.Active || info.Generation != expectedGeneration)
+        {
+            var reason = info.State == SegmentState.Active ? "segment-active" : "generation-changed";
+            return Task.FromResult(new ArticleSegmentReclamationResult(
+                info.State == SegmentState.Active
+                    ? ArticleSegmentReclamationOutcome.RejectedActive
+                    : ArticleSegmentReclamationOutcome.RejectedUnexpectedPhysical,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: reason));
+        }
+
+        if (info.State != SegmentState.Closed)
+        {
+            return Task.FromResult(new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.Failed,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: "segment-not-closed"));
+        }
+
+        if (!SegmentLifecycle.IsReclaimable(info))
+        {
+            var reason = info.LiveBytes > 0 ? "live-bytes-remain" : "extent-accounting-incomplete";
+            return Task.FromResult(new ArticleSegmentReclamationResult(
+                info.LiveBytes > 0
+                    ? ArticleSegmentReclamationOutcome.RejectedPresentRemain
+                    : ArticleSegmentReclamationOutcome.RejectedClosed,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: reason));
+        }
+
+        if (!TryReadSourcePublicationFence(segmentId, out var fenceReason))
+        {
+            return Task.FromResult(new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.RejectedPresentRemain,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: fenceReason ?? "present-remain-on-source"));
+        }
+
+        if (!Catalogue.TryGet(segmentId, out info)
+            || info.State != SegmentState.Closed
+            || info.Generation != expectedGeneration
+            || !SegmentLifecycle.IsReclaimable(info))
+        {
+            return Task.FromResult(new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.RejectedUnexpectedPhysical,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: "stale-fully-dead-candidate"));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfReclamationFault(ReclamationFaultPoint.BeforeDelete);
+
+        var existedBefore = File.Exists(closedPath);
+        var reclaimedBytes = info.SizeBytes;
+        Action? afterDeleteHook = null;
+        if (TestReclamationFaultPoint == ReclamationFaultPoint.AfterDeleteBeforeCatalogueRemove)
+        {
+            TestReclamationFaultPoint = ReclamationFaultPoint.None;
+            afterDeleteHook = static () =>
+                throw new IOException("Injected reclamation fault at AfterDeleteBeforeCatalogueRemove.");
+        }
+
+        try
+        {
+            if (!_segments.TryReclaimFullyDeadClosed(
+                    segmentId,
+                    expectedGeneration,
+                    out var failureReason,
+                    afterDeleteHook))
+            {
+                FileArticleStorageEngineLogMessages.FullyDeadSegmentReclamationFailed(
+                    _logger,
+                    segmentId.Value,
+                    failureReason ?? "reclaim-failed");
+                return Task.FromResult(MapClosedReclaimFailure(segmentId, failureReason));
+            }
+
+            if (string.Equals(failureReason, "already-reclaimed", StringComparison.Ordinal)
+                || !existedBefore)
+            {
+                _ = _index.ForgetReclaimedSegment(segmentId);
+                return Task.FromResult(new ArticleSegmentReclamationResult(
+                    ArticleSegmentReclamationOutcome.IdempotentAlreadyReclaimed,
+                    segmentId,
+                    PhysicalFileDeleted: false,
+                    CatalogueEntryRemoved: !Catalogue.TryGet(segmentId, out _),
+                    Reason: "already-reclaimed"));
+            }
+
+            if (_capacityAdmissionEnabled)
+            {
+                _ = RequireSegmentVolume().WithLedger(ledger =>
+                {
+                    _ = ledger.ReleaseCompactionDestinationsOnSegment(segmentId);
+                    _ = ledger.ReleaseWrittenArticleCopiesOnSegment(segmentId);
+                    return true;
+                });
+            }
+
+            _ = _index.ForgetReclaimedSegment(segmentId);
+            FileArticleStorageEngineLogMessages.FullyDeadSegmentReclaimed(
+                _logger,
+                segmentId.Value,
+                reclaimedBytes,
+                "fully-dead");
+            return Task.FromResult(new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.Reclaimed,
+                segmentId,
+                PhysicalFileDeleted: true,
+                CatalogueEntryRemoved: !Catalogue.TryGet(segmentId, out _),
+                Reason: "fully-dead"));
+        }
+        catch (IOException) when (afterDeleteHook is not null)
+        {
+            if (_capacityAdmissionEnabled)
+            {
+                _ = RequireSegmentVolume().WithLedger(
+                    ledger => ledger.ReleaseWrittenArticleCopiesOnSegment(segmentId));
+            }
+
+            throw;
+        }
+    }
+
+    private static ArticleSegmentReclamationResult MapClosedReclaimFailure(
+        SegmentId segmentId,
+        string? failureReason)
+    {
+        if (failureReason is not null && failureReason.StartsWith("delete-failed:", StringComparison.Ordinal))
+        {
+            return new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.Failed,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: failureReason);
+        }
+
+        return failureReason switch
+        {
+            "segment-active" => new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.RejectedActive,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: failureReason),
+            "live-bytes-remain" => new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.RejectedPresentRemain,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: failureReason),
+            "extent-accounting-incomplete" or "segment-not-closed" => new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.RejectedClosed,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: failureReason),
+            "generation-changed" or "stale-fully-dead-candidate"
+                or "unexpected-active-or-retired-file"
+                or "runtime-not-closed"
+                or "runtime-path-not-closed" => new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.RejectedUnexpectedPhysical,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: failureReason),
+            "catalogue-missing-with-closed-file" => new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.RejectedMissing,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: failureReason),
+            _ => new ArticleSegmentReclamationResult(
+                ArticleSegmentReclamationOutcome.Failed,
+                segmentId,
+                PhysicalFileDeleted: false,
+                CatalogueEntryRemoved: false,
+                Reason: failureReason ?? "reclaim-failed"),
+        };
+    }
+
     private static ArticleSegmentReclamationResult MapReclaimFailure(
         SegmentId segmentId,
         string? failureReason)

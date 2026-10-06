@@ -170,7 +170,7 @@ public sealed class FinishCostPressureFeasibilityTests
 
         var result = await CreateCoordinator(engine).RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
         Assert.Equal(sourceId, result.SegmentId);
         Assert.False(engine.Segments.TryGetSegmentInfo(sourceId, out _));
     }
@@ -272,10 +272,10 @@ public sealed class FinishCostPressureFeasibilityTests
         coordinator.TestHookAfterCompactionVictimSelected = id => selected = id;
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(highId, selected);
+        Assert.Null(selected);
         Assert.Equal(highId, result.SegmentId);
         Assert.NotEqual(lowId, result.SegmentId);
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
     }
 
     private static StorageMaintenanceCoordinator CreateCoordinator(FileArticleStorageEngine engine) =>

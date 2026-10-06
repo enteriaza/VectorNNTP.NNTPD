@@ -82,12 +82,9 @@ public sealed class StorageMaintenanceCoordinatorTests
 
         var coordinator = CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0);
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
         Assert.Equal(sourceId, result.SegmentId);
-        Assert.True(result.CompactionAttempted);
-        Assert.True(result.CompactionCommitted);
-        Assert.True(result.RetirementAttempted);
-        Assert.True(result.Retired);
+        Assert.False(result.CompactionAttempted);
         Assert.True(result.ReclamationAttempted);
         Assert.True(result.Reclaimed);
         Assert.False(engine.Segments.TryGetSegmentInfo(sourceId, out _));
@@ -103,11 +100,9 @@ public sealed class StorageMaintenanceCoordinatorTests
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(a, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
-        Assert.True(engine.TryEvict(a.ArtId));
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(b, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         await engine.Segments.CloseActiveAsync(CancellationToken.None);
-        Assert.True(engine.TryEvict(b.ArtId));
 
         var coordinator = CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0);
         SegmentId selected = default;
@@ -197,8 +192,10 @@ public sealed class StorageMaintenanceCoordinatorTests
     {
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<mnt-i@seg.test>");
+        var keep = CreateRecord("<mnt-i-keep@seg.test>");
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(keep, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         var sourceId = meta.Location.SegmentId;
@@ -219,8 +216,10 @@ public sealed class StorageMaintenanceCoordinatorTests
     {
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<mnt-j@seg.test>");
+        var keep = CreateRecord("<mnt-j-keep@seg.test>");
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(keep, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out var meta));
         var sourceId = meta.Location.SegmentId;
@@ -462,7 +461,8 @@ public sealed class StorageMaintenanceCoordinatorTests
 
         var coordinator = CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0);
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
+        Assert.False(result.CompactionAttempted);
         Assert.Equal(puts, cache.PutCount);
         Assert.Equal(removes, cache.RemoveCount);
     }
@@ -483,7 +483,8 @@ public sealed class StorageMaintenanceCoordinatorTests
 
         var coordinator = CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0);
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
+        Assert.False(result.CompactionAttempted);
         Assert.False(engine.Segments.TryGetSegmentInfo(sourceId, out _));
         Assert.True(before.SizeBytes > 0);
     }

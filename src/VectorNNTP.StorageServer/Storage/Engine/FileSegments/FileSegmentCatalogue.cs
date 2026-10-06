@@ -104,6 +104,31 @@ public sealed class FileSegmentCatalogue : ISegmentCatalogue
     }
 
     /// <summary>
+    /// Removes a Closed catalogue entry after its physical <c>.closed</c> file has been deleted.
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> when the entry was removed or already absent;
+    /// <see langword="false"/> when the entry exists but is not Closed.
+    /// </returns>
+    public bool TryRemoveClosed(SegmentId segmentId)
+    {
+        lock (_gate)
+        {
+            if (!_entries.TryGetValue(segmentId.Value, out var existing))
+            {
+                return true;
+            }
+
+            if (existing.State != SegmentState.Closed)
+            {
+                return false;
+            }
+
+            return _entries.Remove(segmentId.Value);
+        }
+    }
+
+    /// <summary>
     /// Removes a Retired catalogue entry after its physical <c>.retired</c> file has been deleted.
     /// </summary>
     /// <returns>

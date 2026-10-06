@@ -83,8 +83,10 @@ public sealed class StorageMaintenanceOperationalReportingTests
     {
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<op-f@seg.test>");
+        var keep = CreateRecord("<op-f-keep@seg.test>");
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
         Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(keep, CancellationToken.None)).Outcome);
         await engine.DrainPendingAsync(CancellationToken.None);
         Assert.True(engine.Index.TryGet(record.ArtId, out _));
         await engine.Segments.CloseActiveAsync(CancellationToken.None);

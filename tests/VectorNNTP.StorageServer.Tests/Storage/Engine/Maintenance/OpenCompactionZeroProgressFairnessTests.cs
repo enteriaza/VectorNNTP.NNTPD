@@ -37,8 +37,8 @@ public sealed class OpenCompactionZeroProgressFairnessTests
 
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(s2Id, selectedClosed);
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Null(selectedClosed);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
         Assert.Equal(s2Id, result.SegmentId);
         Assert.NotEqual(c1Source, result.SegmentId);
         Assert.Equal(c1CompactionId, result.DeferredOpenCompactionId);
@@ -230,7 +230,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
 
         var result = await CreateCoordinator(engine).RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
         Assert.Equal(s3Id, result.SegmentId);
         Assert.Equal(c1Id, result.DeferredOpenCompactionId);
         Assert.Equal(c1Source, result.DeferredOpenSourceSegmentId);
@@ -293,7 +293,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
         capacity.UsedBytes = LeaveRoomForJournalOnlyCompaction(engine);
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
         Assert.Equal(s2Id, result.SegmentId);
         Assert.NotEqual(c1Source, result.SegmentId);
         Assert.Equal(
@@ -316,7 +316,7 @@ public sealed class OpenCompactionZeroProgressFairnessTests
 
         var result = await CreateCoordinator(engine).RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
         Assert.Equal(s2Id, result.SegmentId);
         Assert.True(result.Reclaimed);
         Assert.NotEqual(c1Id, result.CompactionId);

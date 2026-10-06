@@ -19,8 +19,8 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// When <c>MaxRetentionAge</c> is positive, <see cref="RunOnceAsync"/> first expires one bounded
 /// batch of eligible Present articles. That pass reads index metadata only. Zero skips it.
 /// One <see cref="RunOnceAsync"/> performs at most one useful maintenance cycle:
-/// reclaim one Retired segment, or continue/finish one compaction lifecycle
-/// (compact → retire → reclaim). No timers, workers, or hosted-service wiring.
+/// reclaim one Retired segment, reclaim one fully-dead Closed segment, or continue/finish
+/// one compaction lifecycle (compact → retire → reclaim). No timers, workers, or hosted-service wiring.
 /// </para>
 /// <para>
 /// Ordering: optional physical-journal checkpoint, optional physical-index checkpoint, then existing Retired physical reclaim; then finish CompactionCommitted
@@ -261,6 +261,22 @@ public sealed class StorageMaintenanceCoordinator
             firstDeferredOpenCapacitySkip ??= reconciled;
         }
 
+        // A closed segment with no live bytes is deleted whole. Open compaction sources and
+        // segments that still owe a physical retirement stay on the compaction path above.
+        if (TrySelectFullyDeadClosed(out var deadClosed))
+        {
+            var reclaimed = await TryReclaimFullyDeadClosedAsync(deadClosed, cancellationToken)
+                .ConfigureAwait(false);
+            if (firstDeferredOpenCapacitySkip is { } priorDead)
+            {
+                return AttachPressure(
+                    reclaimed.WithDeferredOpenCompaction(in priorDead, deferredOpenCount),
+                    _engine.ObserveCapacityAdmissionPressure());
+            }
+
+            return AttachPressure(reclaimed, _engine.ObserveCapacityAdmissionPressure());
+        }
+
         // 4) Select a new Closed compaction victim (pressure-aware when under admission pressure).
         var closedResult = await SelectAndRunClosedVictimAsync(pressure, cancellationToken)
             .ConfigureAwait(false);
@@ -452,6 +468,85 @@ public sealed class StorageMaintenanceCoordinator
             .ReclaimRetiredSegmentAsync(segmentId, cancellationToken)
             .ConfigureAwait(false);
 
+        return MapReclamationOnly(reclaim, segment.SizeBytes);
+    }
+
+    /// <summary>
+    /// Selects the lowest-id Closed segment whose live bytes are zero and whose size is fully
+    /// classified as dead. Active and Retired entries are ignored.
+    /// </summary>
+    private bool TrySelectFullyDeadClosed(out SegmentInfo victim)
+    {
+        victim = default;
+        var reserved = CompactionReservedSegmentIds();
+        SegmentInfo? best = null;
+        foreach (var entry in _engine.Catalogue.Snapshot())
+        {
+            if (!SegmentLifecycle.IsReclaimable(entry) || reserved.Contains(entry.SegmentId.Value))
+            {
+                continue;
+            }
+
+            if (best is null || entry.SegmentId.Value < best.Value.SegmentId.Value)
+            {
+                best = entry;
+            }
+        }
+
+        if (best is null)
+        {
+            return false;
+        }
+
+        victim = best.Value;
+        return true;
+    }
+
+    /// <summary>
+    /// Segment ids named by a compaction that is still open, or whose journal retirement has
+    /// not yet renamed the closed file. Direct deletion must not remove those files.
+    /// </summary>
+    private HashSet<ulong> CompactionReservedSegmentIds()
+    {
+        var reserved = new HashSet<ulong>();
+        foreach (var entry in _engine.Journal.EnumerateCompactions())
+        {
+            var sourceId = entry.Begin.SourceSegmentId;
+            if (entry.Retired is null)
+            {
+                _ = reserved.Add(sourceId.Value);
+                continue;
+            }
+
+            if (_engine.Catalogue.TryGet(sourceId, out var info) && info.State == SegmentState.Closed)
+            {
+                _ = reserved.Add(sourceId.Value);
+            }
+        }
+
+        return reserved;
+    }
+
+    /// <summary>
+    /// Revalidates the selected Closed segment, then deletes it only when it is still the same
+    /// fully-dead generation.
+    /// </summary>
+    private async Task<StorageMaintenanceResult> TryReclaimFullyDeadClosedAsync(
+        SegmentInfo segment,
+        CancellationToken cancellationToken)
+    {
+        if (!_engine.Catalogue.TryGet(segment.SegmentId, out var current)
+            || current.Generation != segment.Generation
+            || current.State != SegmentState.Closed
+            || !SegmentLifecycle.IsReclaimable(current))
+        {
+            return Skipped(segment.SegmentId, compactionId: 0, "stale-fully-dead-candidate");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var reclaim = await _engine
+            .ReclaimFullyDeadClosedSegmentAsync(segment.SegmentId, segment.Generation, cancellationToken)
+            .ConfigureAwait(false);
         return MapReclamationOnly(reclaim, segment.SizeBytes);
     }
 

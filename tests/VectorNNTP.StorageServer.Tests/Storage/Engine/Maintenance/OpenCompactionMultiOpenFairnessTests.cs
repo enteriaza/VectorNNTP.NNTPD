@@ -107,8 +107,8 @@ public sealed class OpenCompactionMultiOpenFairnessTests
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
 
         Assert.Equal(new[] { c1Id, c2Id }, openAttempts);
-        Assert.Equal(closedId, closedSelected);
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Null(closedSelected);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
         Assert.Equal(closedId, result.SegmentId);
         Assert.Equal(c1Id, result.DeferredOpenCompactionId);
         Assert.Equal(c1Source, result.DeferredOpenSourceSegmentId);

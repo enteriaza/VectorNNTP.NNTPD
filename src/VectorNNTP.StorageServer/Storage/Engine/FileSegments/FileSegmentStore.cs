@@ -679,6 +679,126 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>
+    /// Deletes the exact <c>.closed</c> file for a fully dead segment, then removes its catalogue
+    /// entry. Refuses unless the catalogue generation still matches and
+    /// <see cref="SegmentLifecycle.IsReclaimable"/> is true under the write gate.
+    /// </summary>
+    /// <param name="segmentId">Closed segment to delete.</param>
+    /// <param name="expectedGeneration">Catalogue generation observed when the segment was selected.</param>
+    /// <param name="failureReason">Diagnostic reason when the method returns <see langword="false"/>.</param>
+    /// <param name="afterDeleteBeforeCatalogueRemove">
+    /// Optional hook invoked after the file delete and before catalogue removal. A throw leaves
+    /// the catalogue entry in place.
+    /// </param>
+    /// <returns><see langword="true"/> when the file was deleted or was already absent.</returns>
+    public bool TryReclaimFullyDeadClosed(
+        SegmentId segmentId,
+        ulong expectedGeneration,
+        out string? failureReason,
+        Action? afterDeleteBeforeCatalogueRemove = null)
+    {
+        failureReason = null;
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            var retiredPath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Retired));
+            var activePath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Active));
+            var closedPath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Closed));
+
+            if (File.Exists(activePath) || File.Exists(retiredPath))
+            {
+                failureReason = "unexpected-active-or-retired-file";
+                return false;
+            }
+
+            if (!_catalogue.TryGet(segmentId, out var info))
+            {
+                if (!File.Exists(closedPath))
+                {
+                    failureReason = "already-reclaimed";
+                    return true;
+                }
+
+                failureReason = "catalogue-missing-with-closed-file";
+                return false;
+            }
+
+            if (info.State == SegmentState.Active)
+            {
+                failureReason = "segment-active";
+                return false;
+            }
+
+            if (info.State != SegmentState.Closed)
+            {
+                failureReason = "segment-not-closed";
+                return false;
+            }
+
+            if (info.Generation != expectedGeneration)
+            {
+                failureReason = "generation-changed";
+                return false;
+            }
+
+            if (!SegmentLifecycle.IsReclaimable(info))
+            {
+                failureReason = info.LiveBytes > 0 ? "live-bytes-remain" : "extent-accounting-incomplete";
+                return false;
+            }
+
+            if (_segments.TryGetValue(segmentId.Value, out var runtime))
+            {
+                if (runtime.State != SegmentState.Closed)
+                {
+                    failureReason = "runtime-not-closed";
+                    return false;
+                }
+
+                if (!string.Equals(runtime.Path, closedPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    failureReason = "runtime-path-not-closed";
+                    return false;
+                }
+
+                runtime.DisposeStream();
+            }
+            else if (!File.Exists(closedPath))
+            {
+                return _catalogue.TryRemoveClosed(segmentId);
+            }
+
+            if (!File.Exists(closedPath))
+            {
+                _ = _segments.Remove(segmentId.Value);
+                return _catalogue.TryRemoveClosed(segmentId);
+            }
+
+            try
+            {
+                File.Delete(closedPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failureReason = "delete-failed:" + ex.GetType().Name;
+                return false;
+            }
+
+            afterDeleteBeforeCatalogueRemove?.Invoke();
+
+            _ = _segments.Remove(segmentId.Value);
+            if (!_catalogue.TryRemoveClosed(segmentId))
+            {
+                failureReason = "catalogue-remove-failed";
+                return false;
+            }
+
+            return true;
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

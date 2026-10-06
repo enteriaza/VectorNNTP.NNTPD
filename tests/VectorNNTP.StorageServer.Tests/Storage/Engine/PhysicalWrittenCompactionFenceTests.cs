@@ -354,7 +354,7 @@ public sealed class PhysicalWrittenCompactionFenceTests
             new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 0));
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
 
-        Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
+        Assert.Equal(StorageMaintenanceOutcome.Reclaimed, result.Outcome);
         Assert.Equal(victimMeta.Location.SegmentId, result.SegmentId);
         Assert.Equal(blocked.CompactionId, result.DeferredOpenCompactionId);
         Assert.Equal("pending-physical-written", result.DeferredOpenSkipReason);

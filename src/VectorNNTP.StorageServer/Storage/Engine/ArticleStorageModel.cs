@@ -69,8 +69,9 @@ public static class SegmentLifecycle
     /// equal to zero is reclaimable, and only when <see cref="SegmentInfo.SizeBytes"/> equals
     /// live plus dead. A gap means unreferenced physical extents have not been classified;
     /// that under-count must not make the segment reclaimable. Active segments are never
-    /// reclaimable. Retired segments are already past rewrite fencing; their physical deletion
-    /// is a later phase and is not expressed by this predicate.
+    /// reclaimable. A maintenance cycle may delete a segment that passes this predicate.
+    /// Retired segments are already past rewrite fencing; their physical deletion uses the
+    /// Retired file path and is not expressed by this predicate.
     /// </remarks>
     public static bool IsReclaimable(in SegmentInfo info) =>
         info.State == SegmentState.Closed
