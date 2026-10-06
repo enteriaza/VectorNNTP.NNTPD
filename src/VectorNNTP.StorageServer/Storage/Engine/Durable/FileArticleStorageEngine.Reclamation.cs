@@ -25,7 +25,10 @@ public sealed partial class FileArticleStorageEngine
     /// <remarks>
     /// Ordering is delete-then-catalogue-remove. Catalogue reconstruction is file-authoritative,
     /// so a crash after delete still yields a permanently absent segment on restart. No new
-    /// journal frame is required.
+    /// journal frame is required. After the catalogue entry is gone, Evicted and Invalid index
+    /// rows that still name this segment are dropped from memory. Present rows are not dropped.
+    /// A crash before the next index checkpoint replays those frames, and open drops them again
+    /// because the segment file is absent.
     /// </remarks>
     public Task<ArticleSegmentReclamationResult> ReclaimRetiredSegmentAsync(
         SegmentId segmentId,
@@ -58,6 +61,7 @@ public sealed partial class FileArticleStorageEngine
         {
             if (!File.Exists(retiredPath) && !File.Exists(activePath) && !File.Exists(closedPath))
             {
+                _ = _index.ForgetReclaimedSegment(segmentId);
                 return Task.FromResult(new ArticleSegmentReclamationResult(
                     ArticleSegmentReclamationOutcome.IdempotentAlreadyReclaimed,
                     segmentId,
@@ -126,6 +130,7 @@ public sealed partial class FileArticleStorageEngine
             if (string.Equals(failureReason, "already-reclaimed", StringComparison.Ordinal)
                 || !existedBefore)
             {
+                _ = _index.ForgetReclaimedSegment(segmentId);
                 return Task.FromResult(new ArticleSegmentReclamationResult(
                     ArticleSegmentReclamationOutcome.IdempotentAlreadyReclaimed,
                     segmentId,
@@ -144,6 +149,7 @@ public sealed partial class FileArticleStorageEngine
                 });
             }
 
+            _ = _index.ForgetReclaimedSegment(segmentId);
             return Task.FromResult(new ArticleSegmentReclamationResult(
                 ArticleSegmentReclamationOutcome.Reclaimed,
                 segmentId,

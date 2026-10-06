@@ -23,8 +23,12 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// physical segment bytes — <see cref="ISegmentStore"/> must still validate ArtData on read.
 /// </para>
 /// <para>
-/// Evicted/Invalid are logical states only; physical SATA reclamation is a later phase.
-/// Relocation changes index metadata only and never mutates segment bytes.
+/// Evicted and Invalid are logical states. While the segment file still exists they stop a
+/// later accept from adopting those bytes. After the segment has been physically reclaimed
+/// and is absent from the catalogue, those rows are dropped from memory. The drop is not a
+/// new index frame. A later checkpoint omits them. A crash before that checkpoint replays
+/// the old frames, and open drops them again because the segment is gone. Present rows are
+/// never dropped this way. Relocation changes index metadata only and never mutates segment bytes.
 /// </para>
 /// <para>
 /// <see cref="WriteSnapshot"/> writes <c>article.index.snap</c> from the in-memory projection.
@@ -671,6 +675,122 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         lock (_gate)
         {
             return _useCounts.GetValueOrDefault(artId);
+        }
+    }
+
+    /// <summary>
+    /// Number of process-local LFU counters. A counter exists only for an indexed article.
+    /// </summary>
+    internal int UseCountEntryCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _useCounts.Count;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Drops Evicted and Invalid rows whose location is <paramref name="segmentId"/>.
+    /// Present rows are left in place. Does not append an index frame.
+    /// </summary>
+    /// <param name="segmentId">Segment that has been physically reclaimed.</param>
+    /// <returns>The number of rows removed.</returns>
+    internal int ForgetReclaimedSegment(SegmentId segmentId)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return ForgetWhereUnlocked(row =>
+                row.Location.SegmentId == segmentId
+                && row.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid);
+        }
+    }
+
+    /// <summary>
+    /// Drops Evicted and Invalid rows whose segment fails <paramref name="segmentExists"/>.
+    /// Present rows are left in place. Does not append an index frame.
+    /// </summary>
+    /// <param name="segmentExists">True when the catalogue still contains that segment.</param>
+    /// <returns>The number of rows removed.</returns>
+    internal int ForgetRowsForAbsentSegments(Func<SegmentId, bool> segmentExists)
+    {
+        ArgumentNullException.ThrowIfNull(segmentExists);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return ForgetWhereUnlocked(row =>
+                row.State is ArticleStorageState.Evicted or ArticleStorageState.Invalid
+                && !segmentExists(row.Location.SegmentId));
+        }
+    }
+
+    /// <summary>
+    /// Removes matching rows and their LFU counters. Caller holds <see cref="_gate"/>.
+    /// </summary>
+    private int ForgetWhereUnlocked(Func<StoredArticleMetadata, bool> remove)
+    {
+        List<ArticleId>? drop = null;
+        foreach (var pair in _entries)
+        {
+            if (!remove(pair.Value))
+            {
+                continue;
+            }
+
+            drop ??= new List<ArticleId>();
+            drop.Add(pair.Key);
+        }
+
+        if (drop is null)
+        {
+            DropOrphanUseCountsUnlocked();
+            return 0;
+        }
+
+        foreach (var artId in drop)
+        {
+            _ = _entries.Remove(artId);
+            _ = _useCounts.Remove(artId);
+        }
+
+        DropOrphanUseCountsUnlocked();
+        FileArticleIndexLogMessages.ReclaimedRowsForgotten(_logger, _indexPath, drop.Count);
+        return drop.Count;
+    }
+
+    /// <summary>
+    /// Removes LFU counters that no longer have an index row. Caller holds <see cref="_gate"/>.
+    /// </summary>
+    private void DropOrphanUseCountsUnlocked()
+    {
+        if (_useCounts.Count == 0)
+        {
+            return;
+        }
+
+        List<ArticleId>? orphans = null;
+        foreach (var artId in _useCounts.Keys)
+        {
+            if (_entries.ContainsKey(artId))
+            {
+                continue;
+            }
+
+            orphans ??= new List<ArticleId>();
+            orphans.Add(artId);
+        }
+
+        if (orphans is null)
+        {
+            return;
+        }
+
+        foreach (var artId in orphans)
+        {
+            _ = _useCounts.Remove(artId);
         }
     }
 

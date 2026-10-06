@@ -1240,6 +1240,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 options.CapacityCompactionHeadroom,
                 options.CapacityMaximumUsageCapacity,
                 options.CapacityFreeCapacity);
+            var knownSegments = new HashSet<ulong>();
+            foreach (var info in segments.Catalogue.Snapshot())
+            {
+                _ = knownSegments.Add(info.SegmentId.Value);
+            }
+
+            _ = index.ForgetRowsForAbsentSegments(id => knownSegments.Contains(id.Value));
             journal = null;
             segments = null;
             index = null;

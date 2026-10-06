@@ -178,7 +178,7 @@ public sealed class StartupPresentValidationTests
     }
 
     [Fact]
-    public async Task Evicted_row_with_missing_segment_stays_evicted()
+    public async Task Evicted_row_for_a_missing_segment_is_dropped_without_rewriting_the_index()
     {
         var dir = TempStorageDir.Create();
         using (dir)
@@ -199,10 +199,8 @@ public sealed class StartupPresentValidationTests
             await using var service = await StartReadyAsync(dir);
             Assert.Equal(indexLength, IndexLength(dir));
             Assert.False(await PresenceAsync(service, record.ArtId));
-            Assert.True(service.Engine.Index.TryGet(record.ArtId, out var meta));
-            Assert.Equal(ArticleStorageState.Evicted, meta.State);
-            Assert.Equal(evicted.Location, meta.Location);
-            Assert.Equal(evicted.Sequence, meta.Sequence);
+            Assert.False(service.Engine.Index.TryGet(record.ArtId, out _));
+            Assert.False(service.Engine.TryRead(record.ArtId, out _));
         }
     }
 

@@ -10,7 +10,7 @@ namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
 /// <summary>
 /// A reclaimed SegmentId stays reserved across restart. The next file, including a compaction
-/// destination, receives a higher id. Historical Evicted and Invalid rows are left in place.
+/// destination, receives a higher id. Evicted and Invalid rows for that segment are dropped.
 /// </summary>
 public sealed class SegmentIdAllocationTests
 {
@@ -48,13 +48,13 @@ public sealed class SegmentIdAllocationTests
             Assert.True(engine.TryEvict(evicted.ArtId));
             Assert.True(engine.TryInvalidate(invalid.ArtId));
             await ReclaimClosedAsync(engine, reclaimed);
-            AssertHistorical(engine, evicted.ArtId, ArticleStorageState.Evicted, reclaimed);
-            AssertHistorical(engine, invalid.ArtId, ArticleStorageState.Invalid, reclaimed);
+            Assert.False(engine.Index.TryGet(evicted.ArtId, out _));
+            Assert.False(engine.Index.TryGet(invalid.ArtId, out _));
         }
 
         await using var restarted = FileArticleStorageEngine.Open(dir.Options);
-        AssertHistorical(restarted, evicted.ArtId, ArticleStorageState.Evicted, reclaimed);
-        AssertHistorical(restarted, invalid.ArtId, ArticleStorageState.Invalid, reclaimed);
+        Assert.False(restarted.Index.TryGet(evicted.ArtId, out _));
+        Assert.False(restarted.Index.TryGet(invalid.ArtId, out _));
 
         var fresh = CreateRecord("<sid-fresh@seg.test>");
         var freshId = await AcceptAndCloseAsync(restarted, fresh);
@@ -65,8 +65,9 @@ public sealed class SegmentIdAllocationTests
 
         Assert.True(restarted.TryEvict(fresh.ArtId));
         await ReclaimClosedAsync(restarted, freshId);
-        AssertHistorical(restarted, evicted.ArtId, ArticleStorageState.Evicted, reclaimed);
-        AssertHistorical(restarted, invalid.ArtId, ArticleStorageState.Invalid, reclaimed);
+        Assert.False(restarted.Index.TryGet(evicted.ArtId, out _));
+        Assert.False(restarted.Index.TryGet(invalid.ArtId, out _));
+        Assert.False(restarted.Index.TryGet(fresh.ArtId, out _));
     }
 
     [Fact]
@@ -142,17 +143,6 @@ public sealed class SegmentIdAllocationTests
         Assert.Equal(ArticleStorageState.Present, moved.State);
         Assert.True(moved.Location.SegmentId.Value > reclaimed);
         Assert.NotEqual(source, moved.Location.SegmentId.Value);
-    }
-
-    private static void AssertHistorical(
-        FileArticleStorageEngine engine,
-        ArticleId artId,
-        ArticleStorageState state,
-        ulong segmentId)
-    {
-        Assert.True(engine.Index.TryGet(artId, out var meta));
-        Assert.Equal(state, meta.State);
-        Assert.Equal(segmentId, meta.Location.SegmentId.Value);
     }
 
     private static async Task<ulong> AcceptAndCloseAsync(FileArticleStorageEngine engine, ArticleRecord record)

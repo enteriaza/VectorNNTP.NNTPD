@@ -181,7 +181,12 @@ public sealed class CapacityUsagePressureTests
         var after = engine.ObserveCapacityAdmissionPressure();
         Assert.True(after.UsedBytes <= after.UsageRecoveryTargetBytes);
         Assert.False(after.IsUnderUsagePressure);
-        Assert.Equal(ArticleStorageState.Evicted, State(engine, cold.ArtId));
+        Assert.False(engine.TryRead(cold.ArtId, out _));
+        if (engine.Index.TryGet(cold.ArtId, out var coldRow))
+        {
+            Assert.Equal(ArticleStorageState.Evicted, coldRow.State);
+        }
+
         Assert.Equal(ArticleStorageState.Present, State(engine, hot.ArtId));
         await service.StopAsync(CancellationToken.None);
         Assert.Null(service.Execution);

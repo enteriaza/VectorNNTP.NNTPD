@@ -357,8 +357,8 @@ public sealed class StorageMaintenanceCoordinatorTests
         var coordinator = CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0);
         var result = await coordinator.RunOnceAsync(CancellationToken.None);
         Assert.Equal(StorageMaintenanceOutcome.CompactedAndReclaimed, result.Outcome);
-        Assert.True(engine.Index.TryGet(record.ArtId, out var after));
-        Assert.Equal(ArticleStorageState.Evicted, after.State);
+        Assert.False(engine.Index.TryGet(record.ArtId, out _));
+        Assert.False(engine.TryRead(record.ArtId, out _));
     }
 
     [Fact]

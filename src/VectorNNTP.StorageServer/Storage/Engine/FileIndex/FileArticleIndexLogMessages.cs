@@ -89,4 +89,10 @@ internal static partial class FileArticleIndexLogMessages
         ulong Generation,
         long DeltaStart,
         long IndexLength);
+
+    [LoggerMessage(
+        EventId = 3310,
+        Level = LogLevel.Information,
+        Message = "Article index dropped reclaimed rows (path={Path}, removed={Removed})")]
+    public static partial void ReclaimedRowsForgotten(ILogger logger, string Path, int Removed);
 }
