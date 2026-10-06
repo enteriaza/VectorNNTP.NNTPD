@@ -72,6 +72,14 @@ public enum StorageMaintenanceOutcome : byte
 /// Number of open compactions that capacity-yielded this run before the primary outcome
 /// (0 when none; may be &gt; 1 after Phase 5F.4 same-run rotation).
 /// </param>
+/// <param name="DestinationSegmentId">
+/// Segment that received a relocated Present article when this run rewrote a closed source.
+/// Null when this run did not publish a relocation.
+/// </param>
+/// <param name="RewriteDensitySkipCount">
+/// Closed segments left in place because their dead ratio was below
+/// <c>MinimumDeadRatio</c>. Zero when no such segment was observed.
+/// </param>
 public readonly record struct StorageMaintenanceResult(
     StorageMaintenanceOutcome Outcome,
     SegmentId SegmentId,
@@ -98,4 +106,6 @@ public readonly record struct StorageMaintenanceResult(
     ulong? DeferredOpenCompactionId = null,
     SegmentId? DeferredOpenSourceSegmentId = null,
     string? DeferredOpenSkipReason = null,
-    int DeferredOpenCompactionCount = 0);
+    int DeferredOpenCompactionCount = 0,
+    ulong? DestinationSegmentId = null,
+    int RewriteDensitySkipCount = 0);

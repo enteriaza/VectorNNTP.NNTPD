@@ -41,7 +41,7 @@ internal static partial class StorageMaintenanceLogMessages
     [LoggerMessage(
         EventId = 3019,
         Level = LogLevel.Information,
-        Message = "Storage maintenance summary (Outcome={Outcome}, MaintenanceRunId={MaintenanceRunId}, DurationMs={DurationMs}, SegmentId={SegmentId}, CompactionId={CompactionId}, RelocatedArticles={RelocatedArticles}, CompactionAttempted={CompactionAttempted}, CompactionCommitted={CompactionCommitted}, RetirementAttempted={RetirementAttempted}, Retired={Retired}, ReclamationAttempted={ReclamationAttempted}, Reclaimed={Reclaimed}, SourceSizeBytes={SourceSizeBytes}, SourceLiveBytes={SourceLiveBytes}, SourceDeadBytes={SourceDeadBytes}, SourceDeadRatio={SourceDeadRatio}, ReclaimedSegmentSizeBytes={ReclaimedSegmentSizeBytes}, AdmissionPressure={AdmissionPressure}, AdmissionRecoveryTargetBytes={AdmissionRecoveryTargetBytes}, CapacityUsedBytes={CapacityUsedBytes}, CapacityTotalBytes={CapacityTotalBytes}, CapacityArticleReservedBytes={CapacityArticleReservedBytes}, CapacityCompactionReservedBytes={CapacityCompactionReservedBytes}, Detail={Detail})")]
+        Message = "Storage maintenance summary (Outcome={Outcome}, MaintenanceRunId={MaintenanceRunId}, DurationMs={DurationMs}, SegmentId={SegmentId}, CompactionId={CompactionId}, RelocatedArticles={RelocatedArticles}, CompactionAttempted={CompactionAttempted}, CompactionCommitted={CompactionCommitted}, RetirementAttempted={RetirementAttempted}, Retired={Retired}, ReclamationAttempted={ReclamationAttempted}, Reclaimed={Reclaimed}, SourceSizeBytes={SourceSizeBytes}, SourceLiveBytes={SourceLiveBytes}, SourceDeadBytes={SourceDeadBytes}, SourceDeadRatio={SourceDeadRatio}, ReclaimedSegmentSizeBytes={ReclaimedSegmentSizeBytes}, DestinationSegmentId={DestinationSegmentId}, AdmissionPressure={AdmissionPressure}, AdmissionRecoveryTargetBytes={AdmissionRecoveryTargetBytes}, CapacityUsedBytes={CapacityUsedBytes}, CapacityTotalBytes={CapacityTotalBytes}, CapacityArticleReservedBytes={CapacityArticleReservedBytes}, CapacityCompactionReservedBytes={CapacityCompactionReservedBytes}, Detail={Detail})")]
     public static partial void RunOperationalSummary(
         ILogger logger,
         ulong MaintenanceRunId,
@@ -61,6 +61,7 @@ internal static partial class StorageMaintenanceLogMessages
         long? SourceDeadBytes,
         double? SourceDeadRatio,
         long? ReclaimedSegmentSizeBytes,
+        ulong DestinationSegmentId,
         bool? AdmissionPressure,
         long? AdmissionRecoveryTargetBytes,
         long? CapacityUsedBytes,
@@ -108,6 +109,21 @@ internal static partial class StorageMaintenanceLogMessages
         Level = LogLevel.Information,
         Message = "Storage maintenance worker stopped")]
     public static partial void Stopped(ILogger logger);
+
+    /// <summary>
+    /// Closed segments were examined for rewrite and none met the configured dead-byte floors.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 3030,
+        Level = LogLevel.Debug,
+        Message = "Low-density rewrite not selected (ClosedSegments={ClosedSegments}, SkippedForDensity={SkippedForDensity}, SkippedForDeadBytes={SkippedForDeadBytes}, MinimumDeadRatio={MinimumDeadRatio}, MinimumDeadBytes={MinimumDeadBytes})")]
+    public static partial void RewriteNotSelected(
+        ILogger logger,
+        int ClosedSegments,
+        int SkippedForDensity,
+        int SkippedForDeadBytes,
+        int MinimumDeadRatio,
+        long MinimumDeadBytes);
 
     [LoggerMessage(
         EventId = 3021,

@@ -68,6 +68,7 @@ internal static class StorageMaintenanceRunLogging
                     result.SourceDeadBytes,
                     result.SourceDeadRatio,
                     result.ReclaimedSegmentSizeBytes,
+                    result.DestinationSegmentId ?? 0,
                     result.AdmissionPressure,
                     result.AdmissionRecoveryTargetBytes,
                     result.CapacityUsedBytes,

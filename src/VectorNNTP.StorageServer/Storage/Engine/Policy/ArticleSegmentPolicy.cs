@@ -15,6 +15,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Policy;
 /// <c>DeadBytes &gt;= MinimumDeadBytes</c> AND
 /// <c>DeadBytes * 100 &gt;= SizeBytes * MinimumDeadRatio</c>.
 /// <c>MinimumDeadRatio</c> is an integer percent from 0 to 100.
+/// A segment that passes and still has live bytes is the low-density rewrite candidate:
+/// its live density is at or below the complement of that dead percentage. The maintenance
+/// coordinator deletes a Closed segment with zero live bytes before this selection, so
+/// that segment is not rewritten.
 /// </para>
 /// <para>
 /// Normal compaction victim ordering among eligible segments:

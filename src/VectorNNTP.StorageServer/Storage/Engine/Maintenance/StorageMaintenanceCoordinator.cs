@@ -24,8 +24,15 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// </para>
 /// <para>
 /// Ordering: optional physical-journal checkpoint, optional physical-index checkpoint, then existing Retired physical reclaim; then finish CompactionCommitted
-/// pending retirement; then continue an open uncommitted compaction; then select a new
-/// Closed victim via policy. Under article admission pressure (Phase 5F.2), Closed-victim
+/// pending retirement; then continue an open uncommitted compaction; then delete one Closed
+/// segment whose live bytes are already zero; then select a new Closed victim via policy.
+/// A selected victim still has Present bytes and meets both
+/// <c>MinimumDeadBytes</c> and <c>MinimumDeadRatio</c>. That selection is the low-density
+/// rewrite: Present rows are relocated onto the active segment, the index location is
+/// published, and the source is retired and reclaimed only after no Present row remains
+/// on it. A Closed segment whose dead ratio is below <c>MinimumDeadRatio</c> stays where
+/// it is. Live density is the complement of that configured dead ratio; this coordinator
+/// does not add a second threshold. Under article admission pressure (Phase 5F.2), Closed-victim
 /// selection prefers physical recovery potential and compaction-headroom feasibility;
 /// pressure is recomputed each invocation and is not a persistent mode.
 /// </para>
@@ -371,7 +378,19 @@ public sealed class StorageMaintenanceCoordinator
 
         if (!_policy.TrySelectCompactionVictim(closedSnapshot, out var closedVictim))
         {
-            return NoWork();
+            var skips = CountRewriteSkips(closedSnapshot);
+            if (skips.Density > 0 || skips.DeadBytes > 0)
+            {
+                StorageMaintenanceLogMessages.RewriteNotSelected(
+                    _logger,
+                    skips.Closed,
+                    skips.Density,
+                    skips.DeadBytes,
+                    _policy.MinimumDeadRatio,
+                    _policy.MinimumDeadBytes);
+            }
+
+            return NoWork() with { RewriteDensitySkipCount = skips.Density };
         }
 
         TestHookAfterCompactionVictimSelected?.Invoke(closedVictim.SegmentId);
@@ -1393,7 +1412,7 @@ public sealed class StorageMaintenanceCoordinator
             Reclaimed: false,
             SkipReason: reason);
 
-    private static StorageMaintenanceResult IncompleteFromCompaction(
+    private StorageMaintenanceResult IncompleteFromCompaction(
         ArticleCompactionResult compact,
         SegmentInfo? sourceAccountingHint) =>
         EnrichCompactionResult(
@@ -1411,7 +1430,7 @@ public sealed class StorageMaintenanceCoordinator
             compact,
             sourceAccountingHint);
 
-    private static StorageMaintenanceResult FailedFromCompaction(
+    private StorageMaintenanceResult FailedFromCompaction(
         ArticleCompactionResult compact,
         SegmentInfo? sourceAccountingHint) =>
         EnrichCompactionResult(
@@ -1429,7 +1448,7 @@ public sealed class StorageMaintenanceCoordinator
             compact,
             sourceAccountingHint);
 
-    private static StorageMaintenanceResult EnrichCompactionResult(
+    private StorageMaintenanceResult EnrichCompactionResult(
         StorageMaintenanceResult result,
         ArticleCompactionResult? compactionExecution,
         SegmentInfo? sourceAccountingHint)
@@ -1444,6 +1463,64 @@ public sealed class StorageMaintenanceCoordinator
             result = result.WithCompactionExecution(in compact);
         }
 
-        return result;
+        return result with { DestinationSegmentId = DestinationSegmentOf(result.CompactionId) };
+    }
+
+    /// <summary>
+    /// Counts Closed segments the ordinary rewrite gate left alone on this snapshot.
+    /// </summary>
+    private (int Closed, int Density, int DeadBytes) CountRewriteSkips(IReadOnlyList<SegmentInfo> snapshot)
+    {
+        var closed = 0;
+        var density = 0;
+        var deadBytes = 0;
+        foreach (var entry in snapshot)
+        {
+            if (entry.State != SegmentState.Closed)
+            {
+                continue;
+            }
+
+            closed++;
+            switch (_policy.EvaluateCompaction(in entry).Reason)
+            {
+                case CompactionEligibilityReason.InsufficientDeadRatio:
+                    density++;
+                    break;
+                case CompactionEligibilityReason.InsufficientDeadBytes:
+                    deadBytes++;
+                    break;
+            }
+        }
+
+        return (closed, density, deadBytes);
+    }
+
+    /// <summary>
+    /// Lowest segment id that a durable RelocationWritten names for <paramref name="compactionId"/>.
+    /// </summary>
+    private ulong? DestinationSegmentOf(ulong compactionId)
+    {
+        if (compactionId == 0 || !_engine.Journal.TryGetCompaction(compactionId, out var snapshot))
+        {
+            return null;
+        }
+
+        ulong? destination = null;
+        foreach (var relocation in snapshot.Relocations)
+        {
+            if (relocation.Written is not { } written)
+            {
+                continue;
+            }
+
+            var segmentId = written.DestinationLocation.SegmentId.Value;
+            if (destination is null || segmentId < destination.Value)
+            {
+                destination = segmentId;
+            }
+        }
+
+        return destination;
     }
 }
