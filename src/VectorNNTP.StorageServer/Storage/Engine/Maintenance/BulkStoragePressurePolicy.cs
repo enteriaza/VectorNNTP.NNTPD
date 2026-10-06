@@ -93,6 +93,15 @@ public readonly record struct BulkStoragePressureEvaluation(
 /// </remarks>
 public sealed class BulkStoragePressurePolicy
 {
+    /// <summary>Accept was rejected because the cache-volume recovery reserve would be consumed.</summary>
+    public const string RecoveryReserveRejectionReason = "bulk-recovery-reserve";
+
+    /// <summary>Accept was rejected because cache-volume capacity could not be measured.</summary>
+    public const string UnmeasuredRejectionReason = "bulk-capacity-unmeasured";
+
+    /// <summary>Accept was rejected because admission recovery failed before the journal ACK.</summary>
+    public const string RecoveryFailedRejectionReason = "bulk-recovery-failed";
+
     /// <summary>Policy constructed from <see cref="BulkStoragePressureOptions"/> defaults.</summary>
     public static BulkStoragePressurePolicy Default { get; } = new();
 
@@ -159,6 +168,84 @@ public sealed class BulkStoragePressurePolicy
             ReserveExhausted: exhausted,
             MaintenanceMode: ModeName(state),
             Measured: true);
+    }
+
+    /// <summary>
+    /// True when a new Accept of <paramref name="segmentBytes"/> may proceed without consuming
+    /// the recovery reserve. Normal, Warning, and Pressure do not apply this floor.
+    /// </summary>
+    /// <param name="evaluation">Current cache-volume classification.</param>
+    /// <param name="segmentBytes">
+    /// Segment-copy bytes for this article (<c>SegmentRecordCodec.RecordLengthForArtSize</c>).
+    /// This is the future SATA copy. Journal outstanding bytes are not added again.
+    /// </param>
+    /// <param name="unwrittenSegmentBytes">
+    /// Segment and compaction bytes already reserved on this volume and not yet in
+    /// <see cref="BulkStoragePressureEvaluation.UsedBytes"/>.
+    /// </param>
+    /// <returns>
+    /// False when the volume was not measured, or when High, Critical, or Emergency would
+    /// leave free space below <see cref="BulkStoragePressureEvaluation.RecoveryReserveBytes"/>.
+    /// </returns>
+    public bool AllowsNewAccept(
+        in BulkStoragePressureEvaluation evaluation,
+        long segmentBytes,
+        long unwrittenSegmentBytes)
+    {
+        if (!evaluation.Measured)
+        {
+            return false;
+        }
+
+        if (evaluation.State is BulkStoragePressureState.Normal
+            or BulkStoragePressureState.Warning
+            or BulkStoragePressureState.Pressure)
+        {
+            return true;
+        }
+
+        var extra = segmentBytes < 0 ? 0 : segmentBytes;
+        var reserved = unwrittenSegmentBytes < 0 ? 0 : unwrittenSegmentBytes;
+        try
+        {
+            var needed = checked(evaluation.RecoveryReserveBytes + reserved + extra);
+            return evaluation.FreeBytes >= needed;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Free bytes that would remain above the recovery reserve after
+    /// <paramref name="segmentBytes"/> and <paramref name="unwrittenSegmentBytes"/>.
+    /// Negative when the reserve would be crossed. Zero when the volume was not measured.
+    /// </summary>
+    /// <param name="evaluation">Current cache-volume classification.</param>
+    /// <param name="segmentBytes">Segment-copy bytes for the candidate article.</param>
+    /// <param name="unwrittenSegmentBytes">Unflushed segment and compaction reservations.</param>
+    /// <returns>The protected headroom in bytes.</returns>
+    public static long ProtectedHeadroomBytes(
+        in BulkStoragePressureEvaluation evaluation,
+        long segmentBytes,
+        long unwrittenSegmentBytes)
+    {
+        if (!evaluation.Measured)
+        {
+            return 0;
+        }
+
+        var extra = segmentBytes < 0 ? 0 : segmentBytes;
+        var reserved = unwrittenSegmentBytes < 0 ? 0 : unwrittenSegmentBytes;
+        try
+        {
+            return evaluation.FreeBytes - checked(evaluation.RecoveryReserveBytes + reserved + extra);
+        }
+        catch (OverflowException)
+        {
+            return long.MinValue;
+        }
     }
 
     /// <summary>

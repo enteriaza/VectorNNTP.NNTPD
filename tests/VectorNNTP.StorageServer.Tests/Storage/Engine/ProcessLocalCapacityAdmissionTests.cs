@@ -14,6 +14,7 @@ using VectorNNTP.StorageServer.Storage.Engine.Durable;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
+using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 using VectorNNTP.StorageServer.Tests.Logging;
 
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
@@ -462,13 +463,15 @@ public sealed class ProcessLocalCapacityAdmissionTests
 
         var rejected = await engine.AcceptAsync(CreateRecord("<cap-log@seg.test>"), CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, rejected.Outcome);
+        Assert.Equal(BulkStoragePressurePolicy.RecoveryReserveRejectionReason, rejected.Reason);
         Assert.Contains(
             sink.Events,
-            static e => e.Level == LogEventLevel.Warning
-                && e.Properties.ContainsKey("RequiredBytes")
-                && e.Properties.ContainsKey("ArticleReservedBytes")
-                && e.Properties.ContainsKey("CompactionReservedBytes")
-                && e.Properties.ContainsKey("MaximumUtilization"));
+            static e => e.Level == LogEventLevel.Error
+                && e.Properties.ContainsKey("ArtSize")
+                && e.Properties.ContainsKey("FreeBytes")
+                && e.Properties.ContainsKey("RecoveryReserveBytes")
+                && e.Properties.ContainsKey("ProtectedHeadroomBytes")
+                && e.Properties.ContainsKey("RecoveryAttempted"));
 
         // Successful Accept must not emit capacity-rejection warnings.
         capacity.UsedBytes = 0;

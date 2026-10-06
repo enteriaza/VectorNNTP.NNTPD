@@ -14,7 +14,9 @@ public sealed partial class FileArticleStorageEngine
     private async Task<ArticleAcceptResult> AcceptGroupedAsync(
         ArticleRecord record,
         ReadOnlyMemory<byte> artData,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool recoveryAttempted,
+        bool recoveryReclaimedSpace)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var reservedSegment = false;
@@ -45,7 +47,12 @@ public sealed partial class FileArticleStorageEngine
                 indexBytes = ArticleIndexRecordCodec.RecordLength;
                 if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
                 {
-                    return ArticleAcceptResult.RejectedCapacity(record.ArtId);
+                    if (TryResolveOutstandingAccept(record, out var outstandingGrouped))
+                    {
+                        return outstandingGrouped;
+                    }
+
+                    return RejectCapacityAdmission(record, recoveryAttempted, recoveryReclaimedSpace);
                 }
 
                 reservedSegment = true;
@@ -184,7 +191,9 @@ public sealed partial class FileArticleStorageEngine
     private async Task<ArticleAcceptResult> AcceptPreparedAsync(
         ArticleRecord record,
         ReadOnlyMemory<byte> artData,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool recoveryAttempted,
+        bool recoveryReclaimedSpace)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var reservedSegment = false;
@@ -215,7 +224,12 @@ public sealed partial class FileArticleStorageEngine
                 indexBytes = ArticleIndexRecordCodec.RecordLength;
                 if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
                 {
-                    return ArticleAcceptResult.RejectedCapacity(record.ArtId);
+                    if (TryResolveOutstandingAccept(record, out var outstandingPrepared))
+                    {
+                        return outstandingPrepared;
+                    }
+
+                    return RejectCapacityAdmission(record, recoveryAttempted, recoveryReclaimedSpace);
                 }
 
                 reservedSegment = true;

@@ -1266,7 +1266,7 @@ StorageServer keeps application logs, the NVMe control tier, and the SATA segmen
 | `StorageServer:Storage:BulkPressure:CriticalPercent` | int | `90` | no | Cache-volume used percent at which bulk retention pressure is Critical. Strictly below `EmergencyPercent`. |
 | `StorageServer:Storage:BulkPressure:EmergencyPercent` | int | `95` | no | Cache-volume used percent at which bulk retention pressure is Emergency. |
 | `StorageServer:Storage:BulkPressure:OperationalReservePercent` | int | `5` | no | Operational reserve as a percent of cache-volume total bytes. Measured and logged. Not a quota and not subtracted from Accept. |
-| `StorageServer:Storage:BulkPressure:RecoveryReservePercent` | int | `5` | no | Recovery reserve as a percent of cache-volume total bytes. Measured and logged. Not a quota and not subtracted from Accept. |
+| `StorageServer:Storage:BulkPressure:RecoveryReservePercent` | int | `5` | no | Recovery reserve as a percent of cache-volume total bytes. At High, Critical, and Emergency a new Accept is rejected when the segment copy of that article would leave free space below this reserve. Journal outstanding bytes are not added again. Not a block allocator. |
 | `StorageServer:Storage:BulkPressure:RewriteReservePercent` | int | `10` | no | Rewrite/reclamation reserve as a percent of cache-volume total bytes. A new low-density rewrite at High or Critical is withheld when copying its live bytes would leave free space below the three reserves combined. |
 
 ### Bulk retention pressure and journal pressure
@@ -1282,13 +1282,26 @@ What each bulk class does:
 - **Normal** (below 75%): no pressure-driven expiration and no pressure-driven reclamation. `MaxRetentionAge` and the existing maintenance order are unchanged.
 - **Warning** (75% up to 80%): the warning is visible. Ordinary age expiration and reclamation still run. Crossing the watermark does not evict an article.
 - **Pressure** (80% up to 85%): maintenance prefers work that is already reclaimable. Expired articles and fully-dead closed segments stay ahead of a new low-density rewrite. The rewrite still uses `MinimumDeadBytes` and `MinimumDeadRatio`. Live articles are not deleted because this class was reached.
-- **High** (85% up to 90%): expiration and whole-segment reclamation stay first. A new low-density rewrite runs only when it has dead bytes to return and the destination copy leaves the operational, recovery, and rewrite reserves free.
-- **Critical** (90% up to 95%): the same reserve rule applies, and a new rewrite runs only when the dead bytes exceed the live bytes that would be copied.
-- **Emergency** (95% and above): the cycle does not enter usage-pressure recovery. It still finishes an in-progress compaction, expires by `MaxRetentionAge`, reclaims retired segments, and deletes one fully-dead closed segment. It does not start a new rewrite. It does not logically evict Present articles to make room. It does not discard an accepted article that is still only in the ingress journal.
+- **High** (85% up to 90%): expiration and whole-segment reclamation stay first. A new low-density rewrite runs only when it has dead bytes to return and the destination copy leaves the operational, recovery, and rewrite reserves free. A new Accept proceeds when its segment copy leaves the recovery reserve free, and is rejected when it would not.
+- **Critical** (90% up to 95%): the same rewrite rule applies, and a new rewrite runs only when the dead bytes exceed the live bytes that would be copied. A new Accept uses the same recovery-reserve floor as High.
+- **Emergency** (95% and above): the maintenance cycle does not enter usage-pressure recovery. It still finishes an in-progress compaction, expires by `MaxRetentionAge`, reclaims retired segments, and deletes one fully-dead closed segment. It does not start a new rewrite. It does not logically evict Present articles to make room. It does not discard an accepted article that is still only in the ingress journal. A new Accept is rejected when its segment copy would leave free space below the recovery reserve. If free space is already at or below that reserve, every new Accept is rejected.
 
-The three reserves are computed from total bytes and reported as `AvailableReserveBytes` (free bytes above those reserves, floored at zero). They are not an allocator. This phase does not enforce them by refusing Accept, by reserving blocks, or by deleting live articles. The only enforcement is withholding a new rewrite that would consume them at High or Critical, and withholding every new rewrite at Emergency.
+Admission decision for a new article, before the journal ACK:
 
-Pressure classification does not itself delete live acknowledged articles. An article that has been ACKed and is still in the durable ingress journal remains recoverable until it is explicitly expired and its physical storage is subsequently reclaimed. Accept is unchanged. When Emergency stops usage-pressure recovery from freeing space, the existing `MaximumUtilization` ceiling can still reject a new accept. That rejection does not remove an article already present in the journal. Wiring Emergency into Accept as its own decision is left for a later phase.
+| Bulk state | New Accept |
+|---|---|
+| Normal, Warning, Pressure | Existing journal hard limit and `MaximumUtilization` only. Crossing 80% does not by itself reject. |
+| High, Critical | Reject when `free bytes < recovery reserve + unflushed segment/compaction reservations + this article's segment-copy length`. Otherwise the existing limits still apply. |
+| Emergency | Same recovery-reserve floor. Accept-path recovery reclaims one retired segment and one fully-dead closed segment, then rechecks. It does not start a rewrite and does not evict Present articles. |
+| Volume not measured | Reject. A failed capacity read does not fall open. |
+
+The segment-copy length is `SegmentRecordCodec.RecordLengthForArtSize(ArtSize)`. Outstanding journal bytes stay under `JournalHardLimitBytes` and are not added a second time onto that floor. `MaximumUtilization` remains a separate ceiling. When both would reject, the check that runs first is the one reported: bulk reserve reason `bulk-recovery-reserve`, utilization reason `storage-capacity`, journal hard limit outcome `RejectedPressure`.
+
+Before that rejection, if a maintenance coordinator is attached, Accept runs the existing recovery callback. At High, Critical, and Emergency that callback deletes one already-retired segment and one already fully-dead closed segment. It does not scan segment payloads, copy a low-density segment, or logically evict Present articles. A closed segment whose extent accounting is still incomplete is left for the maintenance cycle, which already runs that accounting. Usage-pressure recovery, including its existing logical eviction, still runs only when the `MaximumUsageCapacity` latch is on and the volume is not Emergency. If recovery throws, the new Accept is rejected and nothing is appended to the journal. Cancellation does the same. If recovery frees enough space, the Accept is evaluated again against a fresh sample taken under the segment-volume lock together with the reservation, so an earlier snapshot cannot admit past the reserve.
+
+The three reserves are computed from total bytes and reported as `AvailableReserveBytes` (free bytes above those three reserves, floored at zero). They are not a block allocator. Operational and rewrite reserves are not subtracted from Accept. The recovery reserve is the Accept floor at High, Critical, and Emergency.
+
+Pressure classification does not itself delete live acknowledged articles. An article that has been ACKed and is still in the durable ingress journal remains recoverable until it is explicitly expired and its physical storage is subsequently reclaimed. A later Emergency rejection applies only to a new Accept. A repeat of an article already outstanding in the journal returns Duplicate or Conflict and does not drop that journal record.
 
 Invalid bulk percentages (outside 0–100, or watermarks that are not strictly increasing) fail startup.
 

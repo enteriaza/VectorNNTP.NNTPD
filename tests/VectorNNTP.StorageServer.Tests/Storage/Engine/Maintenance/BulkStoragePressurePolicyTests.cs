@@ -194,4 +194,48 @@ public sealed class BulkStoragePressurePolicyTests
         Assert.Equal(BulkStoragePressureState.Normal, unmeasured.State);
         Assert.True(unmeasured.RewriteAllowed);
     }
+
+    [Theory]
+    [InlineData(1_000, BulkStoragePressureState.Normal)]
+    [InlineData(7_600, BulkStoragePressureState.Warning)]
+    [InlineData(8_200, BulkStoragePressureState.Pressure)]
+    public void Normal_warning_and_pressure_admit_without_a_recovery_reserve_floor(
+        long used,
+        BulkStoragePressureState state)
+    {
+        var policy = new BulkStoragePressurePolicy();
+        var evaluation = policy.Evaluate(Total, used, Total - used);
+        Assert.Equal(state, evaluation.State);
+        Assert.True(policy.AllowsNewAccept(in evaluation, segmentBytes: Total, unwrittenSegmentBytes: 0));
+    }
+
+    [Fact]
+    public void High_critical_and_emergency_admit_only_above_the_recovery_reserve()
+    {
+        var policy = new BulkStoragePressurePolicy();
+        var high = policy.Evaluate(Total, 8_800, 1_200);
+        Assert.Equal(BulkStoragePressureState.High, high.State);
+        Assert.Equal(500, high.RecoveryReserveBytes);
+        Assert.True(policy.AllowsNewAccept(in high, segmentBytes: 700, unwrittenSegmentBytes: 0));
+        Assert.False(policy.AllowsNewAccept(in high, segmentBytes: 701, unwrittenSegmentBytes: 0));
+        Assert.False(policy.AllowsNewAccept(in high, segmentBytes: 200, unwrittenSegmentBytes: 501));
+
+        var critical = policy.Evaluate(Total, 9_200, 800);
+        Assert.True(policy.AllowsNewAccept(in critical, segmentBytes: 300, unwrittenSegmentBytes: 0));
+        Assert.False(policy.AllowsNewAccept(in critical, segmentBytes: 301, unwrittenSegmentBytes: 0));
+
+        var emergency = policy.Evaluate(Total, 9_600, 400);
+        Assert.Equal(BulkStoragePressureState.Emergency, emergency.State);
+        Assert.False(policy.AllowsNewAccept(in emergency, segmentBytes: 1, unwrittenSegmentBytes: 0));
+        Assert.Equal(400 - 500 - 1, BulkStoragePressurePolicy.ProtectedHeadroomBytes(in emergency, 1, 0));
+    }
+
+    [Fact]
+    public void Unmeasured_capacity_does_not_admit()
+    {
+        var policy = new BulkStoragePressurePolicy();
+        var unmeasured = BulkStoragePressurePolicy.Unmeasured();
+        Assert.False(policy.AllowsNewAccept(in unmeasured, segmentBytes: 1, unwrittenSegmentBytes: 0));
+        Assert.Equal(0, BulkStoragePressurePolicy.ProtectedHeadroomBytes(in unmeasured, 1, 0));
+    }
 }

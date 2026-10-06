@@ -289,4 +289,97 @@ internal static partial class FileArticleStorageEngineLogMessages
         ILogger logger,
         ulong SegmentId,
         string Reason);
+
+    /// <summary>Debug log when Accept observes a routine cache-volume class change.</summary>
+    [LoggerMessage(
+        EventId = 3431,
+        Level = LogLevel.Debug,
+        Message = "Bulk admission pressure state changed (PreviousState={PreviousState}, State={State}, UsedPercent={UsedPercent}, FreeBytes={FreeBytes}, RecoveryReserveBytes={RecoveryReserveBytes})")]
+    public static partial void BulkAdmissionStateChanged(
+        ILogger logger,
+        string PreviousState,
+        string State,
+        int UsedPercent,
+        long FreeBytes,
+        long RecoveryReserveBytes);
+
+    /// <summary>Warning when Accept observes High or Critical cache-volume pressure.</summary>
+    [LoggerMessage(
+        EventId = 3436,
+        Level = LogLevel.Warning,
+        Message = "Bulk admission pressure elevated (PreviousState={PreviousState}, State={State}, UsedPercent={UsedPercent}, FreeBytes={FreeBytes}, RecoveryReserveBytes={RecoveryReserveBytes})")]
+    public static partial void BulkAdmissionElevated(
+        ILogger logger,
+        string PreviousState,
+        string State,
+        int UsedPercent,
+        long FreeBytes,
+        long RecoveryReserveBytes);
+
+    /// <summary>Error when Accept observes Emergency cache-volume pressure.</summary>
+    [LoggerMessage(
+        EventId = 3437,
+        Level = LogLevel.Error,
+        Message = "Bulk admission pressure is emergency (PreviousState={PreviousState}, State={State}, UsedPercent={UsedPercent}, FreeBytes={FreeBytes}, RecoveryReserveBytes={RecoveryReserveBytes})")]
+    public static partial void BulkAdmissionEmergency(
+        ILogger logger,
+        string PreviousState,
+        string State,
+        int UsedPercent,
+        long FreeBytes,
+        long RecoveryReserveBytes);
+
+    /// <summary>Warning when High or Critical admission would consume the recovery reserve.</summary>
+    [LoggerMessage(
+        EventId = 3432,
+        Level = LogLevel.Warning,
+        Message = "Article Accept rejected by bulk recovery reserve (artId={ArtId}, ArtSize={ArtSize}, State={State}, UsedBytes={UsedBytes}, FreeBytes={FreeBytes}, RecoveryReserveBytes={RecoveryReserveBytes}, ProtectedHeadroomBytes={ProtectedHeadroomBytes}, RecoveryAttempted={RecoveryAttempted}, RecoveryReclaimedSpace={RecoveryReclaimedSpace}, Reason={Reason})")]
+    public static partial void RejectedBulkHeadroom(
+        ILogger logger,
+        string ArtId,
+        int ArtSize,
+        string State,
+        long UsedBytes,
+        long FreeBytes,
+        long RecoveryReserveBytes,
+        long ProtectedHeadroomBytes,
+        bool RecoveryAttempted,
+        bool RecoveryReclaimedSpace,
+        string Reason);
+
+    /// <summary>Error when Emergency or an unmeasured volume rejects a new Accept.</summary>
+    [LoggerMessage(
+        EventId = 3433,
+        Level = LogLevel.Error,
+        Message = "Article Accept rejected by bulk emergency pressure (artId={ArtId}, ArtSize={ArtSize}, State={State}, UsedBytes={UsedBytes}, FreeBytes={FreeBytes}, RecoveryReserveBytes={RecoveryReserveBytes}, ProtectedHeadroomBytes={ProtectedHeadroomBytes}, RecoveryAttempted={RecoveryAttempted}, RecoveryReclaimedSpace={RecoveryReclaimedSpace}, Reason={Reason})")]
+    public static partial void RejectedBulkEmergency(
+        ILogger logger,
+        string ArtId,
+        int ArtSize,
+        string State,
+        long UsedBytes,
+        long FreeBytes,
+        long RecoveryReserveBytes,
+        long ProtectedHeadroomBytes,
+        bool RecoveryAttempted,
+        bool RecoveryReclaimedSpace,
+        string Reason);
+
+    /// <summary>Error when the cache volume cannot be measured. Admission fails closed.</summary>
+    [LoggerMessage(
+        EventId = 3434,
+        Level = LogLevel.Error,
+        Message = "Cache volume capacity could not be measured; new Accept is rejected")]
+    public static partial void BulkCapacityUnmeasured(ILogger logger, Exception exception);
+
+    /// <summary>Warning when admission recovery throws before the journal ACK.</summary>
+    [LoggerMessage(
+        EventId = 3435,
+        Level = LogLevel.Warning,
+        Message = "Bulk admission recovery failed; new Accept is rejected (artId={ArtId}, ArtSize={ArtSize})")]
+    public static partial void BulkAdmissionRecoveryFailed(
+        ILogger logger,
+        string ArtId,
+        int ArtSize,
+        Exception exception);
 }

@@ -135,6 +135,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly int _capacityCompactionHeadroom;
     private readonly int _capacityMaximumUsageCapacity;
     private readonly int _capacityFreeCapacity;
+    private readonly BulkStoragePressurePolicy _bulkPressure;
+    private readonly object _bulkAdmissionLock = new();
+    private BulkStoragePressureState? _lastBulkAdmissionState;
+    private SegmentCopyAdmission _lastSegmentAdmission;
     private int _usagePressureLatched;
     private readonly object _gate = new();
 
@@ -191,9 +195,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         int capacityMaximumUtilization,
         int capacityCompactionHeadroom,
         int capacityMaximumUsageCapacity,
-        int capacityFreeCapacity)
+        int capacityFreeCapacity,
+        BulkStoragePressurePolicy bulkPressure)
     {
         ArgumentNullException.ThrowIfNull(capacity);
+        ArgumentNullException.ThrowIfNull(bulkPressure);
         _journal = journal;
         _segments = segments;
         _index = index;
@@ -207,6 +213,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         _capacityCompactionHeadroom = capacityCompactionHeadroom;
         _capacityMaximumUsageCapacity = capacityMaximumUsageCapacity;
         _capacityFreeCapacity = capacityFreeCapacity;
+        _bulkPressure = bulkPressure;
         segments.AdoptSegmentIdFloor(journal.NextSegmentId);
         segments.ReserveSegmentId = journal.ReserveSegmentId;
         journal.RetainRetiredCompaction = segmentId =>
@@ -556,6 +563,238 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         return _segmentCapacity.WithLedger(read);
     }
 
+    /// <summary>
+    /// Result of the segment-copy admission check that runs before a journal Accept is appended.
+    /// </summary>
+    private readonly record struct SegmentCopyAdmission(
+        bool Admitted,
+        string? Reason,
+        BulkStoragePressureEvaluation Bulk,
+        StorageCapacitySnapshot Snapshot,
+        long ArticleReservedBytes,
+        long CompactionReservedBytes,
+        long UnwrittenSegmentBytes)
+    {
+        /// <summary>Utilization ceiling rejected the copy. Not a bulk-reserve decision.</summary>
+        public static SegmentCopyAdmission CapacityCeiling(StorageCapacitySnapshot snapshot) =>
+            new(false, "storage-capacity", default, snapshot, 0, 0, 0);
+    }
+
+    /// <summary>
+    /// Reserves the segment copy under the volume lock after the bulk recovery-reserve check
+    /// and the existing utilization ceiling, using one capacity sample.
+    /// </summary>
+    private SegmentCopyAdmission TryAdmitNewSegmentCopy(long segmentBytes)
+    {
+        var segment = RequireSegmentVolume();
+        NotifyCapacitySample(segment);
+        return segment.WithLedger(ledger =>
+        {
+            StorageCapacitySnapshot snap;
+            try
+            {
+                snap = segment.Reader.Read();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                FileArticleStorageEngineLogMessages.BulkCapacityUnmeasured(_logger, ex);
+                var unmeasured = BulkStoragePressurePolicy.Unmeasured();
+                return new SegmentCopyAdmission(
+                    false,
+                    BulkStoragePressurePolicy.UnmeasuredRejectionReason,
+                    unmeasured,
+                    default,
+                    ledger.ArticleReservedBytes,
+                    ledger.CompactionReservedBytes,
+                    0);
+            }
+
+            var evaluation = _bulkPressure.Evaluate(snap.TotalBytes, snap.UsedBytes, snap.AvailableBytes);
+            NoteBulkAdmissionTransition(in evaluation);
+            long unwritten;
+            try
+            {
+                unwritten = checked(ledger.ArticleReservedBytes + ledger.CompactionReservedBytes);
+            }
+            catch (OverflowException)
+            {
+                unwritten = long.MaxValue;
+            }
+
+            if (!_bulkPressure.AllowsNewAccept(in evaluation, segmentBytes, unwritten))
+            {
+                return new SegmentCopyAdmission(
+                    false,
+                    evaluation.Measured
+                        ? BulkStoragePressurePolicy.RecoveryReserveRejectionReason
+                        : BulkStoragePressurePolicy.UnmeasuredRejectionReason,
+                    evaluation,
+                    snap,
+                    ledger.ArticleReservedBytes,
+                    ledger.CompactionReservedBytes,
+                    unwritten);
+            }
+
+            if (!ledger.WouldFit(snap.UsedBytes, snap.TotalBytes, segmentBytes, _capacityMaximumUtilization))
+            {
+                return new SegmentCopyAdmission(
+                    false,
+                    "storage-capacity",
+                    evaluation,
+                    snap,
+                    ledger.ArticleReservedBytes,
+                    ledger.CompactionReservedBytes,
+                    unwritten);
+            }
+
+            ledger.TentativeAdd(segmentBytes);
+            return new SegmentCopyAdmission(
+                true,
+                null,
+                evaluation,
+                snap,
+                ledger.ArticleReservedBytes,
+                ledger.CompactionReservedBytes,
+                unwritten);
+        });
+    }
+
+    /// <summary>Logs a bulk watermark transition. Successful Accepts do not each emit a line.</summary>
+    private void NoteBulkAdmissionTransition(in BulkStoragePressureEvaluation evaluation)
+    {
+        BulkStoragePressureState? previous;
+        lock (_bulkAdmissionLock)
+        {
+            previous = _lastBulkAdmissionState;
+            if (previous == evaluation.State)
+            {
+                return;
+            }
+
+            _lastBulkAdmissionState = evaluation.State;
+        }
+
+        var previousName = previous?.ToString() ?? "Unobserved";
+        var stateName = evaluation.State.ToString();
+        if (evaluation.State == BulkStoragePressureState.Emergency)
+        {
+            FileArticleStorageEngineLogMessages.BulkAdmissionEmergency(
+                _logger,
+                previousName,
+                stateName,
+                evaluation.UsedPercent,
+                evaluation.FreeBytes,
+                evaluation.RecoveryReserveBytes);
+            return;
+        }
+
+        if (evaluation.State is BulkStoragePressureState.High or BulkStoragePressureState.Critical)
+        {
+            FileArticleStorageEngineLogMessages.BulkAdmissionElevated(
+                _logger,
+                previousName,
+                stateName,
+                evaluation.UsedPercent,
+                evaluation.FreeBytes,
+                evaluation.RecoveryReserveBytes);
+            return;
+        }
+
+        FileArticleStorageEngineLogMessages.BulkAdmissionStateChanged(
+            _logger,
+            previousName,
+            stateName,
+            evaluation.UsedPercent,
+            evaluation.FreeBytes,
+            evaluation.RecoveryReserveBytes);
+    }
+
+    /// <summary>
+    /// Logs a bulk or unmeasured rejection. Utilization-ceiling rejections keep the existing
+    /// capacity log and are not repeated here.
+    /// </summary>
+    private void LogBulkAdmissionRejection(
+        ArticleRecord record,
+        in SegmentCopyAdmission gate,
+        bool recoveryAttempted,
+        bool recoveryReclaimedSpace)
+    {
+        if (gate.Reason is not (
+            BulkStoragePressurePolicy.RecoveryReserveRejectionReason
+            or BulkStoragePressurePolicy.UnmeasuredRejectionReason))
+        {
+            return;
+        }
+
+        var bulk = gate.Bulk;
+        var headroom = BulkStoragePressurePolicy.ProtectedHeadroomBytes(
+            in bulk,
+            0,
+            gate.UnwrittenSegmentBytes);
+        var emergency = gate.Bulk.State == BulkStoragePressureState.Emergency
+            || gate.Reason == BulkStoragePressurePolicy.UnmeasuredRejectionReason;
+        if (emergency)
+        {
+            FileArticleStorageEngineLogMessages.RejectedBulkEmergency(
+                _logger,
+                record.ArtId.ToString() ?? string.Empty,
+                record.ArtSize,
+                gate.Bulk.State.ToString(),
+                gate.Snapshot.UsedBytes,
+                gate.Snapshot.AvailableBytes,
+                gate.Bulk.RecoveryReserveBytes,
+                headroom,
+                recoveryAttempted,
+                recoveryReclaimedSpace,
+                gate.Reason ?? string.Empty);
+            return;
+        }
+
+        FileArticleStorageEngineLogMessages.RejectedBulkHeadroom(
+            _logger,
+            record.ArtId.ToString() ?? string.Empty,
+            record.ArtSize,
+            gate.Bulk.State.ToString(),
+            gate.Snapshot.UsedBytes,
+            gate.Snapshot.AvailableBytes,
+            gate.Bulk.RecoveryReserveBytes,
+            headroom,
+            recoveryAttempted,
+            recoveryReclaimedSpace,
+            gate.Reason ?? string.Empty);
+    }
+
+    private ArticleAcceptResult RejectCapacityAdmission(
+        ArticleRecord record,
+        bool recoveryAttempted,
+        bool recoveryReclaimedSpace)
+    {
+        LogBulkAdmissionRejection(record, in _lastSegmentAdmission, recoveryAttempted, recoveryReclaimedSpace);
+        return ArticleAcceptResult.RejectedCapacity(
+            record.ArtId,
+            _lastSegmentAdmission.Reason ?? "storage-capacity");
+    }
+
+    /// <summary>
+    /// Same outstanding journal Accept, observed without waiting on the journal lock.
+    /// A capacity rejection then stays a capacity rejection when a checkpoint already holds
+    /// that lock. When the lock is free, an already-ACKed retry is Duplicate or Conflict
+    /// and no journal record is removed.
+    /// </summary>
+    private bool TryResolveOutstandingAccept(ArticleRecord record, out ArticleAcceptResult result)
+    {
+        if (_journal.TryPeekOutstanding(record.ArtId, out var outstanding))
+        {
+            result = outstanding.ArtHash == record.ArtHash && outstanding.ArtSize == record.ArtSize
+                ? ArticleAcceptResult.Duplicate(record.ArtId)
+                : ArticleAcceptResult.Conflict(record.ArtId);
+            return true;
+        }
+
+        result = default;
+        return false;
+    }
+
     private bool TryReserveAcceptPair(ArticleRecord record, long segmentBytes, long journalBytes, long indexBytes)
     {
         if (_pendingAcceptAdmission is { } pending
@@ -569,28 +808,27 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             return true;
         }
 
-        var segment = RequireSegmentVolume();
         var control = RequireControlVolume();
-        var segmentDecision = Admit(
-            segment,
-            segmentBytes,
-            _capacityMaximumUtilization,
-            static _ => false,
-            ledger => ledger.TentativeAdd(segmentBytes));
-        if (!segmentDecision.Admitted)
+        var segmentGate = TryAdmitNewSegmentCopy(segmentBytes);
+        if (!segmentGate.Admitted)
         {
-            FileArticleStorageEngineLogMessages.RejectedCapacity(
-                _logger,
-                record.ArtId.ToString() ?? string.Empty,
-                segmentBytes,
-                segmentDecision.Snapshot.UsedBytes,
-                segmentDecision.ArticleReservedBytes,
-                segmentDecision.CompactionReservedBytes,
-                segmentDecision.CheckpointReservedBytes,
-                segmentDecision.Snapshot.TotalBytes,
-                segmentDecision.Snapshot.AvailableBytes,
-                _capacityMaximumUtilization,
-                _capacityCompactionHeadroom);
+            _lastSegmentAdmission = segmentGate;
+            if (segmentGate.Reason == "storage-capacity")
+            {
+                FileArticleStorageEngineLogMessages.RejectedCapacity(
+                    _logger,
+                    record.ArtId.ToString() ?? string.Empty,
+                    segmentBytes,
+                    segmentGate.Snapshot.UsedBytes,
+                    segmentGate.ArticleReservedBytes,
+                    segmentGate.CompactionReservedBytes,
+                    0,
+                    segmentGate.Snapshot.TotalBytes,
+                    segmentGate.Snapshot.AvailableBytes,
+                    _capacityMaximumUtilization,
+                    _capacityCompactionHeadroom);
+            }
+
             return false;
         }
 
@@ -602,7 +840,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             ledger => ledger.TentativeAddJournal(journalBytes));
         if (!journalDecision.Admitted)
         {
-            segment.WithLedger(ledger =>
+            _lastSegmentAdmission = SegmentCopyAdmission.CapacityCeiling(journalDecision.Snapshot);
+            RequireSegmentVolume().WithLedger(ledger =>
             {
                 ledger.RollbackUnbound(segmentBytes);
                 return 0;
@@ -633,12 +872,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             return true;
         }
 
+        _lastSegmentAdmission = SegmentCopyAdmission.CapacityCeiling(indexDecision.Snapshot);
         control.WithLedger(ledger =>
         {
             ledger.RollbackUnboundJournal(journalBytes);
             return 0;
         });
-        segment.WithLedger(ledger =>
+        RequireSegmentVolume().WithLedger(ledger =>
         {
             ledger.RollbackUnbound(segmentBytes);
             return 0;
@@ -1254,7 +1494,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 options.CapacityMaximumUtilization,
                 options.CapacityCompactionHeadroom,
                 options.CapacityMaximumUsageCapacity,
-                options.CapacityFreeCapacity);
+                options.CapacityFreeCapacity,
+                new BulkStoragePressurePolicy(options.BulkPressure));
             var knownSegments = new HashSet<ulong>();
             foreach (var info in segments.Catalogue.Snapshot())
             {
@@ -1292,12 +1533,19 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
-        if (UsagePressureRecovery is not null && ShouldRecoverBeforeAccept(record))
+        if (UsagePressureRecovery is not null && ShouldRecoverBeforeAccept(record, out var measurementFailed))
         {
+            if (measurementFailed)
+            {
+                return Task.FromResult(ArticleAcceptResult.RejectedCapacity(
+                    record.ArtId,
+                    BulkStoragePressurePolicy.UnmeasuredRejectionReason));
+            }
+
             return AcceptAfterUsagePressureAsync(record, cancellationToken);
         }
 
-        return AcceptWithoutPressureRecovery(record, cancellationToken);
+        return AcceptWithoutPressureRecovery(record, cancellationToken, recoveryAttempted: false, recoveryReclaimedSpace: false);
     }
 
     private async Task<ArticleAcceptResult> AcceptAfterUsagePressureAsync(
@@ -1305,35 +1553,122 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         CancellationToken cancellationToken)
     {
         var recover = UsagePressureRecovery;
+        long freeBefore = 0;
+        var measuredBefore = false;
         if (recover is not null)
         {
-            await recover(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var before = ObserveCapacityAdmissionPressure();
+                freeBefore = before.AvailableBytes;
+                measuredBefore = before.CapacityAdmissionEnabled && before.TotalBytes > 0;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                FileArticleStorageEngineLogMessages.BulkCapacityUnmeasured(_logger, ex);
+                return ArticleAcceptResult.RejectedCapacity(
+                    record.ArtId,
+                    BulkStoragePressurePolicy.UnmeasuredRejectionReason);
+            }
+
+            try
+            {
+                await recover(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                FileArticleStorageEngineLogMessages.BulkAdmissionRecoveryFailed(
+                    _logger,
+                    record.ArtId.ToString() ?? string.Empty,
+                    record.ArtSize,
+                    ex);
+                return ArticleAcceptResult.RejectedCapacity(
+                    record.ArtId,
+                    BulkStoragePressurePolicy.RecoveryFailedRejectionReason);
+            }
         }
 
-        return await AcceptWithoutPressureRecovery(record, cancellationToken).ConfigureAwait(false);
+        var reclaimed = false;
+        if (measuredBefore)
+        {
+            try
+            {
+                var after = ObserveCapacityAdmissionPressure();
+                reclaimed = after.AvailableBytes > freeBefore;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                FileArticleStorageEngineLogMessages.BulkCapacityUnmeasured(_logger, ex);
+                return ArticleAcceptResult.RejectedCapacity(
+                    record.ArtId,
+                    BulkStoragePressurePolicy.UnmeasuredRejectionReason);
+            }
+        }
+
+        return await AcceptWithoutPressureRecovery(
+                record,
+                cancellationToken,
+                recoveryAttempted: true,
+                recoveryReclaimedSpace: reclaimed)
+            .ConfigureAwait(false);
     }
 
-    private bool ShouldRecoverBeforeAccept(ArticleRecord record)
+    private bool ShouldRecoverBeforeAccept(ArticleRecord record, out bool measurementFailed)
     {
+        measurementFailed = false;
         if (!_capacityAdmissionEnabled || _segmentCapacity is null || record.ArtSize <= 0)
         {
             return false;
         }
 
-        var pressure = ObserveCapacityAdmissionPressure();
+        CapacityAdmissionPressureSnapshot pressure;
+        try
+        {
+            pressure = ObserveCapacityAdmissionPressure();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            FileArticleStorageEngineLogMessages.BulkCapacityUnmeasured(_logger, ex);
+            measurementFailed = true;
+            return true;
+        }
+
         if (pressure.IsUnderUsagePressure)
         {
             return true;
         }
 
         var segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-        return !_segmentCapacity.WithLedger(ledger =>
+        var fitsUtilization = _segmentCapacity.WithLedger(ledger =>
             ledger.WouldFit(pressure.UsedBytes, pressure.TotalBytes, segmentBytes, _capacityMaximumUtilization));
+        if (!fitsUtilization)
+        {
+            return true;
+        }
+
+        var evaluation = _bulkPressure.Evaluate(pressure.TotalBytes, pressure.UsedBytes, pressure.AvailableBytes);
+        long unwritten;
+        try
+        {
+            unwritten = checked(pressure.ArticleReservedBytes + pressure.CompactionReservedBytes);
+        }
+        catch (OverflowException)
+        {
+            unwritten = long.MaxValue;
+        }
+
+        return !_bulkPressure.AllowsNewAccept(in evaluation, segmentBytes, unwritten);
     }
 
     private Task<ArticleAcceptResult> AcceptWithoutPressureRecovery(
         ArticleRecord record,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool recoveryAttempted,
+        bool recoveryReclaimedSpace)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
@@ -1356,12 +1691,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         if (_journal.AcceptParallelPreparation)
         {
-            return AcceptPreparedAsync(record, artData, cancellationToken);
+            return AcceptPreparedAsync(record, artData, cancellationToken, recoveryAttempted, recoveryReclaimedSpace);
         }
 
         if (_journal.AcceptGroupLimit > 1)
         {
-            return AcceptGroupedAsync(record, artData, cancellationToken);
+            return AcceptGroupedAsync(record, artData, cancellationToken, recoveryAttempted, recoveryReclaimedSpace);
         }
 
         JournalAcceptRecord journalRecord;
@@ -1399,7 +1734,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     indexBytes = ArticleIndexRecordCodec.RecordLength;
                     if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
                     {
-                        return Task.FromResult(ArticleAcceptResult.RejectedCapacity(record.ArtId));
+                        if (TryResolveOutstandingAccept(record, out var outstandingResult))
+                        {
+                            return Task.FromResult(outstandingResult);
+                        }
+
+                        return Task.FromResult(RejectCapacityAdmission(record, recoveryAttempted, recoveryReclaimedSpace));
                     }
 
                     reservedSegment = true;

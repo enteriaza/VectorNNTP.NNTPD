@@ -134,8 +134,7 @@ public sealed class StorageMaintenanceCoordinator
         _logger = logger ?? NullLogger.Instance;
         _bulkPolicy = new BulkStoragePressurePolicy(bulkPressure);
         _observedBulk = BulkStoragePressurePolicy.Unmeasured();
-        _engine.UsagePressureRecovery = cancellationToken =>
-            RunUsagePressureRecoveryAsync(cancellationToken, maintenanceRunId: 0);
+        _engine.UsagePressureRecovery = RunAdmissionRecoveryAsync;
     }
 
     /// <summary>Policy used by this coordinator (read-only).</summary>
@@ -1421,6 +1420,47 @@ public sealed class StorageMaintenanceCoordinator
             BulkRewriteSuppressed = true,
             SkipReason = StorageMaintenanceSkipReasons.BulkRewriteWithheld,
         };
+    }
+
+    /// <summary>
+    /// Accept-path recovery. Reclaims one already-retired segment and one already fully-dead
+    /// closed segment when the cache volume is High, Critical, or Emergency, then runs
+    /// usage-pressure recovery only while that latch is on and the volume is not Emergency.
+    /// Does not scan segment payloads, start a low-density rewrite, or evict Present articles
+    /// for Emergency. Extent accounting stays on the maintenance cycle.
+    /// </summary>
+    private async Task RunAdmissionRecoveryAsync(CancellationToken cancellationToken)
+    {
+        var pressure = _engine.ObserveCapacityAdmissionPressure();
+        ObserveBulk(in pressure);
+        var bulk = CurrentBulk();
+        if (bulk.State is BulkStoragePressureState.High
+            or BulkStoragePressureState.Critical
+            or BulkStoragePressureState.Emergency)
+        {
+            if (_policy.TrySelectReclamationVictim(_engine.Catalogue, out var retired))
+            {
+                _ = await TryReclaimRetiredAsync(retired, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (TrySelectFullyDeadClosed(out var dead))
+            {
+                _ = await TryReclaimFullyDeadClosedAsync(dead, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        pressure = _engine.ObserveCapacityAdmissionPressure();
+        ObserveBulk(in pressure);
+        if (CurrentBulk().State == BulkStoragePressureState.Emergency)
+        {
+            return;
+        }
+
+        if (pressure.IsUnderUsagePressure && pressure.UsedBytes > pressure.UsageRecoveryTargetBytes)
+        {
+            _ = await RunUsagePressureRecoveryAsync(cancellationToken, maintenanceRunId: 0)
+                .ConfigureAwait(false);
+        }
     }
 
     /// <summary>

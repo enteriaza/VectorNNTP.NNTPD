@@ -16,8 +16,10 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// </para>
 /// <para>
 /// The reserve percentages are measurements. They are not a filesystem quota and not
-/// an allocator. Maintenance uses them when deciding whether a new low-density rewrite
-/// would consume headroom that must stay free. Accept does not subtract them.
+/// an allocator. Maintenance uses all three when deciding whether a new low-density
+/// rewrite would consume headroom that must stay free. At High, Critical, and Emergency,
+/// Accept rejects a new article whose segment copy would leave free space below the
+/// recovery reserve. Operational and rewrite reserves are not subtracted from Accept.
 /// </para>
 /// <para>
 /// Classification does not delete a live acknowledged article. An article that has been
@@ -75,6 +77,7 @@ public sealed class BulkStoragePressureOptions
 
     /// <summary>
     /// Gets or sets the recovery reserve percent. Default <see cref="DefaultRecoveryReservePercent"/>.
+    /// At High, Critical, and Emergency this percent of total bytes is the Accept floor.
     /// </summary>
     public int RecoveryReservePercent { get; set; } = DefaultRecoveryReservePercent;
 

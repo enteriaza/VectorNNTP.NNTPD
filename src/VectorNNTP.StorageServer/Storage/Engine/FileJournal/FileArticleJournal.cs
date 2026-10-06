@@ -531,18 +531,46 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     {
         lock (_gate)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_outstandingArtIdToSequence.TryGetValue(artId, out var sequence)
-                && _bySequence.TryGetValue(sequence, out var state)
-                && !state.IndexCommitted)
-            {
-                record = state.IncompleteAccept;
-                return true;
-            }
+            return TryGetOutstandingUnlocked(artId, out record);
+        }
+    }
 
+    /// <summary>
+    /// Same lookup as <see cref="TryGetOutstanding"/> without waiting for the journal lock.
+    /// Returns false when the lock is already held, so an admission rejection cannot deadlock
+    /// behind a checkpoint that is waiting for the caller.
+    /// </summary>
+    internal bool TryPeekOutstanding(ArticleId artId, out JournalAcceptRecord record)
+    {
+        if (!Monitor.TryEnter(_gate))
+        {
             record = null!;
             return false;
         }
+
+        try
+        {
+            return TryGetOutstandingUnlocked(artId, out record);
+        }
+        finally
+        {
+            Monitor.Exit(_gate);
+        }
+    }
+
+    private bool TryGetOutstandingUnlocked(ArticleId artId, out JournalAcceptRecord record)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_outstandingArtIdToSequence.TryGetValue(artId, out var sequence)
+            && _bySequence.TryGetValue(sequence, out var state)
+            && !state.IndexCommitted)
+        {
+            record = state.IncompleteAccept;
+            return true;
+        }
+
+        record = null!;
+        return false;
     }
 
     /// <inheritdoc />

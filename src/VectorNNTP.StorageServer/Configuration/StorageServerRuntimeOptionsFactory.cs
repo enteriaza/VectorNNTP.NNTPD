@@ -110,7 +110,8 @@ public static class StorageServerRuntimeOptionsFactory
                 CapacityFreeCapacity: storage.Capacity?.FreeCapacity
                     ?? ArticleCapacityOptions.DefaultFreeCapacity,
                 MaxSegmentSealDelay: storage.MaxSegmentSealDelay,
-                ActiveSegmentCount: storage.ActiveSegmentCount),
+                ActiveSegmentCount: storage.ActiveSegmentCount,
+                BulkPressure: storage.BulkPressure),
             CertificateDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(acme.AcmeStateDir, contentRootPath),
             GracefulShutdownTimeout: options.GracefulShutdownTimeout,
             StartupTimeout: options.StartupTimeout,
