@@ -18,12 +18,14 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Accept returns after durable journal Accept (ArtData embedded). Background persist (or
-/// <see cref="RecoverAsync"/>) completes SATA append → PhysicalWritten → index Present →
-/// IndexCommitted. That Accept is readable as soon as it is durable, before Present.
-/// <see cref="TryRead(ArticleId, out ArticleReadResult)"/> proves the outstanding payload and prefers the published segment
-/// once Present is visible. The Accept stays outstanding until IndexCommitted, which follows
-/// that publication, so journal reclamation cannot open a miss window.
+/// Accept returns after durable journal Accept (ArtData embedded). That is the ingress
+/// boundary: the article is readable from the journal before any segment publication.
+/// Background persist (or <see cref="RecoverAsync"/>) then completes SATA append →
+/// PhysicalWritten → index Present → IndexCommitted. <see cref="TryRead(ArticleId, out ArticleReadResult)"/>
+/// proves the outstanding payload and prefers the published segment once Present is visible.
+/// The Accept stays outstanding until IndexCommitted, which follows that publication, so a
+/// journal checkpoint cannot drop it earlier and open a miss window. Present is the bulk
+/// publication readers use. It is not, by itself, the ingress-retirement boundary.
 /// </para>
 /// <para>
 /// Recovery (Phase 1.5 / Option 1): Accept-only always performs a fresh SATA append from journal

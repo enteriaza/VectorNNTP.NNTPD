@@ -4,14 +4,23 @@ namespace VectorNNTP.StorageServer.Storage.Engine;
 
 /// <summary>Logical article state in the durable article index.</summary>
 /// <remarks>
-/// Evicted is a logical tombstone only; it does not reclaim or rewrite segment bytes.
-/// Physical reclamation is a separate future concern. Invalid marks indexed articles whose
-/// physical bytes failed integrity validation or are otherwise unusable.
-/// Incomplete accept work must not be modelled by additional values here — it lives in the journal.
+/// <para>
+/// These values publish index state. They are not storage tiers and they do not describe
+/// the cache. A durable journal Accept is readable while this index has no row. That
+/// ingress copy stays recoverable until journal <c>IndexCommitted</c>, which follows a
+/// durable <see cref="Present"/> publication. <see cref="Present"/> means the bulk
+/// location is the published serveable copy. It does not itself retire the ingress payload.
+/// </para>
+/// <para>
+/// <see cref="Evicted"/> is a logical tombstone: the article must not be served even when
+/// segment or cache bytes still exist. It does not reclaim those bytes.
+/// <see cref="Invalid"/> means the indexed bytes failed integrity validation and must not
+/// be served. Physical reclamation is a catalogue concern and has no article state here.
+/// </para>
 /// </remarks>
 public enum ArticleStorageState : byte
 {
-    /// <summary>Article is indexed as present and eligible for integrity-proven reads.</summary>
+    /// <summary>Bulk location is published and eligible for integrity-proven reads.</summary>
     Present = 1,
 
     /// <summary>Article is logically tombstoned; physical bytes may still exist in segments.</summary>
@@ -70,6 +79,10 @@ public static class SegmentLifecycle
 }
 
 /// <summary>Journal / write-path pressure derived from <see cref="IArticleJournal.OutstandingRecoverableBytes"/>.</summary>
+/// <remarks>
+/// Counts ingress bytes that are not yet <c>IndexCommitted</c>. Soft and hard limits are
+/// Accept back-pressure only. They are not retention, expiration, or cache policy.
+/// </remarks>
 public enum StorageWritePressure : byte
 {
     /// <summary>Outstanding recoverable bytes are below the soft limit.</summary>
