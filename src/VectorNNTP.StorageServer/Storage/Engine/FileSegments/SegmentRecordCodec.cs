@@ -170,16 +170,15 @@ internal static class SegmentRecordCodec
 
     /// <summary>
     /// Fills a 52-byte header and 4-byte CRC for one record.
-    /// Does not copy the payload and does not allocate a payload buffer.
-    /// <paramref name="framedHash"/> is XxHash3 over the header, payload, and CRC.
+    /// Does not copy the payload, does not allocate a payload buffer, and does not hash the frame.
+    /// Pending-record reconciliation calls <see cref="FramedHash"/> only when it needs that value.
     /// </summary>
     internal static void PrepareProductionFrame(
         ArticleId artId,
         ulong artHash,
         ReadOnlySpan<byte> artData,
         Span<byte> header,
-        Span<byte> crc,
-        out ulong framedHash)
+        Span<byte> crc)
     {
         if (header.Length != FixedHeaderLength)
         {
@@ -193,7 +192,6 @@ internal static class SegmentRecordCodec
 
         WriteHeader(header, artId, artHash, artData.Length);
         BinaryPrimitives.WriteUInt32LittleEndian(crc, Checksum(header, artData));
-        framedHash = FramedHash(header, artData, crc);
     }
 
     /// <summary>Writes the fixed record header, including the full-record length.</summary>

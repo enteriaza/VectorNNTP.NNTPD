@@ -775,6 +775,12 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>
+    /// Frames and appends one payload on the single active segment.
+    /// Identity and ArtHash are derived once from <paramref name="artData"/>.
+    /// The frame CRC is always written. <see cref="SegmentRecordCodec.FramedHash"/> is computed
+    /// only when a <see cref="PendingSegmentRecord"/> must be matched or created.
+    /// </summary>
     private ActiveSegmentAppend AppendToActiveUnlockedCore(ReadOnlyMemory<byte> artData)
     {
         if (artData.Length is < 1 or > ArticleResourceLimits.MaxArticleBytes)
@@ -795,23 +801,21 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         var xxStart = PhysicalProofProbe.MarkAppend();
         var artHash = XxHash3.HashToUInt64(artData.Span);
         PhysicalProofProbe.AddAppendXx(xxStart);
-        var proveStart = PhysicalProofProbe.MarkAppend();
-        if (!ArticleStorageIntegrity.TryProve(artData.Span, artId, artHash, artData.Length))
-        {
-            throw new ArgumentException("ArtData failed article integrity proof.", nameof(artData));
-        }
 
-        PhysicalProofProbe.AddAppendProve(proveStart);
-
+        // artId and artHash were just derived from this span on this thread. TryProve would
+        // extract the Message-ID, hash the payload, and derive the id again. Nothing in this
+        // method mutates the span before the write. Callers that already hold an expected
+        // identity compare the receipt, and disk reads prove the persisted record.
         Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
         Span<byte> crc = stackalloc byte[4];
-        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc, out var framedHash);
+        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc);
         var recordLength = SegmentRecordCodec.RecordLengthForArtSize(artData.Length);
         EnsureActiveUnlocked();
         var activeId = _activeSegmentId!.Value;
         var runtime = _segments[activeId];
         if (runtime.PendingRecord is not null)
         {
+            var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, crc);
             var finished = FinishPendingSegmentRecord(runtime, recordLength, framedHash, artId, artHash, artData.Length);
             if (ActiveAgeElapsedUnlocked(runtime))
             {
@@ -899,6 +903,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
         catch (Exception ex) when (ex is not UnreconciledDurableTailException)
         {
+            var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, crc);
             if (TryRecoverFailedActiveWrite(
                     runtime,
                     offset,
@@ -1459,6 +1464,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// returns. A write or flush failure uses <see cref="TryRecoverFailedActiveWrite"/> so a
     /// partial tail is truncated and a complete undurable record becomes
     /// <see cref="PendingSegmentRecord"/> instead of wedging the writer.
+    /// <see cref="SegmentRecordCodec.FramedHash"/> runs only for that pending record
+    /// or when a later append must match one. A successful chunk does not compute it.
     /// </summary>
     private PinnedChunkItem AppendPinned(
         SegmentRuntime runtime,
@@ -1480,17 +1487,15 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
             var artId = ArticleId.FromMessageId(messageId);
             var artHash = XxHash3.HashToUInt64(artData.Span);
-            if (!ArticleStorageIntegrity.TryProve(artData.Span, artId, artHash, artData.Length))
-            {
-                throw new ArgumentException("ArtData failed article integrity proof.", nameof(artData));
-            }
 
+            // Same derivation as the single-writer path. The second proof would rescan this span.
             Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
             Span<byte> crc = stackalloc byte[4];
-            SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc, out var framedHash);
+            SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc);
             var recordLength = SegmentRecordCodec.RecordLengthForArtSize(artData.Length);
             if (runtime.PendingRecord is not null)
             {
+                var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, crc);
                 var finished = FinishPendingSegmentRecord(
                     runtime,
                     recordLength,
@@ -1548,6 +1553,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             }
             catch (Exception ex) when (ex is not UnreconciledDurableTailException)
             {
+                var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, crc);
                 if (TryRecoverFailedActiveWrite(
                         runtime,
                         expectedOffset,

@@ -18,7 +18,8 @@ public sealed class SegmentAppendFramedWriteTests
         var encoded = SegmentRecordCodec.Encode(artId, artHash, article);
         Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
         Span<byte> crc = stackalloc byte[4];
-        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, article, header, crc, out var framedHash);
+        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, article, header, crc);
+        var framedHash = SegmentRecordCodec.FramedHash(header, article, crc);
 
         Assert.Equal(SegmentRecordCodec.FixedHeaderLength, header.Length);
         Assert.True(encoded.AsSpan(0, header.Length).SequenceEqual(header));
