@@ -61,6 +61,9 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     private readonly object _gate = new();
     private readonly SemaphoreSlim _snapshotFlight = new(1, 1);
     private readonly Dictionary<ArticleId, StoredArticleMetadata> _entries = new();
+    private readonly LinkedList<ArticleId> _scanOrder = new();
+    private readonly Dictionary<ArticleId, LinkedListNode<ArticleId>> _scanNodes = new();
+    private LinkedListNode<ArticleId>? _scanCursor;
     private readonly string _indexPath;
     private FileStream _stream;
     private long _durableWriteCount;
@@ -446,6 +449,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             frameOffset = _stream.Length;
             AppendDurableUnlocked(metadata);
             _entries[metadata.ArtId] = metadata;
+            RememberScanOrderUnlocked(metadata.ArtId);
             NoteStructuralChangeUnlocked();
             return DurableIndexAppend.Appended;
         }
@@ -522,6 +526,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
             foreach (var entry in pending)
             {
                 _entries[entry.Metadata.ArtId] = entry.Metadata;
+                RememberScanOrderUnlocked(entry.Metadata.ArtId);
                 NoteStructuralChangeUnlocked();
                 results[entry.Index] = DurableIndexAppend.Appended;
                 _durableWriteCount++;
@@ -716,6 +721,121 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>
+    /// Copies up to <paramref name="maxVisited"/> index rows into <paramref name="present"/>,
+    /// continuing from the previous window. Only <see cref="ArticleStorageState.Present"/> rows
+    /// are copied. The cursor also advances across Evicted and Invalid rows.
+    /// </summary>
+    /// <param name="maxVisited">Maximum rows to examine in this window.</param>
+    /// <param name="present">Destination for Present snapshots. Filled from index 0.</param>
+    /// <param name="visited">Rows examined, including non-Present rows.</param>
+    /// <param name="wrapped">True when this window reached the end of the scan order.</param>
+    /// <returns>The number of Present snapshots written to <paramref name="present"/>.</returns>
+    /// <remarks>
+    /// Holds the index lock only for this window. Successor order is a linked list updated on
+    /// insert and forget, so the walk does not rescan the retained population to find the cursor.
+    /// A row removed during the walk is skipped. Reaching the end arms the next call at the first row.
+    /// </remarks>
+    internal int CopyRetentionWindow(
+        int maxVisited,
+        Span<RetentionScanCandidate> present,
+        out int visited,
+        out bool wrapped)
+    {
+        visited = 0;
+        wrapped = false;
+        if (maxVisited <= 0 || present.IsEmpty)
+        {
+            return 0;
+        }
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_scanOrder.Count == 0)
+            {
+                return 0;
+            }
+
+            _scanCursor ??= _scanOrder.First;
+            var copied = 0;
+            while (visited < maxVisited && _scanCursor is not null)
+            {
+                var node = _scanCursor;
+                _scanCursor = node.Next;
+                visited++;
+                if (_entries.TryGetValue(node.Value, out var metadata)
+                    && metadata.State == ArticleStorageState.Present
+                    && copied < present.Length)
+                {
+                    present[copied++] = new RetentionScanCandidate(
+                        metadata.ArtId,
+                        metadata.Location,
+                        metadata.Sequence,
+                        metadata.AcceptedUtc);
+                }
+
+                if (_scanCursor is null)
+                {
+                    wrapped = true;
+                    _scanCursor = _scanOrder.First;
+                    break;
+                }
+            }
+
+            return copied;
+        }
+    }
+
+    /// <summary>
+    /// Evicts <paramref name="artId"/> only when the locked row is still the scanned Present article.
+    /// </summary>
+    /// <param name="artId">Article identity from the scan window.</param>
+    /// <param name="expectedLocation">Location copied with the candidate.</param>
+    /// <param name="expectedSequence">Journal sequence copied with the candidate.</param>
+    /// <param name="expectedAcceptedUtc">Arrival instant copied with the candidate.</param>
+    /// <param name="utcNow">Timestamp stored on the tombstone as <see cref="StoredArticleMetadata.LastAccessUtc"/>.</param>
+    /// <param name="transitioned">The Evicted row when this call appends one.</param>
+    /// <param name="frameOffset">File offset of the appended frame; otherwise -1.</param>
+    /// <returns>True when this call appended an Evicted frame.</returns>
+    /// <remarks>
+    /// Compare and append share one index critical section. A relocation, a newer Accept, an
+    /// existing tombstone, or <see cref="DateTimeOffset.MinValue"/> leaves the row unchanged.
+    /// <see cref="StoredArticleMetadata.AcceptedUtc"/> is copied from the current row.
+    /// </remarks>
+    internal bool TryExpirePresentIfUnchanged(
+        ArticleId artId,
+        in StoredArticleLocation expectedLocation,
+        ulong expectedSequence,
+        DateTimeOffset expectedAcceptedUtc,
+        DateTimeOffset utcNow,
+        out StoredArticleMetadata transitioned,
+        out long frameOffset)
+    {
+        transitioned = default;
+        frameOffset = -1;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_entries.TryGetValue(artId, out var existing)
+                || existing.State != ArticleStorageState.Present
+                || existing.Sequence != expectedSequence
+                || existing.AcceptedUtc != expectedAcceptedUtc
+                || existing.AcceptedUtc == DateTimeOffset.MinValue
+                || !LocationsEqual(existing.Location, expectedLocation))
+            {
+                return false;
+            }
+
+            transitioned = existing with { State = ArticleStorageState.Evicted, LastAccessUtc = utcNow };
+            frameOffset = _stream.Length;
+            AppendDurableUnlocked(transitioned);
+            _entries[artId] = transitioned;
+            NoteStructuralChangeUnlocked();
+            return true;
+        }
+    }
+
     /// <inheritdoc />
     /// <remarks>
     /// Soft in-memory LastAccess hint only. Must not require a durable NVMe write; loss across
@@ -799,6 +919,49 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>Inserts <paramref name="artId"/> at the end of the retention scan order once.</summary>
+    /// <remarks>Caller holds <see cref="_gate"/>. In-place updates keep the existing node.</remarks>
+    private void RememberScanOrderUnlocked(ArticleId artId)
+    {
+        if (_scanNodes.ContainsKey(artId))
+        {
+            return;
+        }
+
+        var node = _scanOrder.AddLast(artId);
+        _scanNodes.Add(artId, node);
+    }
+
+    /// <summary>Drops <paramref name="artId"/> from the retention scan order.</summary>
+    /// <remarks>Caller holds <see cref="_gate"/>. The cursor advances when it pointed at this node.</remarks>
+    private void ForgetScanOrderUnlocked(ArticleId artId)
+    {
+        if (!_scanNodes.Remove(artId, out var node))
+        {
+            return;
+        }
+
+        if (_scanCursor == node)
+        {
+            _scanCursor = node.Next;
+        }
+
+        _scanOrder.Remove(node);
+    }
+
+    /// <summary>Rebuilds scan order from the current rows. Used after open replay.</summary>
+    private void RebuildScanOrderUnlocked()
+    {
+        _scanOrder.Clear();
+        _scanNodes.Clear();
+        _scanCursor = null;
+        foreach (var artId in _entries.Keys)
+        {
+            var node = _scanOrder.AddLast(artId);
+            _scanNodes.Add(artId, node);
+        }
+    }
+
     /// <summary>
     /// Removes matching rows and their LFU counters. Caller holds <see cref="_gate"/>.
     /// </summary>
@@ -825,6 +988,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         foreach (var artId in drop)
         {
             _ = _entries.Remove(artId);
+            ForgetScanOrderUnlocked(artId);
             _ = _useCounts.Remove(artId);
         }
 
@@ -1718,12 +1882,15 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
         if (deltaStart == fileLength)
         {
             _stream.Seek(0, SeekOrigin.End);
-            return;
+        }
+        else
+        {
+            _stream.Seek(deltaStart, SeekOrigin.Begin);
+            ArticleIndexReplayer.Replay(_stream, fileLength, _entries, HandleDecodeFailureUnlocked, deltaStart);
+            _stream.Seek(0, SeekOrigin.End);
         }
 
-        _stream.Seek(deltaStart, SeekOrigin.Begin);
-        ArticleIndexReplayer.Replay(_stream, fileLength, _entries, HandleDecodeFailureUnlocked, deltaStart);
-        _stream.Seek(0, SeekOrigin.End);
+        RebuildScanOrderUnlocked();
     }
 
     private long ResolveDeltaStartUnlocked(
@@ -1935,3 +2102,14 @@ internal readonly record struct RetainedIndexFrame(
     ArticleId ArtId,
     long FileOffset,
     ulong SnapshotGeneration);
+
+/// <summary>One Present index row copied for a retention window.</summary>
+/// <param name="ArtId">Article identity.</param>
+/// <param name="Location">Location at the copy. A later relocation makes expiration a no-op.</param>
+/// <param name="Sequence">Journal sequence at the copy. A newer Accept makes expiration a no-op.</param>
+/// <param name="AcceptedUtc">Arrival instant at the copy. Expiration does not replace it.</param>
+internal readonly record struct RetentionScanCandidate(
+    ArticleId ArtId,
+    StoredArticleLocation Location,
+    ulong Sequence,
+    DateTimeOffset AcceptedUtc);

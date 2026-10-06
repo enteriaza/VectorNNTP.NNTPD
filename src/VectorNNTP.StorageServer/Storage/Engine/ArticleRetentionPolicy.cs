@@ -6,16 +6,16 @@ namespace VectorNNTP.StorageServer.Storage.Engine;
 /// <remarks>
 /// <para>
 /// The decision is pure. It does not read disks, update the index, touch the cache, or delete
-/// bytes. <see cref="ArticleStorageState.Evicted"/> remains the tombstone a later executor
-/// would write. Until that write, a bulk article stays <see cref="ArticleStorageState.Present"/>
-/// and readable.
+/// bytes. The maintenance batch is the executor: it calls this method and then the existing
+/// <see cref="ArticleStorageState.Evicted"/> transition. Until that transition, a bulk article
+/// stays <see cref="ArticleStorageState.Present"/> and readable.
 /// </para>
 /// <para>
 /// Arrival time is the journal Accept instant. <c>IndexCommitted</c> releases the Accept
 /// record, and the index keeps that same instant on
 /// <see cref="StoredArticleMetadata.AcceptedUtc"/>. Schema 2 rows have no field and restore as
-/// <see cref="DateTimeOffset.MinValue"/>. This predicate does not read the index. A future
-/// executor passes the stored instant; it does not evict from here.
+/// <see cref="DateTimeOffset.MinValue"/>. This predicate does not read the index. The maintenance
+/// batch passes the stored instant and evicts only when this method returns true.
 /// <see cref="StoredArticleMetadata.LastAccessUtc"/> is a soft hint: reads update it only in
 /// memory, and the durable copy is the publication or tombstone time. It is not an arrival time.
 /// </para>

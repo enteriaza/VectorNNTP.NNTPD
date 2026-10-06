@@ -136,7 +136,8 @@ public static class StorageServerServiceCollectionExtensions
                 sp.GetRequiredService<ArticleSegmentPolicy>(),
                 storage?.JournalCheckpointThresholdBytes ?? 0,
                 sp.GetRequiredService<ILogger<StorageMaintenanceCoordinator>>(),
-                storage?.IndexCheckpointThresholdBytes ?? 0);
+                storage?.IndexCheckpointThresholdBytes ?? 0,
+                storage?.MaxRetentionAge ?? TimeSpan.Zero);
         }));
         builder.Services.AddSingleton<StorageMaintenanceService>();
 

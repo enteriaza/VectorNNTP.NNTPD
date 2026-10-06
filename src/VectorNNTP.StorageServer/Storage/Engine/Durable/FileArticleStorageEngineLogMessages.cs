@@ -235,4 +235,39 @@ internal static partial class FileArticleStorageEngineLogMessages
         Level = LogLevel.Information,
         Message = "Article storage engine closed")]
     public static partial void Closed(ILogger logger);
+
+    [LoggerMessage(
+        EventId = 3428,
+        Level = LogLevel.Debug,
+        Message = "Retention batch idle (Visited={Visited}, Evaluated={Evaluated}, NotEligible={NotEligible}, StateChanged={StateChanged}, BatchSize={BatchSize}, DurationMs={DurationMs}, Wrapped={Wrapped})")]
+    public static partial void RetentionBatchIdle(
+        ILogger logger,
+        int Visited,
+        int Evaluated,
+        int NotEligible,
+        int StateChanged,
+        int BatchSize,
+        double DurationMs,
+        bool Wrapped);
+
+    [LoggerMessage(
+        EventId = 3426,
+        Level = LogLevel.Information,
+        Message = "Retention batch completed (Visited={Visited}, Evaluated={Evaluated}, Expired={Expired}, NotEligible={NotEligible}, StateChanged={StateChanged}, BatchSize={BatchSize}, DurationMs={DurationMs}, Wrapped={Wrapped})")]
+    public static partial void RetentionBatchCompleted(
+        ILogger logger,
+        int Visited,
+        int Evaluated,
+        int Expired,
+        int NotEligible,
+        int StateChanged,
+        int BatchSize,
+        double DurationMs,
+        bool Wrapped);
+
+    [LoggerMessage(
+        EventId = 3427,
+        Level = LogLevel.Error,
+        Message = "Retention expiration failed (artId={ArtId})")]
+    public static partial void RetentionExpirationFailed(ILogger logger, Exception ex, string ArtId);
 }

@@ -16,6 +16,8 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// </summary>
 /// <remarks>
 /// <para>
+/// When <c>MaxRetentionAge</c> is positive, <see cref="RunOnceAsync"/> first expires one bounded
+/// batch of eligible Present articles. That pass reads index metadata only. Zero skips it.
 /// One <see cref="RunOnceAsync"/> performs at most one useful maintenance cycle:
 /// reclaim one Retired segment, or continue/finish one compaction lifecycle
 /// (compact → retire → reclaim). No timers, workers, or hosted-service wiring.
@@ -61,6 +63,7 @@ public sealed class StorageMaintenanceCoordinator
     private readonly ArticleSegmentPolicy _policy;
     private readonly long _journalCheckpointThresholdBytes;
     private readonly long _indexCheckpointThresholdBytes;
+    private readonly TimeSpan _maxRetentionAge;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _usagePressureGate = new(1, 1);
 
@@ -74,21 +77,31 @@ public sealed class StorageMaintenanceCoordinator
     /// <param name="indexCheckpointThresholdBytes">
     /// Physical index frame history at which this cycle checkpoints. <c>0</c> does not checkpoint.
     /// </param>
+    /// <param name="maxRetentionAge">
+    /// Age at which a bulk-committed article may be logically evicted.
+    /// <see cref="TimeSpan.Zero"/> disables expiration and skips the index scan.
+    /// </param>
     public StorageMaintenanceCoordinator(
         FileArticleStorageEngine engine,
         ArticleSegmentPolicy policy,
         long journalCheckpointThresholdBytes = 0,
         ILogger? logger = null,
-        long indexCheckpointThresholdBytes = 0)
+        long indexCheckpointThresholdBytes = 0,
+        TimeSpan maxRetentionAge = default)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentOutOfRangeException.ThrowIfNegative(journalCheckpointThresholdBytes);
         ArgumentOutOfRangeException.ThrowIfNegative(indexCheckpointThresholdBytes);
+        if (maxRetentionAge < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxRetentionAge));
+        }
         _engine = engine;
         _policy = policy;
         _journalCheckpointThresholdBytes = journalCheckpointThresholdBytes;
         _indexCheckpointThresholdBytes = indexCheckpointThresholdBytes;
+        _maxRetentionAge = maxRetentionAge;
         _logger = logger ?? NullLogger.Instance;
         _engine.UsagePressureRecovery = cancellationToken =>
             RunUsagePressureRecoveryAsync(cancellationToken, maintenanceRunId: 0);
@@ -131,6 +144,8 @@ public sealed class StorageMaintenanceCoordinator
         ulong maintenanceRunId = 0)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        // Metadata-only. Runs before segment accounting so expiration does not wait on physical scans.
+        _ = _engine.ExpireRetentionBatch(_maxRetentionAge, cancellationToken);
         TryCheckpointJournal(maintenanceRunId);
         TryCheckpointIndex(maintenanceRunId);
 

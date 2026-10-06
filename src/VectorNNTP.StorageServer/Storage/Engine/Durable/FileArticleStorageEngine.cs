@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
@@ -1100,6 +1101,18 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// article returns false before durable <c>TrySetState</c> (tests only; auto-cleared).
     /// </summary>
     internal bool TestFailNextLogicalDeath { get; set; }
+
+    /// <summary>
+    /// Invoked after an eligible retention candidate is selected and before the conditional eviction.
+    /// Tests only. May relocate or cancel. Must not call <see cref="ExpireRetentionBatch"/>.
+    /// </summary>
+    internal Action<RetentionScanCandidate>? TestHookBeforeRetentionExpire { get; set; }
+
+    /// <summary>Rows examined by one age-expiration maintenance batch.</summary>
+    internal const int RetentionScanBatchSize = 128;
+
+    /// <summary>Upper bound for <see cref="ExpireRetentionBatch"/> so a caller cannot scan the population.</summary>
+    internal const int MaxRetentionScanBatchSize = 1024;
 
     /// <summary>
     /// Invoked after a cache-miss index snapshot and before the segment read.
@@ -2395,6 +2408,259 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <inheritdoc />
     public bool TryEvict(ArticleId artId) => TransitionLogicalDeath(artId, ArticleStorageState.Evicted);
+
+    /// <summary>
+    /// Expires at most <paramref name="batchSize"/> index rows whose durable arrival age has reached
+    /// <paramref name="maxRetentionAge"/>.
+    /// </summary>
+    /// <param name="maxRetentionAge">
+    /// Configured maximum age. Zero or negative disables the batch: no index lock and no mutation.
+    /// </param>
+    /// <param name="cancellationToken">Stops the batch between articles. Completed tombstones stay durable.</param>
+    /// <param name="batchSize">
+    /// Maximum rows to examine. Defaults to <see cref="RetentionScanBatchSize"/>.
+    /// </param>
+    /// <returns>Counts for this batch. Physical segment bytes are not read or deleted.</returns>
+    /// <remarks>
+    /// The window is index metadata only. Eligibility is
+    /// <see cref="ArticleRetentionPolicy.IsExpirationEligible"/>. A match then calls
+    /// <see cref="FileArticleIndex.TryExpirePresentIfUnchanged"/>, which appends an Evicted frame
+    /// only when the row is still that same Present article. <see cref="StoredArticleMetadata.AcceptedUtc"/>
+    /// is copied. Ingress-only articles have no Present row and are not visited.
+    /// </remarks>
+    internal RetentionExpirationResult ExpireRetentionBatch(
+        TimeSpan maxRetentionAge,
+        CancellationToken cancellationToken,
+        int batchSize = RetentionScanBatchSize)
+    {
+        if (batchSize <= 0 || batchSize > MaxRetentionScanBatchSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(batchSize));
+        }
+
+        if (maxRetentionAge <= TimeSpan.Zero)
+        {
+            return new RetentionExpirationResult(
+                EntriesVisited: 0,
+                PresentEvaluated: 0,
+                Expired: 0,
+                NotEligible: 0,
+                StateChanged: 0,
+                BatchSize: batchSize,
+                DurationMilliseconds: 0,
+                Wrapped: false,
+                Disabled: true);
+        }
+
+        var started = Stopwatch.GetTimestamp();
+        var visited = 0;
+        var evaluated = 0;
+        var expired = 0;
+        var notEligible = 0;
+        var changed = 0;
+        var wrapped = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var present = new RetentionScanCandidate[batchSize];
+            var copied = _index.CopyRetentionWindow(batchSize, present, out visited, out wrapped);
+            var now = _timeProvider.GetUtcNow();
+            for (var i = 0; i < copied; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var candidate = present[i];
+                evaluated++;
+                if (!ArticleRetentionPolicy.IsExpirationEligible(
+                        bulkCommitted: true,
+                        candidate.AcceptedUtc,
+                        maxRetentionAge,
+                        now))
+                {
+                    notEligible++;
+                    continue;
+                }
+
+                TestHookBeforeRetentionExpire?.Invoke(candidate);
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    if (TryExpireRetentionCandidate(candidate))
+                    {
+                        expired++;
+                    }
+                    else
+                    {
+                        changed++;
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    FileArticleStorageEngineLogMessages.RetentionExpirationFailed(
+                        _logger,
+                        ex,
+                        candidate.ArtId.ToString() ?? string.Empty);
+                    throw;
+                }
+            }
+
+            return CreateRetentionResult(
+                visited, evaluated, expired, notEligible, changed, batchSize, started, wrapped);
+        }
+        finally
+        {
+            if (visited > 0 || expired > 0)
+            {
+                var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                if (expired > 0)
+                {
+                    FileArticleStorageEngineLogMessages.RetentionBatchCompleted(
+                        _logger,
+                        visited,
+                        evaluated,
+                        expired,
+                        notEligible,
+                        changed,
+                        batchSize,
+                        elapsed,
+                        wrapped);
+                }
+                else
+                {
+                    FileArticleStorageEngineLogMessages.RetentionBatchIdle(
+                        _logger,
+                        visited,
+                        evaluated,
+                        notEligible,
+                        changed,
+                        batchSize,
+                        elapsed,
+                        wrapped);
+                }
+            }
+        }
+    }
+
+    private static RetentionExpirationResult CreateRetentionResult(
+        int visited,
+        int evaluated,
+        int expired,
+        int notEligible,
+        int changed,
+        int batchSize,
+        long startedTimestamp,
+        bool wrapped) =>
+        new(
+            visited,
+            evaluated,
+            expired,
+            notEligible,
+            changed,
+            batchSize,
+            Stopwatch.GetElapsedTime(startedTimestamp).TotalMilliseconds,
+            wrapped,
+            Disabled: false);
+
+    private bool IndexExpireWouldAppend(in RetentionScanCandidate candidate) =>
+        _index.TryGet(candidate.ArtId, out var existing)
+        && existing.State == ArticleStorageState.Present
+        && existing.Sequence == candidate.Sequence
+        && existing.AcceptedUtc == candidate.AcceptedUtc
+        && existing.AcceptedUtc != DateTimeOffset.MinValue
+        && LocationsEqual(existing.Location, candidate.Location);
+
+    private bool TryExpireRetentionCandidate(in RetentionScanCandidate candidate)
+    {
+        var frameBytes = (long)ArticleIndexRecordCodec.RecordLength;
+        var reserved = false;
+        long lengthBefore = 0;
+        var captured = candidate;
+        try
+        {
+            while (true)
+            {
+                var changed = false;
+                long frameOffset = -1;
+                var reserveBeforeAppend = false;
+                Catalogue.ExecuteLocked(() =>
+                {
+                    if (_capacityAdmissionEnabled && !reserved && IndexExpireWouldAppend(captured))
+                    {
+                        reserveBeforeAppend = true;
+                        return;
+                    }
+
+                    changed = TryExpireRetentionCandidateUnlocked(captured, out frameOffset);
+                });
+
+                if (reserveBeforeAppend)
+                {
+                    if (!TryReserveDirectIndexFrame(candidate.ArtId, frameBytes, _capacityMaximumUtilization))
+                    {
+                        return false;
+                    }
+
+                    reserved = true;
+                    lengthBefore = _index.DurableLength;
+                    continue;
+                }
+
+                if (reserved)
+                {
+                    if (frameOffset >= 0)
+                    {
+                        BindDirectIndexFrame(candidate.ArtId, frameOffset, frameBytes);
+                    }
+                    else
+                    {
+                        RollbackDirectIndexFrame(frameBytes);
+                    }
+
+                    reserved = false;
+                }
+
+                return changed;
+            }
+        }
+        catch
+        {
+            if (reserved)
+            {
+                FinishDirectIndexFrameAfterThrow(candidate.ArtId, lengthBefore, frameBytes);
+            }
+
+            throw;
+        }
+    }
+
+    private bool TryExpireRetentionCandidateUnlocked(in RetentionScanCandidate candidate, out long frameOffset)
+    {
+        if (!_index.TryExpirePresentIfUnchanged(
+                candidate.ArtId,
+                candidate.Location,
+                candidate.Sequence,
+                candidate.AcceptedUtc,
+                _timeProvider.GetUtcNow(),
+                out var transitioned,
+                out frameOffset))
+        {
+            return false;
+        }
+
+        try
+        {
+            Catalogue.ApplyLiveDeadDelta(
+                transitioned.Location.SegmentId,
+                liveDelta: -transitioned.Location.Length,
+                deadDelta: transitioned.Location.Length);
+        }
+        catch (InvalidOperationException)
+        {
+            // Catalogue entry may be absent in edge tests; the logical index transition still stands.
+        }
+
+        BestEffortCacheRemove(candidate.ArtId);
+        return true;
+    }
 
     /// <inheritdoc />
     public bool TryInvalidate(ArticleId artId) => TransitionLogicalDeath(artId, ArticleStorageState.Invalid);
