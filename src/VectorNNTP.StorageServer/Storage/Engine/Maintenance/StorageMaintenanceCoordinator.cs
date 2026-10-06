@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
@@ -63,6 +64,19 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// and leaves this method the same way. A capacity denial is not an exception: the index call
 /// returns no retired bytes and the cycle continues.
 /// </para>
+/// <para>
+/// Each cycle also classifies cache-volume used space
+/// (<see cref="BulkStoragePressurePolicy"/>). That class is not
+/// <see cref="StorageWritePressure"/> and it is not the
+/// <c>MaximumUsageCapacity</c> admission latch. Normal and Warning leave the existing age,
+/// expiration, and rewrite economics unchanged. From Pressure upward, a fully-dead closed
+/// segment is still deleted before a new rewrite. High and Critical withhold a new rewrite
+/// that would consume the configured reserves or, at Critical, that would not free more bytes
+/// than it copies. Emergency does not enter usage-pressure recovery, so that recovery cannot
+/// logically evict Present articles or start a new rewrite while the volume is in Emergency.
+/// In-progress compaction still finishes. Classification does not delete an acknowledged
+/// ingress article.
+/// </para>
 /// </remarks>
 public sealed class StorageMaintenanceCoordinator
 {
@@ -72,7 +86,11 @@ public sealed class StorageMaintenanceCoordinator
     private readonly long _indexCheckpointThresholdBytes;
     private readonly TimeSpan _maxRetentionAge;
     private readonly ILogger _logger;
+    private readonly BulkStoragePressurePolicy _bulkPolicy;
+    private readonly object _bulkObservationLock = new();
     private readonly SemaphoreSlim _usagePressureGate = new(1, 1);
+    private BulkStoragePressureEvaluation _observedBulk;
+    private bool _hasObservedBulk;
 
     /// <summary>Creates a coordinator over an open durable engine and a read-only policy.</summary>
     /// <param name="engine">Durable article storage engine.</param>
@@ -88,13 +106,17 @@ public sealed class StorageMaintenanceCoordinator
     /// Age at which a bulk-committed article may be logically evicted.
     /// <see cref="TimeSpan.Zero"/> disables expiration and skips the index scan.
     /// </param>
+    /// <param name="bulkPressure">
+    /// Cache-volume watermarks. Null uses the documented defaults. Invalid ladders throw.
+    /// </param>
     public StorageMaintenanceCoordinator(
         FileArticleStorageEngine engine,
         ArticleSegmentPolicy policy,
         long journalCheckpointThresholdBytes = 0,
         ILogger? logger = null,
         long indexCheckpointThresholdBytes = 0,
-        TimeSpan maxRetentionAge = default)
+        TimeSpan maxRetentionAge = default,
+        BulkStoragePressureOptions? bulkPressure = null)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(policy);
@@ -110,6 +132,8 @@ public sealed class StorageMaintenanceCoordinator
         _indexCheckpointThresholdBytes = indexCheckpointThresholdBytes;
         _maxRetentionAge = maxRetentionAge;
         _logger = logger ?? NullLogger.Instance;
+        _bulkPolicy = new BulkStoragePressurePolicy(bulkPressure);
+        _observedBulk = BulkStoragePressurePolicy.Unmeasured();
         _engine.UsagePressureRecovery = cancellationToken =>
             RunUsagePressureRecoveryAsync(cancellationToken, maintenanceRunId: 0);
     }
@@ -161,7 +185,13 @@ public sealed class StorageMaintenanceCoordinator
         _engine.CompleteUnreferencedExtentAccounting();
 
         var pressure = _engine.ObserveCapacityAdmissionPressure();
-        if (pressure.IsUnderUsagePressure && pressure.UsedBytes > pressure.UsageRecoveryTargetBytes)
+        ObserveBulk(in pressure);
+        // Emergency stays on this cycle so open compaction can finish and fully-dead
+        // segments can be deleted. Usage-pressure recovery would otherwise evict Present
+        // articles and start a new rewrite. Journal outstanding bytes are not discarded.
+        if (pressure.IsUnderUsagePressure
+            && pressure.UsedBytes > pressure.UsageRecoveryTargetBytes
+            && CurrentBulk().State != BulkStoragePressureState.Emergency)
         {
             return await RunUsagePressureRecoveryAsync(cancellationToken, maintenanceRunId)
                 .ConfigureAwait(false);
@@ -358,6 +388,11 @@ public sealed class StorageMaintenanceCoordinator
                 }
                 else
                 {
+                    if (WithholdNewRewrite(in pressureVictim) is { } pressureWithheld)
+                    {
+                        return pressureWithheld;
+                    }
+
                     TestHookAfterCompactionVictimSelected?.Invoke(pressureVictim.SegmentId);
 
                     if (!TryRevalidateCompactionCandidate(pressureVictim.SegmentId, out var pressureSkip))
@@ -391,6 +426,11 @@ public sealed class StorageMaintenanceCoordinator
             }
 
             return NoWork() with { RewriteDensitySkipCount = skips.Density };
+        }
+
+        if (WithholdNewRewrite(in closedVictim) is { } withheld)
+        {
+            return withheld;
         }
 
         TestHookAfterCompactionVictimSelected?.Invoke(closedVictim.SegmentId);
@@ -1262,10 +1302,126 @@ public sealed class StorageMaintenanceCoordinator
         };
     }
 
-    private static StorageMaintenanceResult AttachPressure(
+    private StorageMaintenanceResult AttachPressure(
         StorageMaintenanceResult result,
-        in CapacityAdmissionPressureSnapshot pressure) =>
-        result.WithCapacityPressure(in pressure);
+        in CapacityAdmissionPressureSnapshot pressure)
+    {
+        ObserveBulk(in pressure);
+        return StampBulk(result.WithCapacityPressure(in pressure));
+    }
+
+    /// <summary>
+    /// Records the cache-volume class for this snapshot and logs only when that class changes.
+    /// </summary>
+    private void ObserveBulk(in CapacityAdmissionPressureSnapshot pressure)
+    {
+        var evaluation = _bulkPolicy.Evaluate(pressure.TotalBytes, pressure.UsedBytes, pressure.AvailableBytes);
+        BulkStoragePressureState? previous;
+        lock (_bulkObservationLock)
+        {
+            previous = _hasObservedBulk ? _observedBulk.State : null;
+            _observedBulk = evaluation;
+            _hasObservedBulk = true;
+        }
+
+        if (previous == evaluation.State)
+        {
+            return;
+        }
+
+        var previousName = previous?.ToString() ?? "Unobserved";
+        StorageMaintenanceLogMessages.BulkPressureMeasured(
+            _logger,
+            evaluation.State.ToString(),
+            evaluation.TotalBytes,
+            evaluation.FreeBytes,
+            evaluation.UsedBytes,
+            evaluation.UsedPercent,
+            evaluation.AvailableReserveBytes,
+            evaluation.MaintenanceMode);
+        StorageMaintenanceLogMessages.BulkPressureStateChanged(
+            _logger,
+            previousName,
+            evaluation.State.ToString(),
+            evaluation.UsedPercent,
+            evaluation.MaintenanceMode);
+        if (evaluation.State is BulkStoragePressureState.Warning
+            or BulkStoragePressureState.Pressure
+            or BulkStoragePressureState.High)
+        {
+            StorageMaintenanceLogMessages.BulkPressureAttention(
+                _logger,
+                evaluation.State.ToString(),
+                evaluation.UsedPercent,
+                evaluation.FreeBytes,
+                evaluation.AvailableReserveBytes,
+                evaluation.MaintenanceMode);
+        }
+        else if (evaluation.State is BulkStoragePressureState.Critical
+            or BulkStoragePressureState.Emergency)
+        {
+            StorageMaintenanceLogMessages.BulkPressureCritical(
+                _logger,
+                evaluation.State.ToString(),
+                evaluation.UsedPercent,
+                evaluation.FreeBytes,
+                evaluation.AvailableReserveBytes,
+                evaluation.EmergencyAdmissionProtectionRequired,
+                evaluation.MaintenanceMode);
+        }
+    }
+
+    /// <summary>Copies the latest bulk classification onto <paramref name="result"/>.</summary>
+    private StorageMaintenanceResult StampBulk(StorageMaintenanceResult result)
+    {
+        var bulk = CurrentBulk();
+        return result with
+        {
+            BulkPressureState = bulk.State.ToString(),
+            BulkUsedPercent = bulk.Measured ? bulk.UsedPercent : null,
+            BulkFreeBytes = bulk.Measured ? bulk.FreeBytes : null,
+            BulkAvailableReserveBytes = bulk.Measured ? bulk.AvailableReserveBytes : null,
+            BulkMaintenanceMode = bulk.MaintenanceMode,
+            BulkEmergencyAdmissionProtectionRequired = bulk.EmergencyAdmissionProtectionRequired,
+        };
+    }
+
+    /// <summary>Latest cache-volume classification. Unmeasured until the first observation.</summary>
+    private BulkStoragePressureEvaluation CurrentBulk()
+    {
+        lock (_bulkObservationLock)
+        {
+            return _observedBulk;
+        }
+    }
+
+    /// <summary>
+    /// Returns a no-work result when bulk pressure forbids starting a new rewrite of
+    /// <paramref name="victim"/>. Null when the rewrite may start. Does not affect an
+    /// in-progress compaction.
+    /// </summary>
+    private StorageMaintenanceResult? WithholdNewRewrite(in SegmentInfo victim)
+    {
+        var bulk = CurrentBulk();
+        if (_bulkPolicy.AllowsNewRewrite(in bulk, victim.LiveBytes, victim.DeadBytes))
+        {
+            return null;
+        }
+
+        StorageMaintenanceLogMessages.BulkRewriteWithheld(
+            _logger,
+            bulk.State.ToString(),
+            victim.SegmentId.Value,
+            victim.LiveBytes,
+            victim.DeadBytes,
+            bulk.AvailableReserveBytes);
+        return NoWork() with
+        {
+            SegmentId = victim.SegmentId,
+            BulkRewriteSuppressed = true,
+            SkipReason = StorageMaintenanceSkipReasons.BulkRewriteWithheld,
+        };
+    }
 
     /// <summary>
     /// Evicts least-frequently-used articles and compacts/reclaims until filesystem usage is at
@@ -1319,9 +1475,43 @@ public sealed class StorageMaintenanceCoordinator
                 }
             }
 
+            ObserveBulk(in pressure);
+            if (CurrentBulk().State == BulkStoragePressureState.Emergency)
+            {
+                // Direct recovery (including the Accept callback) must not evict Present
+                // articles or start a rewrite while the cache volume is in Emergency.
+                // RunOnceAsync does not enter this method in that state.
+                if (TrySelectFullyDeadClosed(out var emergencyDead))
+                {
+                    var deadResult = await TryReclaimFullyDeadClosedAsync(emergencyDead, cancellationToken)
+                        .ConfigureAwait(false);
+                    return AttachPressure(deadResult, _engine.ObserveCapacityAdmissionPressure());
+                }
+
+                return AttachPressure(
+                    NoWork() with
+                    {
+                        BulkRewriteSuppressed = true,
+                        SkipReason = StorageMaintenanceSkipReasons.BulkRewriteWithheld,
+                    },
+                    pressure);
+            }
+
             await _engine.Segments.CloseActiveAsync(cancellationToken).ConfigureAwait(false);
             _engine.CompleteUnreferencedExtentAccounting();
             pressure = _engine.ObserveCapacityAdmissionPressure();
+            ObserveBulk(in pressure);
+            if (CurrentBulk().AccelerateReclamation
+                && TrySelectFullyDeadClosed(out var acceleratedDead))
+            {
+                var deadResult = await TryReclaimFullyDeadClosedAsync(acceleratedDead, cancellationToken)
+                    .ConfigureAwait(false);
+                if (deadResult.Reclaimed || deadResult.Outcome == StorageMaintenanceOutcome.Failed)
+                {
+                    return AttachPressure(deadResult, _engine.ObserveCapacityAdmissionPressure());
+                }
+            }
+
             var closed = CatalogueSnapshotExcludingOpenUncommittedSources();
             if (!_policy.TrySelectUsagePressureCompactionVictim(closed, in pressure, out var victim))
             {
@@ -1349,6 +1539,11 @@ public sealed class StorageMaintenanceCoordinator
                         Skipped(default, compactionId: 0, StorageMaintenanceSkipReasons.CapacityInsufficientHeadroom),
                         pressure);
                 }
+            }
+
+            if (WithholdNewRewrite(in victim) is { } withheldRewrite)
+            {
+                return AttachPressure(withheldRewrite, pressure);
             }
 
             TestHookAfterCompactionVictimSelected?.Invoke(victim.SegmentId);

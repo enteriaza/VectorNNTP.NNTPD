@@ -215,4 +215,74 @@ internal static partial class StorageMaintenanceLogMessages
         long IndexPhysicalBytes,
         long ThresholdBytes,
         Exception exception);
+
+    /// <summary>Debug measurement logged only when the bulk watermark class changes.</summary>
+    [LoggerMessage(
+        EventId = 3031,
+        Level = LogLevel.Debug,
+        Message = "Bulk retention pressure measured (State={State}, TotalBytes={TotalBytes}, FreeBytes={FreeBytes}, UsedBytes={UsedBytes}, UsedPercent={UsedPercent}, AvailableReserveBytes={AvailableReserveBytes}, MaintenanceMode={MaintenanceMode})")]
+    public static partial void BulkPressureMeasured(
+        ILogger logger,
+        string State,
+        long TotalBytes,
+        long FreeBytes,
+        long UsedBytes,
+        int UsedPercent,
+        long AvailableReserveBytes,
+        string MaintenanceMode);
+
+    /// <summary>Information log for a bulk watermark transition, including the first observation.</summary>
+    [LoggerMessage(
+        EventId = 3032,
+        Level = LogLevel.Information,
+        Message = "Bulk retention pressure state changed (PreviousState={PreviousState}, State={State}, UsedPercent={UsedPercent}, MaintenanceMode={MaintenanceMode})")]
+    public static partial void BulkPressureStateChanged(
+        ILogger logger,
+        string PreviousState,
+        string State,
+        int UsedPercent,
+        string MaintenanceMode);
+
+    /// <summary>Actionable log when the cache volume is Warning, Pressure, or High.</summary>
+    [LoggerMessage(
+        EventId = 3033,
+        Level = LogLevel.Warning,
+        Message = "Bulk retention pressure requires attention (State={State}, UsedPercent={UsedPercent}, FreeBytes={FreeBytes}, AvailableReserveBytes={AvailableReserveBytes}, MaintenanceMode={MaintenanceMode})")]
+    public static partial void BulkPressureAttention(
+        ILogger logger,
+        string State,
+        int UsedPercent,
+        long FreeBytes,
+        long AvailableReserveBytes,
+        string MaintenanceMode);
+
+    /// <summary>
+    /// Actionable log when the cache volume is Critical or Emergency.
+    /// Classification does not delete an acknowledged article.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 3034,
+        Level = LogLevel.Error,
+        Message = "Bulk retention pressure is critical (State={State}, UsedPercent={UsedPercent}, FreeBytes={FreeBytes}, AvailableReserveBytes={AvailableReserveBytes}, EmergencyAdmissionProtectionRequired={EmergencyAdmissionProtectionRequired}, MaintenanceMode={MaintenanceMode})")]
+    public static partial void BulkPressureCritical(
+        ILogger logger,
+        string State,
+        int UsedPercent,
+        long FreeBytes,
+        long AvailableReserveBytes,
+        bool EmergencyAdmissionProtectionRequired,
+        string MaintenanceMode);
+
+    /// <summary>Debug log when a new rewrite is withheld. Idle cycles that select nothing do not emit this.</summary>
+    [LoggerMessage(
+        EventId = 3035,
+        Level = LogLevel.Debug,
+        Message = "Bulk retention pressure withheld a new rewrite (State={State}, SegmentId={SegmentId}, LiveBytes={LiveBytes}, DeadBytes={DeadBytes}, AvailableReserveBytes={AvailableReserveBytes})")]
+    public static partial void BulkRewriteWithheld(
+        ILogger logger,
+        string State,
+        ulong SegmentId,
+        long LiveBytes,
+        long DeadBytes,
+        long AvailableReserveBytes);
 }

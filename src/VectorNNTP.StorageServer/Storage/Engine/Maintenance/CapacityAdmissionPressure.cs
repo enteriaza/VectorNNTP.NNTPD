@@ -190,6 +190,13 @@ public static class StorageMaintenanceSkipReasons
     public const string CapacityOpenCompactionZeroProgress = "capacity-open-compaction-zero-progress";
 
     /// <summary>
+    /// A new low-density rewrite was not started because bulk cache-volume pressure forbids it
+    /// or the destination write would consume the configured reserves. This is not journal
+    /// <c>OutstandingRecoverableBytes</c> pressure and it does not discard an accepted article.
+    /// </summary>
+    public const string BulkRewriteWithheld = "bulk-pressure-rewrite-withheld";
+
+    /// <summary>
     /// Source cannot be committed or retired yet because a publishable PhysicalWritten
     /// or pre-PhysicalWritten append still targets it. Not a capacity decision.
     /// </summary>

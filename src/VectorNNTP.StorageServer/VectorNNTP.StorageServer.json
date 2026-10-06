@@ -26,6 +26,16 @@
         "MaxBytes": 1073741824
       },
       "CacheDir": "spool/cache",
+      "BulkPressure": {
+        "CriticalPercent": 90,
+        "EmergencyPercent": 95,
+        "HighPercent": 85,
+        "OperationalReservePercent": 5,
+        "PressurePercent": 80,
+        "RecoveryReservePercent": 5,
+        "RewriteReservePercent": 10,
+        "WarningPercent": 75
+      },
       "Capacity": {
         "CompactionHeadroom": 10,
         "FreeCapacity": 5,

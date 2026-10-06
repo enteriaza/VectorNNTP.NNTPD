@@ -208,7 +208,19 @@ public sealed class ArticleStorageOptions
     /// </summary>
     /// <remarks>
     /// Capacity admission is always on. Percentages are integers from 0 to 100.
-    /// Reservations are process-local only.
+    /// Reservations are process-local only. These ceilings are not the bulk retention
+    /// watermarks in <see cref="BulkPressure"/>.
     /// </remarks>
     public ArticleCapacityOptions Capacity { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets cache-volume retention watermarks under
+    /// <c>StorageServer:Storage:BulkPressure</c>.
+    /// </summary>
+    /// <remarks>
+    /// Classifies physical used space on <see cref="CacheDir"/>. It does not classify
+    /// journal <c>OutstandingRecoverableBytes</c> and it does not change
+    /// <see cref="Capacity"/>.
+    /// </remarks>
+    public BulkStoragePressureOptions BulkPressure { get; set; } = new();
 }

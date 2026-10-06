@@ -37,6 +37,22 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(ArticleCapacityOptions.DefaultCompactionHeadroom, storage.Capacity.CompactionHeadroom);
         Assert.Equal(ArticleCapacityOptions.DefaultMaximumUsageCapacity, storage.Capacity.MaximumUsageCapacity);
         Assert.Equal(ArticleCapacityOptions.DefaultFreeCapacity, storage.Capacity.FreeCapacity);
+        Assert.Equal(BulkStoragePressureOptions.DefaultWarningPercent, storage.BulkPressure.WarningPercent);
+        Assert.Equal(75, storage.BulkPressure.WarningPercent);
+        Assert.Equal(BulkStoragePressureOptions.DefaultPressurePercent, storage.BulkPressure.PressurePercent);
+        Assert.Equal(80, storage.BulkPressure.PressurePercent);
+        Assert.Equal(BulkStoragePressureOptions.DefaultHighPercent, storage.BulkPressure.HighPercent);
+        Assert.Equal(85, storage.BulkPressure.HighPercent);
+        Assert.Equal(BulkStoragePressureOptions.DefaultCriticalPercent, storage.BulkPressure.CriticalPercent);
+        Assert.Equal(90, storage.BulkPressure.CriticalPercent);
+        Assert.Equal(BulkStoragePressureOptions.DefaultEmergencyPercent, storage.BulkPressure.EmergencyPercent);
+        Assert.Equal(95, storage.BulkPressure.EmergencyPercent);
+        Assert.Equal(BulkStoragePressureOptions.DefaultOperationalReservePercent, storage.BulkPressure.OperationalReservePercent);
+        Assert.Equal(5, storage.BulkPressure.OperationalReservePercent);
+        Assert.Equal(BulkStoragePressureOptions.DefaultRecoveryReservePercent, storage.BulkPressure.RecoveryReservePercent);
+        Assert.Equal(5, storage.BulkPressure.RecoveryReservePercent);
+        Assert.Equal(BulkStoragePressureOptions.DefaultRewriteReservePercent, storage.BulkPressure.RewriteReservePercent);
+        Assert.Equal(10, storage.BulkPressure.RewriteReservePercent);
         Assert.Null(typeof(ArticleCapacityOptions).GetProperty("Enabled"));
         Assert.Equal(ArticleStorageOptions.DefaultControlDir, StorageServerTestOptions.CreateValid().Storage.ControlDir);
     }

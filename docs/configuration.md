@@ -1259,7 +1259,38 @@ StorageServer keeps application logs, the NVMe control tier, and the SATA segmen
 | `StorageServer:Storage:Capacity:CompactionHeadroom` | int | `10` | no | Percentage-point delta added to `MaximumUtilization` for compaction destination append admission only. Not an eviction target and not `FreeCapacity`. Must be an integer from 1 to 100, and `MaximumUtilization + CompactionHeadroom` must be <= 100. |
 | `StorageServer:Storage:Capacity:FreeCapacity` | int | `5` | no | Percentage points of filesystem usage that pressure recovery must reclaim. The physical recovery target percent is `MaximumUsageCapacity - FreeCapacity`. Must be an integer from 1 to 100 and <= `MaximumUsageCapacity`. This is not a fraction of the article count. |
 | `StorageServer:Storage:Capacity:MaximumUsageCapacity` | int | `80` | no | Filesystem `UsedBytes / TotalBytes` percent at which usage-pressure recovery latches. Pressure stays latched until `UsedBytes` is at or below the recovery target. Reaching this percent does not reject an article. Must be an integer from 1 to 100 and strictly below `MaximumUtilization`. `UsedBytes` is `max(0, TotalBytes - AvailableBytes)` from the volume `DriveInfo`. `LiveBytes` and `DeadBytes` are not substitutes. |
-| `StorageServer:Storage:Capacity:MaximumUtilization` | int | `90` | no | Hard article-admission ceiling, as an integer percent of volume `TotalBytes`. A candidate is rejected only when accepting it would exceed this percent and usage-pressure recovery cannot create enough filesystem free space. Compaction destinations use `MaximumUtilization + CompactionHeadroom`. Capacity management is always enabled. Volume resolution and these ceilings are always on. Reservations are process-local only and follow the existing segment-copy, journal-sequence, index-frame, compaction-journal, and checkpoint lifetimes. |
+| `StorageServer:Storage:Capacity:MaximumUtilization` | int | `90` | no | Hard article-admission ceiling, as an integer percent of volume `TotalBytes`. A candidate is rejected only when accepting it would exceed this percent and usage-pressure recovery cannot create enough filesystem free space. Compaction destinations use `MaximumUtilization + CompactionHeadroom`. Capacity management is always enabled. Volume resolution and these ceilings are always on. Reservations are process-local only and follow the existing segment-copy, journal-sequence, index-frame, compaction-journal, and checkpoint lifetimes. This ceiling is not a bulk retention watermark. |
+| `StorageServer:Storage:BulkPressure:WarningPercent` | int | `75` | no | Cache-volume used percent at which bulk retention pressure is Warning. Must be an integer from 0 to 100 and strictly below `PressurePercent`. |
+| `StorageServer:Storage:BulkPressure:PressurePercent` | int | `80` | no | Cache-volume used percent at which bulk retention pressure is Pressure. Strictly below `HighPercent`. |
+| `StorageServer:Storage:BulkPressure:HighPercent` | int | `85` | no | Cache-volume used percent at which bulk retention pressure is High. Strictly below `CriticalPercent`. |
+| `StorageServer:Storage:BulkPressure:CriticalPercent` | int | `90` | no | Cache-volume used percent at which bulk retention pressure is Critical. Strictly below `EmergencyPercent`. |
+| `StorageServer:Storage:BulkPressure:EmergencyPercent` | int | `95` | no | Cache-volume used percent at which bulk retention pressure is Emergency. |
+| `StorageServer:Storage:BulkPressure:OperationalReservePercent` | int | `5` | no | Operational reserve as a percent of cache-volume total bytes. Measured and logged. Not a quota and not subtracted from Accept. |
+| `StorageServer:Storage:BulkPressure:RecoveryReservePercent` | int | `5` | no | Recovery reserve as a percent of cache-volume total bytes. Measured and logged. Not a quota and not subtracted from Accept. |
+| `StorageServer:Storage:BulkPressure:RewriteReservePercent` | int | `10` | no | Rewrite/reclamation reserve as a percent of cache-volume total bytes. A new low-density rewrite at High or Critical is withheld when copying its live bytes would leave free space below the three reserves combined. |
+
+### Bulk retention pressure and journal pressure
+
+`Storage:BulkPressure` classifies physical used space on the `CacheDir` volume (`UsedBytes / TotalBytes` from the same `DriveInfo` snapshot maintenance already reads). Below `WarningPercent` the class is Normal. Each higher watermark is inclusive: used space at exactly that percent enters that class, and the next watermark ends it. The classes are Normal, Warning, Pressure, High, Critical, and Emergency.
+
+This is not `JournalSoftLimitBytes` / `JournalHardLimitBytes`. Those limits classify `OutstandingRecoverableBytes` for ingress that has been accepted and is not yet `IndexCommitted`. That journal pressure is `StorageWritePressure` (Normal, Elevated, Critical). It protects the ingress durability contract. It does not describe how full the cache volume is.
+
+This is also not `Storage:Capacity`. `MaximumUtilization`, `MaximumUsageCapacity`, `FreeCapacity`, and `CompactionHeadroom` remain the process-local admission and usage-recovery ceilings. Reaching `MaximumUsageCapacity` still latches the existing usage-pressure recovery. Bulk watermarks do not replace that latch.
+
+What each bulk class does:
+
+- **Normal** (below 75%): no pressure-driven expiration and no pressure-driven reclamation. `MaxRetentionAge` and the existing maintenance order are unchanged.
+- **Warning** (75% up to 80%): the warning is visible. Ordinary age expiration and reclamation still run. Crossing the watermark does not evict an article.
+- **Pressure** (80% up to 85%): maintenance prefers work that is already reclaimable. Expired articles and fully-dead closed segments stay ahead of a new low-density rewrite. The rewrite still uses `MinimumDeadBytes` and `MinimumDeadRatio`. Live articles are not deleted because this class was reached.
+- **High** (85% up to 90%): expiration and whole-segment reclamation stay first. A new low-density rewrite runs only when it has dead bytes to return and the destination copy leaves the operational, recovery, and rewrite reserves free.
+- **Critical** (90% up to 95%): the same reserve rule applies, and a new rewrite runs only when the dead bytes exceed the live bytes that would be copied.
+- **Emergency** (95% and above): the cycle does not enter usage-pressure recovery. It still finishes an in-progress compaction, expires by `MaxRetentionAge`, reclaims retired segments, and deletes one fully-dead closed segment. It does not start a new rewrite. It does not logically evict Present articles to make room. It does not discard an accepted article that is still only in the ingress journal.
+
+The three reserves are computed from total bytes and reported as `AvailableReserveBytes` (free bytes above those reserves, floored at zero). They are not an allocator. This phase does not enforce them by refusing Accept, by reserving blocks, or by deleting live articles. The only enforcement is withholding a new rewrite that would consume them at High or Critical, and withholding every new rewrite at Emergency.
+
+Pressure classification does not itself delete live acknowledged articles. An article that has been ACKed and is still in the durable ingress journal remains recoverable until it is explicitly expired and its physical storage is subsequently reclaimed. Accept is unchanged. When Emergency stops usage-pressure recovery from freeing space, the existing `MaximumUtilization` ceiling can still reject a new accept. That rejection does not remove an article already present in the journal. Wiring Emergency into Accept as its own decision is left for a later phase.
+
+Invalid bulk percentages (outside 0–100, or watermarks that are not strictly increasing) fail startup.
 
 Do not point `Storage:CacheDir` or `Storage:ControlDir` at the log directory. Do not nest logs under `spool/cache` or `spool/` by default.
 

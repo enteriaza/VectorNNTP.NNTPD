@@ -82,7 +82,9 @@ public static class SegmentLifecycle
 /// <summary>Journal / write-path pressure derived from <see cref="IArticleJournal.OutstandingRecoverableBytes"/>.</summary>
 /// <remarks>
 /// Counts ingress bytes that are not yet <c>IndexCommitted</c>. Soft and hard limits are
-/// Accept back-pressure only. They are not retention, expiration, or cache policy.
+/// Accept back-pressure only. They are not retention, expiration, or cache policy, and they
+/// are not the cache-volume used-percent watermarks
+/// (<see cref="VectorNNTP.StorageServer.Storage.Engine.Maintenance.BulkStoragePressureState"/>).
 /// </remarks>
 public enum StorageWritePressure : byte
 {

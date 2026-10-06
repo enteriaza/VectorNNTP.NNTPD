@@ -226,6 +226,7 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
 
         ValidateCompactionPolicy(options.Storage.Compaction, failures);
         ValidateCapacityPolicy(options.Storage.Capacity, failures);
+        ValidateBulkPressure(options.Storage.BulkPressure, failures);
     }
 
     private static void ValidateCapacityPolicy(
@@ -289,6 +290,59 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         {
             failures.Add(
                 "StorageServer:Storage:Capacity:FreeCapacity must be less than or equal to MaximumUsageCapacity.");
+        }
+    }
+
+    private static void ValidateBulkPressure(
+        BulkStoragePressureOptions? bulkPressure,
+        List<string> failures)
+    {
+        bulkPressure ??= new BulkStoragePressureOptions();
+        ValidatePercent(
+            bulkPressure.WarningPercent,
+            "StorageServer:Storage:BulkPressure:WarningPercent",
+            failures);
+        ValidatePercent(
+            bulkPressure.PressurePercent,
+            "StorageServer:Storage:BulkPressure:PressurePercent",
+            failures);
+        ValidatePercent(
+            bulkPressure.HighPercent,
+            "StorageServer:Storage:BulkPressure:HighPercent",
+            failures);
+        ValidatePercent(
+            bulkPressure.CriticalPercent,
+            "StorageServer:Storage:BulkPressure:CriticalPercent",
+            failures);
+        ValidatePercent(
+            bulkPressure.EmergencyPercent,
+            "StorageServer:Storage:BulkPressure:EmergencyPercent",
+            failures);
+        ValidatePercent(
+            bulkPressure.OperationalReservePercent,
+            "StorageServer:Storage:BulkPressure:OperationalReservePercent",
+            failures);
+        ValidatePercent(
+            bulkPressure.RecoveryReservePercent,
+            "StorageServer:Storage:BulkPressure:RecoveryReservePercent",
+            failures);
+        ValidatePercent(
+            bulkPressure.RewriteReservePercent,
+            "StorageServer:Storage:BulkPressure:RewriteReservePercent",
+            failures);
+
+        if (bulkPressure.WarningPercent is >= 0 and <= 100
+            && bulkPressure.PressurePercent is >= 0 and <= 100
+            && bulkPressure.HighPercent is >= 0 and <= 100
+            && bulkPressure.CriticalPercent is >= 0 and <= 100
+            && bulkPressure.EmergencyPercent is >= 0 and <= 100
+            && (bulkPressure.WarningPercent >= bulkPressure.PressurePercent
+                || bulkPressure.PressurePercent >= bulkPressure.HighPercent
+                || bulkPressure.HighPercent >= bulkPressure.CriticalPercent
+                || bulkPressure.CriticalPercent >= bulkPressure.EmergencyPercent))
+        {
+            failures.Add(
+                "StorageServer:Storage:BulkPressure watermarks must be strictly increasing: WarningPercent < PressurePercent < HighPercent < CriticalPercent < EmergencyPercent.");
         }
     }
 

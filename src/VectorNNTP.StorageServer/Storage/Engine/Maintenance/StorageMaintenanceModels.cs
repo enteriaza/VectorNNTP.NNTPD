@@ -80,6 +80,22 @@ public enum StorageMaintenanceOutcome : byte
 /// Closed segments left in place because their dead ratio was below
 /// <c>MinimumDeadRatio</c>. Zero when no such segment was observed.
 /// </param>
+/// <param name="BulkPressureState">
+/// Cache-volume watermark observed for this cycle. Null when this result was built before
+/// observation. This is not <c>StorageWritePressure</c>.
+/// </param>
+/// <param name="BulkUsedPercent">Truncated cache-volume used percent. Null when unobserved.</param>
+/// <param name="BulkFreeBytes">Cache-volume free bytes. Null when unobserved.</param>
+/// <param name="BulkAvailableReserveBytes">
+/// Free bytes above the three configured reserves, floored at zero. Null when unobserved.
+/// </param>
+/// <param name="BulkMaintenanceMode">Stable maintenance posture name. Null when unobserved.</param>
+/// <param name="BulkRewriteSuppressed">
+/// True when a new low-density rewrite was withheld because of bulk cache-volume pressure.
+/// </param>
+/// <param name="BulkEmergencyAdmissionProtectionRequired">
+/// True when the cache volume is in Emergency. Accept does not read this flag.
+/// </param>
 public readonly record struct StorageMaintenanceResult(
     StorageMaintenanceOutcome Outcome,
     SegmentId SegmentId,
@@ -108,4 +124,11 @@ public readonly record struct StorageMaintenanceResult(
     string? DeferredOpenSkipReason = null,
     int DeferredOpenCompactionCount = 0,
     ulong? DestinationSegmentId = null,
-    int RewriteDensitySkipCount = 0);
+    int RewriteDensitySkipCount = 0,
+    string? BulkPressureState = null,
+    int? BulkUsedPercent = null,
+    long? BulkFreeBytes = null,
+    long? BulkAvailableReserveBytes = null,
+    string? BulkMaintenanceMode = null,
+    bool BulkRewriteSuppressed = false,
+    bool BulkEmergencyAdmissionProtectionRequired = false);
