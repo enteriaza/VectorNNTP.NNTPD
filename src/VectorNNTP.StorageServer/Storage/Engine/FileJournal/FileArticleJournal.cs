@@ -352,6 +352,24 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
                 throw PendingOwnedByOther();
             }
 
+            FlushOpenAcceptGroupIfAnyUnlocked();
+            if (_preparedQueue.Count > 0)
+            {
+                throw new UnreconciledDurableTailException(
+                    "Article journal append cannot proceed while prepared Accept records are still ordered.",
+                    new IOException("prepared-accept-queue"));
+            }
+
+            if (_failedAcceptGroup is not null)
+            {
+                if (!TryCompleteFailedAcceptGroupUnlocked(artId, artHash, artSize, out record, out rejectOutcome))
+                {
+                    throw PendingOwnedByOther();
+                }
+
+                return rejectOutcome == default;
+            }
+
             if (_outstandingArtIdToSequence.TryGetValue(artId, out var existingSeq)
                 && _bySequence.TryGetValue(existingSeq, out var existing)
                 && !existing.IndexCommitted)
@@ -837,6 +855,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             }
 
             _disposed = true;
+            FailAcceptGroupsForDisposeUnlocked();
             _stream.Dispose();
             FileArticleJournalLogMessages.Closed(_logger, _journalPath);
         }
@@ -1293,7 +1312,12 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
 
     private void ThrowIfPendingJournalAppendUnlocked()
     {
-        if (_pending is null && _pendingBatch is null && !_tailUnreconciled)
+        if (_pending is null
+            && _pendingBatch is null
+            && _openAcceptGroup is null
+            && _failedAcceptGroup is null
+            && _preparedQueue.Count == 0
+            && !_tailUnreconciled)
         {
             return;
         }
@@ -1511,12 +1535,13 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
 
     private StorageWritePressure ComputePressureUnlocked()
     {
-        if (_outstandingRecoverableBytes >= _hardLimitBytes)
+        var recoverable = _outstandingRecoverableBytes + _stagedRecoverableBytes;
+        if (recoverable >= _hardLimitBytes)
         {
             return StorageWritePressure.Critical;
         }
 
-        if (_outstandingRecoverableBytes >= _softLimitBytes)
+        if (recoverable >= _softLimitBytes)
         {
             return StorageWritePressure.Elevated;
         }

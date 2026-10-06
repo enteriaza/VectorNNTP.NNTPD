@@ -189,6 +189,11 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             failures.Add("StorageServer:Storage:SegmentTargetSizeBytes must be at least 1.");
         }
 
+        if (options.Storage.ActiveSegmentCount is not 1 and not 2 and not 4)
+        {
+            failures.Add("StorageServer:Storage:ActiveSegmentCount must be 1, 2, or 4.");
+        }
+
         if (options.Storage.MaxSegmentSealDelay < TimeSpan.Zero)
         {
             failures.Add(

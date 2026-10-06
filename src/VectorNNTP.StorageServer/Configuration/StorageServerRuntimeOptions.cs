@@ -54,6 +54,10 @@ public sealed record StorageServerRuntimeOptions(
 /// Maximum time an active segment may stay open after its first durable article.
 /// <see cref="TimeSpan.Zero"/> disables age sealing. Size rollover is unchanged.
 /// </param>
+/// <param name="ActiveSegmentCount">
+/// How many segment files may accept appends at once. <c>1</c>, <c>2</c>, or <c>4</c>.
+/// <c>1</c> is a single active writer.
+/// </param>
 public sealed record ArticleStorageRuntimeOptions(
     string ControlDir,
     string SegmentDir,
@@ -64,7 +68,8 @@ public sealed record ArticleStorageRuntimeOptions(
     int CapacityCompactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom,
     int CapacityMaximumUsageCapacity = ArticleCapacityOptions.DefaultMaximumUsageCapacity,
     int CapacityFreeCapacity = ArticleCapacityOptions.DefaultFreeCapacity,
-    TimeSpan MaxSegmentSealDelay = default);
+    TimeSpan MaxSegmentSealDelay = default,
+    int ActiveSegmentCount = ArticleStorageOptions.DefaultActiveSegmentCount);
 
 /// <summary>Validated listener bounds.</summary>
 public sealed record StorageServerListenerRuntimeOptions(

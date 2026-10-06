@@ -2,6 +2,7 @@ using System.Diagnostics;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
+using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 
@@ -136,7 +137,7 @@ public sealed partial class FileArticleStorageEngine
                 RemoveAcceptWithoutPhysicalBytes(item.Sequence);
             }
 
-            StoredArticleLocation[] locations;
+            FlushedSegmentAppend[] flushed;
             try
             {
                 var payloads = new ReadOnlyMemory<byte>[appending.Count];
@@ -145,7 +146,7 @@ public sealed partial class FileArticleStorageEngine
                     payloads[i] = appending[i].Accept.ArtData;
                 }
 
-                locations = _segments.AppendActiveBatch(payloads);
+                flushed = _segments.AppendActiveBatch(payloads);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -164,14 +165,20 @@ public sealed partial class FileArticleStorageEngine
                 var item = appending[i];
                 try
                 {
-                    var location = locations[i];
+                    var receipt = flushed[i];
+                    var location = receipt.Location;
                     NoteSegmentCopyWritten(item.Sequence, location.SegmentId);
                     _ = Interlocked.Increment(ref _physicalAppendCount);
                     ThrowIfTestFault(PersistFaultPoint.AfterSataAppend, item.Sequence);
                     location = ApplyPhysicalLocationTestHooks(item.Sequence, location);
+                    item.WritePathVerified = location == receipt.Location
+                        && receipt.ArtId == item.Accept.ArtId
+                        && receipt.ArtHash == item.Accept.ArtHash
+                        && receipt.ArtSize == item.Accept.ArtSize;
                     if (!TryRegisterPrePhysicalWritten(item.Sequence, location))
                     {
                         ClearPrePhysicalWritten(item.Sequence);
+                        item.WritePathVerified = false;
                         location = await AppendAcceptLocationForPhysicalWrittenAsync(item.Accept, cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -307,6 +314,7 @@ public sealed partial class FileArticleStorageEngine
 
                     case JournalAppendOutcome.Conflict:
                         ClearPrePhysicalWritten(item.Sequence);
+                        item.WritePathVerified = false;
                         if (!TryGetDurablePhysicalWritten(item.Sequence, out var existing))
                         {
                             throw new InvalidOperationException(
@@ -431,7 +439,14 @@ public sealed partial class FileArticleStorageEngine
         List<PersistBatchItem> publishing,
         List<StoredArticleMetadata> metadata)
     {
-        if (!TryProvePhysicalLocation(item.Accept, item.Location, out _))
+        var locationProved = item.WritePathVerified
+            ? _segments.TryConfirmFlushedAppend(
+                item.Location,
+                item.Accept.ArtId,
+                item.Accept.ArtHash,
+                item.Accept.ArtSize)
+            : TryProvePhysicalLocation(item.Accept, item.Location, out _);
+        if (!locationProved)
         {
             FileArticleStorageEngineLogMessages.PhysicalWrittenUnusable(
                 _logger,
@@ -640,5 +655,12 @@ public sealed partial class FileArticleStorageEngine
         public IReadOnlyList<StoredArticleLocation> Proven { get; set; } = [];
 
         public ulong? PublicationSegment { get; set; }
+
+        /// <summary>
+        /// True when <see cref="Location"/> is the receipt from a flushed append of this Accept
+        /// in this batch and no later step replaced that location.
+        /// Present then confirms the header instead of rereading the payload.
+        /// </summary>
+        public bool WritePathVerified { get; set; }
     }
 }

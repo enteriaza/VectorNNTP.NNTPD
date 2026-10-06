@@ -23,6 +23,8 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(256L * 1024 * 1024, storage.SegmentTargetSizeBytes);
         Assert.Equal(ArticleStorageOptions.DefaultMaxSegmentSealDelay, storage.MaxSegmentSealDelay);
         Assert.Equal(TimeSpan.FromSeconds(60), storage.MaxSegmentSealDelay);
+        Assert.Equal(ArticleStorageOptions.DefaultActiveSegmentCount, storage.ActiveSegmentCount);
+        Assert.Equal(1, storage.ActiveSegmentCount);
         Assert.Equal(0, storage.ArticleCache.MaxBytes);
         Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Enabled"));
         Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Maintenance" + "Enabled"));
@@ -73,6 +75,18 @@ public sealed class ArticleStorageOptionsTests
         Assert.Contains(
             result.Failures!,
             static f => f.Contains("JournalHardLimitBytes", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validator_rejects_active_segment_count_outside_one_two_four()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.ActiveSegmentCount = 3;
+        var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
+        Assert.True(result.Failed);
+        Assert.Contains(
+            result.Failures!,
+            static failure => failure.Contains("ActiveSegmentCount", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -249,8 +263,9 @@ public sealed class ArticleStorageOptionsTests
         Assert.False(doc.RootElement.GetProperty("StorageServer").TryGetProperty("CacheDir", out _));
         Assert.Equal("spool/cache", storage.GetProperty("CacheDir").GetString());
         Assert.Equal("spool/", storage.GetProperty("ControlDir").GetString());
-        Assert.Equal(0, storage.GetProperty("IndexCheckpointThresholdBytes").GetInt64());
-        Assert.Equal(134217728, storage.GetProperty("JournalCheckpointThresholdBytes").GetInt64());
+        Assert.Equal(134217728, storage.GetProperty("IndexCheckpointThresholdBytes").GetInt64());
+        Assert.Equal(33554432, storage.GetProperty("JournalCheckpointThresholdBytes").GetInt64());
+        Assert.Equal(1, storage.GetProperty("ActiveSegmentCount").GetInt32());
         Assert.Equal(67108864, storage.GetProperty("JournalSoftLimitBytes").GetInt64());
         Assert.Equal(134217728, storage.GetProperty("JournalHardLimitBytes").GetInt64());
         Assert.Equal("00:01:00", storage.GetProperty("MaxSegmentSealDelay").GetString());

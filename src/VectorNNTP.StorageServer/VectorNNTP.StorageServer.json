@@ -42,6 +42,7 @@
       "JournalCheckpointThresholdBytes": 33554432,
       "JournalHardLimitBytes": 134217728,
       "JournalSoftLimitBytes": 67108864,
+      "ActiveSegmentCount": 1,
       "MaxSegmentSealDelay": "00:01:00",
       "SegmentTargetSizeBytes": 10737418240
     },

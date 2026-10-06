@@ -224,12 +224,14 @@ public sealed class SegmentAppendFramedWriteTests
         Assert.Equal(1, durableFlushes);
         Assert.Equal(1, store.DurableFlushCount);
         Assert.Equal(3, locations.Length);
-        Assert.Equal(0, locations[0].Offset);
-        Assert.Equal(locations[0].Length, locations[1].Offset);
-        Assert.Equal(locations[1].Offset + locations[1].Length, locations[2].Offset);
+        Assert.Equal(0, store.PayloadLocationProofCount);
+        Assert.Equal(3, store.FlushedHeaderConfirmCount);
+        Assert.Equal(0, locations[0].Location.Offset);
+        Assert.Equal(locations[0].Location.Length, locations[1].Location.Offset);
+        Assert.Equal(locations[1].Location.Offset + locations[1].Location.Length, locations[2].Location.Offset);
         for (var i = 0; i < articles.Length; i++)
         {
-            Assert.True(store.TryRead(locations[i], out var read));
+            Assert.True(store.TryRead(locations[i].Location, out var read));
             Assert.True(read.Span.SequenceEqual(articles[i]));
         }
 

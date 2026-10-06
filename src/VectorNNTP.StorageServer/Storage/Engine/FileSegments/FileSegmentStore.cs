@@ -13,8 +13,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Segment files: <c>seg-{id:D20}.{active|closed|retired}</c>. Exactly one Active writer.
-/// Closed/Retired segments are immutable. Append durability uses
+/// Segment files: <c>seg-{id:D20}.{active|closed|retired}</c>. The configured active-segment
+/// count (1, 2, or 4) is how many of those files may accept appends at once. Each active
+/// file has its own segment id and its own writer lock. Closed/Retired segments are immutable.
+/// Append durability uses
 /// <see cref="FileStream.Flush(bool)"/> with <c>flushToDisk: true</c>.
 /// </para>
 /// <para>
@@ -53,6 +55,10 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     private readonly Dictionary<ulong, SegmentRuntime> _segments = new();
     private readonly FileSegmentCatalogue _catalogue = new();
     private readonly string _root;
+    private readonly int _activeSegmentCount;
+    private readonly List<ulong> _activeWriterIds = new();
+    private readonly Dictionary<ulong, CancellationTokenSource> _ageSealSources = new();
+    private readonly Dictionary<ulong, Task> _ageSealTasks = new();
     private ulong _nextSegmentId = 1;
     private ulong? _activeSegmentId;
     private ActiveValidatedPrefix? _activeValidatedPrefix;
@@ -119,6 +125,18 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 
+    /// <summary>Tasks for every armed age delay. Tests wait on this snapshot.</summary>
+    internal Task[] AgeSealTasks
+    {
+        get
+        {
+            lock (_writeGate)
+            {
+                return _ageSealTasks.Values.ToArray();
+            }
+        }
+    }
+
     /// <summary>Task for the current active segment's age delay. Completed when no delay is armed.</summary>
     internal Task AgeSealTask
     {
@@ -137,10 +155,32 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     internal Action? TestBeforeDurableFlush { get; set; }
 
+    /// <summary>
+    /// Invoked immediately after each durability <see cref="FileStream.Flush(bool)"/> returns.
+    /// Tests only.
+    /// </summary>
+    internal Action? TestAfterDurableFlush { get; set; }
+
     /// <summary>Number of durability flushes of an active segment stream. Tests only.</summary>
     internal long DurableFlushCount => Volatile.Read(ref _durableFlushCount);
 
+    /// <summary>
+    /// Full-record read proofs performed by <see cref="TryProveStoredLocation"/>.
+    /// A flushed append confirmed from its header does not increment this.
+    /// </summary>
+    internal long PayloadLocationProofCount => Volatile.Read(ref _payloadLocationProofCount);
+
+    /// <summary>
+    /// Header confirms of a record this process already flushed.
+    /// Each confirm reads the fixed header and does not read the payload.
+    /// </summary>
+    internal long FlushedHeaderConfirmCount => Volatile.Read(ref _flushedHeaderConfirmCount);
+
     private long _durableFlushCount;
+
+    private long _payloadLocationProofCount;
+
+    private long _flushedHeaderConfirmCount;
     private int _deferDurableFlush;
     private bool _unflushedCommittedAppend;
 
@@ -244,7 +284,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         long targetSegmentBytes,
         ILogger logger,
         TimeProvider time,
-        TimeSpan maxSealDelay)
+        TimeSpan maxSealDelay,
+        int activeSegmentCount)
     {
         if (maxSealDelay < TimeSpan.Zero)
         {
@@ -253,11 +294,19 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 "Maximum segment seal delay cannot be negative.");
         }
 
+        if (activeSegmentCount is not 1 and not 2 and not 4)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(activeSegmentCount),
+                "Active segment count must be 1, 2, or 4.");
+        }
+
         _root = root;
         _targetSegmentBytes = targetSegmentBytes;
         _logger = logger;
         _time = time;
         _maxSealDelay = maxSealDelay;
+        _activeSegmentCount = activeSegmentCount;
     }
 
     /// <summary>Gets the segment root directory (CacheDir / SegmentDir).</summary>
@@ -265,6 +314,33 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
     /// <summary>Gets the in-memory catalogue reconstructed from segment files.</summary>
     public FileSegmentCatalogue Catalogue => _catalogue;
+
+    /// <summary>Configured number of segment files that may accept appends at once.</summary>
+    internal int ConfiguredActiveSegmentCount => _activeSegmentCount;
+
+    /// <summary>Segment ids whose age-seal timers are armed. Tests only.</summary>
+    internal ulong[] AgeSealSegmentIds
+    {
+        get
+        {
+            lock (_writeGate)
+            {
+                return _ageSealSources.Keys.ToArray();
+            }
+        }
+    }
+
+    /// <summary>Segment files that currently accept appends.</summary>
+    internal int OpenActiveSegmentCount
+    {
+        get
+        {
+            lock (_writeGate)
+            {
+                return _activeWriterIds.Count;
+            }
+        }
+    }
 
     /// <summary>Gets the next SegmentId that will be allocated.</summary>
     public ulong NextSegmentId
@@ -323,7 +399,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             options.SegmentTargetSizeBytes,
             log,
             timeProvider ?? TimeProvider.System,
-            options.MaxSegmentSealDelay);
+            options.MaxSegmentSealDelay,
+            options.ActiveSegmentCount);
         store.TestDiscoveryPayloadReader = discoveryPayloadReader;
         configureBeforeDiscovery?.Invoke(store);
         try
@@ -444,6 +521,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         ulong expectedArtHash,
         int expectedArtSize)
     {
+        _ = Interlocked.Increment(ref _payloadLocationProofCount);
         IndexCommittedProbe.NotePhysicalDuringArticle();
         lock (_writeGate)
         {
@@ -462,9 +540,14 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             }
 
             var buffer = new byte[location.Length];
-            runtime.EnsureReadable();
-            runtime.Stream.Seek(location.Offset, SeekOrigin.Begin);
-            var read = runtime.Stream.Read(buffer, 0, buffer.Length);
+            int read;
+            lock (runtime.Sync)
+            {
+                runtime.EnsureReadable();
+                runtime.Stream.Seek(location.Offset, SeekOrigin.Begin);
+                read = runtime.Stream.Read(buffer, 0, buffer.Length);
+            }
+
             if (read != buffer.Length)
             {
                 return false;
@@ -800,12 +883,19 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             runtime.Stream.Write(crc);
             PhysicalProofProbe.AddAppendWrite(writeStart);
             TestAfterWriteBeforeFlush?.Invoke(runtime.Stream, offset, recordLength);
+            var end = offset + recordLength;
+            if (runtime.Stream.Position != end || runtime.Stream.Length < end)
+            {
+                throw new IOException(
+                    $"Active segment {runtime.SegmentId.Value} append at offset {offset} ended at position {runtime.Stream.Position}, length {runtime.Stream.Length}, expected {end}.");
+            }
+
             if (_deferDurableFlush == 0)
             {
                 DurableSegmentFlush(runtime.Stream);
             }
 
-            return CommitActiveAppend(runtime, offset, recordLength, ambiguousComplete: false);
+            return CommitActiveAppend(runtime, offset, recordLength, ambiguousComplete: false, artId, artHash, artData.Length);
         }
         catch (Exception ex) when (ex is not UnreconciledDurableTailException)
         {
@@ -840,7 +930,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                         createdByThisCall: true);
                 }
 
-                return CommitActiveAppend(runtime, offset, recordLength, ambiguousComplete: false);
+                return CommitActiveAppend(runtime, offset, recordLength, ambiguousComplete: false, artId, artHash, artData.Length);
             }
 
             if (outcome == AmbiguousAppend.Growth.IncompleteGrowth)
@@ -900,23 +990,32 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
 
         runtime.PendingRecord = null;
-        return CommitActiveAppend(runtime, pending.Offset, recordLength, ambiguousComplete: false);
+        return CommitActiveAppend(runtime, pending.Offset, recordLength, ambiguousComplete: false, artId, artHash, artSize);
     }
 
     private void DurableSegmentFlush(FileStream stream)
     {
         TestBeforeDurableFlush?.Invoke();
         stream.Flush(flushToDisk: true);
+        TestAfterDurableFlush?.Invoke();
         _ = Interlocked.Increment(ref _durableFlushCount);
         _unflushedCommittedAppend = false;
     }
 
     /// <summary>
-    /// Appends every article, then durability-flushes the active segment once.
-    /// Locations are returned only after that flush. A failure leaves earlier durable
-    /// journal state untouched and does not publish these locations.
+    /// Appends every article, durability-flushes the segment file or files, then confirms
+    /// each record header. Receipts are returned only after that flush and header confirm.
+    /// The payload is not read back. A failure leaves earlier durable journal state
+    /// untouched and does not return these receipts.
     /// </summary>
-    internal StoredArticleLocation[] AppendActiveBatch(IReadOnlyList<ReadOnlyMemory<byte>> articles)
+    /// <param name="articles">Payloads to frame and append, in order.</param>
+    /// <returns>One receipt per article, in the same order.</returns>
+    /// <remarks>
+    /// One configured writer runs the append on the single active segment.
+    /// Two or four writers split the batch into contiguous groups, one group per active
+    /// segment. Each group holds only that segment's writer lock. The journal is not touched.
+    /// </remarks>
+    internal FlushedSegmentAppend[] AppendActiveBatch(IReadOnlyList<ReadOnlyMemory<byte>> articles)
     {
         ArgumentNullException.ThrowIfNull(articles);
         if (articles.Count == 0)
@@ -924,26 +1023,543 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             return [];
         }
 
+        if (_activeSegmentCount > 1 && articles.Count > 1)
+        {
+            return AppendAcrossActiveSegments(articles);
+        }
+
+        return AppendActiveBatchSingle(articles);
+    }
+
+    /// <summary>
+    /// Appends the batch to the one active segment. Caller does not hold <see cref="_writeGate"/>.
+    /// </summary>
+    private FlushedSegmentAppend[] AppendActiveBatchSingle(IReadOnlyList<ReadOnlyMemory<byte>> articles)
+    {
+
         lock (_writeGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var locations = new StoredArticleLocation[articles.Count];
+            var appended = new ActiveSegmentAppend[articles.Count];
             _deferDurableFlush++;
             try
             {
                 for (var i = 0; i < articles.Count; i++)
                 {
-                    locations[i] = AppendToActiveUnlocked(articles[i]).Location;
+                    appended[i] = AppendToActiveUnlocked(articles[i]);
                 }
 
                 FlushActiveDurableUnlocked();
-                return locations;
+                var receipts = new FlushedSegmentAppend[appended.Length];
+                for (var i = 0; i < appended.Length; i++)
+                {
+                    var append = appended[i];
+                    if (!TryConfirmFlushedHeaderUnlocked(
+                            append.Location,
+                            append.ArtId,
+                            append.ArtHash,
+                            append.ArtSize))
+                    {
+                        throw new IOException(
+                            $"Flushed segment record at {append.Location.SegmentId.Value}:{append.Location.Offset} does not match the written article header.");
+                    }
+
+                    receipts[i] = new FlushedSegmentAppend(
+                        append.Location,
+                        append.ArtId,
+                        append.ArtHash,
+                        append.ArtSize);
+                }
+
+                return receipts;
             }
             finally
             {
                 _deferDurableFlush--;
             }
         }
+    }
+
+    /// <summary>
+    /// Splits <paramref name="articles"/> across the configured active segments and appends
+    /// those groups concurrently. Each group locks only its segment. Journal state is unchanged.
+    /// </summary>
+    private FlushedSegmentAppend[] AppendAcrossActiveSegments(IReadOnlyList<ReadOnlyMemory<byte>> articles)
+    {
+        SegmentRuntime[] writers;
+        int[] counts;
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            EnsureActiveWriterCountUnlocked();
+            var writerIds = _activeWriterIds.ToArray();
+            counts = WriterCounts(articles.Count, writerIds.Length);
+            writers = new SegmentRuntime[writerIds.Length];
+            var cursor = 0;
+            for (var w = 0; w < writers.Length; w++)
+            {
+                var bytes = 0L;
+                for (var i = 0; i < counts[w]; i++)
+                {
+                    bytes += SegmentRecordCodec.RecordLengthForArtSize(articles[cursor + i].Length);
+                }
+
+                writers[w] = PrepareWriterForBytesUnlocked(writerIds[w], bytes);
+                writers[w].AppendHold++;
+                cursor += counts[w];
+            }
+        }
+
+        var receipts = new FlushedSegmentAppend[articles.Count];
+        var chains = new List<SegmentRuntime>[writers.Length];
+        var tasks = new Task[writers.Length];
+        var cursorForTask = 0;
+        for (var w = 0; w < writers.Length; w++)
+        {
+            var runtime = writers[w];
+            var start = cursorForTask;
+            var count = counts[w];
+            cursorForTask += count;
+            var chain = new List<SegmentRuntime>(2) { runtime };
+            chains[w] = chain;
+            tasks[w] = Task.Run(() => AppendGroup(runtime, articles, start, count, receipts, chain));
+        }
+
+        try
+        {
+            Task.WaitAll(tasks);
+        }
+        catch (AggregateException ex)
+        {
+            throw ex.InnerExceptions.Count == 1 ? ex.InnerExceptions[0] : ex;
+        }
+        finally
+        {
+            lock (_writeGate)
+            {
+                foreach (var chain in chains)
+                {
+                    if (chain is null)
+                    {
+                        continue;
+                    }
+
+                    foreach (var runtime in chain)
+                    {
+                        runtime.AppendHold--;
+                        if (runtime.AppendHold == 0
+                            && runtime.State == SegmentState.Active
+                            && runtime.SizeBytes > 0
+                            && runtime.ActivatedUtc is null)
+                        {
+                            NoteFirstDurableArticleUnlocked(runtime);
+                        }
+
+                        if (runtime.AppendHold == 0 && runtime.DeferredSeal is { } deferred)
+                        {
+                            runtime.DeferredSeal = null;
+                            if (runtime.State == SegmentState.Active)
+                            {
+                                CloseActiveUnlocked(runtime.SegmentId.Value, _time.GetUtcNow(), deferred);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return receipts;
+    }
+
+    /// <summary>
+    /// Writes <paramref name="count"/> articles starting at <paramref name="start"/>.
+    /// A record that does not fit rotates only this writer onto a new segment.
+    /// Each contiguous run is flushed before the next segment is opened.
+    /// <see cref="SegmentRuntime.Sync"/> is not held while taking <see cref="_writeGate"/>.
+    /// </summary>
+    private void AppendGroup(
+        SegmentRuntime runtime,
+        IReadOnlyList<ReadOnlyMemory<byte>> articles,
+        int start,
+        int count,
+        FlushedSegmentAppend[] receipts,
+        List<SegmentRuntime> chain)
+    {
+        if (count == 0)
+        {
+            return;
+        }
+
+        var index = start;
+        var end = start + count;
+        while (index < end)
+        {
+            var chunk = new List<ActiveSegmentAppend>();
+            lock (runtime.Sync)
+            {
+                while (index < end && NextRecordFits(runtime, articles[index]))
+                {
+                    chunk.Add(AppendPinned(runtime, articles[index]));
+                    index++;
+                }
+
+                if (chunk.Count > 0)
+                {
+                    DurableSegmentFlush(runtime.Stream);
+                    foreach (var append in chunk)
+                    {
+                        if (!HeaderMatches(runtime, append.Location, append.ArtId, append.ArtHash, append.ArtSize))
+                        {
+                            throw new IOException(
+                                $"Flushed segment record at {append.Location.SegmentId.Value}:{append.Location.Offset} does not match the written article header.");
+                        }
+
+                        receipts[start] = new FlushedSegmentAppend(
+                            append.Location,
+                            append.ArtId,
+                            append.ArtHash,
+                            append.ArtSize);
+                        start++;
+                    }
+                }
+            }
+
+            if (index >= end)
+            {
+                break;
+            }
+
+            var cause = SealCauseForNext(runtime, articles[index]);
+            lock (_writeGate)
+            {
+                var closedId = runtime.SegmentId.Value;
+                CloseActiveUnlocked(closedId, _time.GetUtcNow(), cause, ignoreHold: true);
+                var id = _nextSegmentId;
+                ReserveSegmentId?.Invoke(id);
+                TestHookAfterSegmentIdReserved?.Invoke(id);
+                _nextSegmentId = id + 1;
+                CreateActiveUnlocked(id, _time.GetUtcNow());
+                runtime = _segments[id];
+                runtime.AppendHold++;
+                chain.Add(runtime);
+                FileSegmentStoreLogMessages.Rotated(_logger, closedId, id);
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="article"/> can be appended without sealing <paramref name="runtime"/>.
+    /// An empty segment accepts one record even when that record exceeds the size target.
+    /// Caller holds <see cref="SegmentRuntime.Sync"/>.
+    /// </summary>
+    private bool NextRecordFits(SegmentRuntime runtime, ReadOnlyMemory<byte> article)
+    {
+        if (runtime.SizeBytes == 0 || _targetSegmentBytes == long.MaxValue)
+        {
+            return true;
+        }
+
+        var recordLength = SegmentRecordCodec.RecordLengthForArtSize(article.Length);
+        if (runtime.SizeBytes + recordLength > _targetSegmentBytes)
+        {
+            return false;
+        }
+
+        return !ActiveAgeElapsedUnlocked(runtime);
+    }
+
+    /// <summary>
+    /// Size wins when the next record would pass the target. Otherwise the segment is over age.
+    /// Caller holds <see cref="SegmentRuntime.Sync"/> or has exclusive use of <paramref name="runtime"/>.
+    /// </summary>
+    private SegmentSealCause SealCauseForNext(SegmentRuntime runtime, ReadOnlyMemory<byte> article)
+    {
+        var recordLength = SegmentRecordCodec.RecordLengthForArtSize(article.Length);
+        if (runtime.SizeBytes > 0
+            && runtime.SizeBytes + recordLength > _targetSegmentBytes)
+        {
+            return SegmentSealCause.Size;
+        }
+
+        return SegmentSealCause.Age;
+    }
+
+    /// <summary>
+    /// Appends one record to <paramref name="runtime"/>. Caller holds <see cref="SegmentRuntime.Sync"/>.
+    /// Does not rotate the segment and does not arm its seal timer.
+    /// </summary>
+    private ActiveSegmentAppend AppendPinned(SegmentRuntime runtime, ReadOnlyMemory<byte> artData)
+    {
+        PhysicalProofProbe.BeginAppend();
+        try
+        {
+            if (artData.Length is < 1 or > ArticleResourceLimits.MaxArticleBytes)
+            {
+                throw new ArgumentOutOfRangeException(nameof(artData), "ArtData length out of range.");
+            }
+
+            if (!ArticleStorageIntegrity.TryExtractMessageIdValue(artData.Span, out var messageId))
+            {
+                throw new ArgumentException("ArtData must contain a Message-ID header value.", nameof(artData));
+            }
+
+            var artId = ArticleId.FromMessageId(messageId);
+            var artHash = XxHash3.HashToUInt64(artData.Span);
+            if (!ArticleStorageIntegrity.TryProve(artData.Span, artId, artHash, artData.Length))
+            {
+                throw new ArgumentException("ArtData failed article integrity proof.", nameof(artData));
+            }
+
+            Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
+            Span<byte> crc = stackalloc byte[4];
+            SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc, out _);
+            var recordLength = SegmentRecordCodec.RecordLengthForArtSize(artData.Length);
+            var offset = runtime.SizeBytes;
+            if (runtime.Stream.Length != offset)
+            {
+                runtime.TailUnreconciled = true;
+                runtime.TailValidEnd = offset;
+                throw new UnreconciledDurableTailException(
+                    $"Active segment {runtime.SegmentId.Value} length {runtime.Stream.Length} does not match logical size {offset}.",
+                    new IOException("Active segment cursor and file length diverged."));
+            }
+
+            runtime.Stream.Position = offset;
+            runtime.Stream.Write(header);
+            runtime.Stream.Write(artData.Span);
+            runtime.Stream.Write(crc);
+            TestAfterWriteBeforeFlush?.Invoke(runtime.Stream, offset, recordLength);
+            var end = offset + recordLength;
+            if (runtime.Stream.Position != end || runtime.Stream.Length < end)
+            {
+                throw new IOException(
+                    $"Active segment {runtime.SegmentId.Value} append at offset {offset} ended at position {runtime.Stream.Position}, length {runtime.Stream.Length}, expected {end}.");
+            }
+
+            return CommitActiveAppend(
+                runtime,
+                offset,
+                recordLength,
+                ambiguousComplete: false,
+                artId,
+                artHash,
+                artData.Length,
+                publishActivation: false);
+        }
+        finally
+        {
+            PhysicalProofProbe.EndAppend();
+        }
+    }
+
+    /// <summary>
+    /// True when the fixed header at <paramref name="location"/> matches the written identity.
+    /// Caller holds <see cref="SegmentRuntime.Sync"/>. Does not read the payload.
+    /// </summary>
+    private bool HeaderMatches(
+        SegmentRuntime runtime,
+        in StoredArticleLocation location,
+        ArticleId artId,
+        ulong artHash,
+        int artSize)
+    {
+        _ = Interlocked.Increment(ref _flushedHeaderConfirmCount);
+        if (artSize < 1
+            || artSize > SegmentRecordCodec.MaxArtDataBytes
+            || location.Offset < 0
+            || location.Length != SegmentRecordCodec.RecordLengthForArtSize(artSize)
+            || location.Offset + location.Length > runtime.SizeBytes)
+        {
+            return false;
+        }
+
+        Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
+        if (!TryReadHeaderAt(runtime, location.Offset, header))
+        {
+            return false;
+        }
+
+        return SegmentRecordCodec.TryConfirmRecordHeader(header, location.Length, artId, artHash, artSize);
+    }
+
+    /// <summary>
+    /// Opens enough active segments for the configured writer count.
+    /// Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private void EnsureActiveWriterCountUnlocked()
+    {
+        PruneActiveWritersUnlocked();
+        while (_activeWriterIds.Count < _activeSegmentCount)
+        {
+            var id = _nextSegmentId;
+            ReserveSegmentId?.Invoke(id);
+            TestHookAfterSegmentIdReserved?.Invoke(id);
+            _nextSegmentId = id + 1;
+            CreateActiveUnlocked(id, _time.GetUtcNow());
+        }
+    }
+
+    /// <summary>
+    /// Drops writers that are no longer active. Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private void PruneActiveWritersUnlocked()
+    {
+        for (var i = _activeWriterIds.Count - 1; i >= 0; i--)
+        {
+            var id = _activeWriterIds[i];
+            if (!_segments.TryGetValue(id, out var runtime) || runtime.State != SegmentState.Active)
+            {
+                _activeWriterIds.RemoveAt(i);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Seals <paramref name="segmentId"/> when its current bytes plus <paramref name="incomingBytes"/>
+    /// would pass the size target. Returns the segment that should receive the bytes.
+    /// Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private SegmentRuntime PrepareWriterForBytesUnlocked(ulong segmentId, long incomingBytes)
+    {
+        if (!_segments.TryGetValue(segmentId, out var runtime) || runtime.State != SegmentState.Active)
+        {
+            throw new InvalidOperationException($"Segment {segmentId} is not an active writer.");
+        }
+
+        if (runtime.PendingRecord is not null || runtime.TailUnreconciled)
+        {
+            throw new UnreconciledDurableTailException(
+                $"Active segment {segmentId} cannot take a parallel append while a physical append is pending.",
+                new IOException("pending-segment-record"));
+        }
+
+        if (runtime.SizeBytes > 0
+            && incomingBytes > 0
+            && runtime.SizeBytes + incomingBytes > _targetSegmentBytes)
+        {
+            CloseActiveUnlocked(segmentId, _time.GetUtcNow(), SegmentSealCause.Size);
+            var id = _nextSegmentId;
+            ReserveSegmentId?.Invoke(id);
+            TestHookAfterSegmentIdReserved?.Invoke(id);
+            _nextSegmentId = id + 1;
+            CreateActiveUnlocked(id, _time.GetUtcNow());
+            runtime = _segments[id];
+        }
+
+        if (runtime.SizeBytes > 0 && ActiveAgeElapsedUnlocked(runtime))
+        {
+            var aged = runtime.SegmentId.Value;
+            CloseActiveUnlocked(aged, _time.GetUtcNow(), SegmentSealCause.Age);
+            var id = _nextSegmentId;
+            ReserveSegmentId?.Invoke(id);
+            TestHookAfterSegmentIdReserved?.Invoke(id);
+            _nextSegmentId = id + 1;
+            CreateActiveUnlocked(id, _time.GetUtcNow());
+            runtime = _segments[id];
+        }
+
+        return runtime;
+    }
+
+    private static int[] WriterCounts(int articleCount, int writers)
+    {
+        var counts = new int[writers];
+        var baseCount = articleCount / writers;
+        var remainder = articleCount % writers;
+        for (var i = 0; i < writers; i++)
+        {
+            counts[i] = baseCount + (i < remainder ? 1 : 0);
+        }
+
+        return counts;
+    }
+
+    /// <summary>
+    /// Reads the fixed header at <paramref name="location"/> and checks it against the Accept.
+    /// Does not read the payload. A retired segment, a short range, or a mismatched header
+    /// returns false. The stream position is restored.
+    /// </summary>
+    /// <param name="location">Record written and flushed by this process.</param>
+    /// <param name="artId">Accept article identity.</param>
+    /// <param name="artHash">Accept article hash.</param>
+    /// <param name="artSize">Accept article size.</param>
+    /// <returns>True when the durable header still names that article.</returns>
+    internal bool TryConfirmFlushedAppend(
+        in StoredArticleLocation location,
+        ArticleId artId,
+        ulong artHash,
+        int artSize)
+    {
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return TryConfirmFlushedHeaderUnlocked(location, artId, artHash, artSize);
+        }
+    }
+
+    /// <summary>
+    /// Header confirm. Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private bool TryConfirmFlushedHeaderUnlocked(
+        in StoredArticleLocation location,
+        ArticleId artId,
+        ulong artHash,
+        int artSize)
+    {
+        _ = Interlocked.Increment(ref _flushedHeaderConfirmCount);
+        if (artSize < 1
+            || artSize > SegmentRecordCodec.MaxArtDataBytes
+            || location.Offset < 0
+            || location.Length != SegmentRecordCodec.RecordLengthForArtSize(artSize)
+            || !_segments.TryGetValue(location.SegmentId.Value, out var runtime)
+            || runtime.State == SegmentState.Retired
+            || location.Offset + location.Length > runtime.SizeBytes)
+        {
+            return false;
+        }
+
+        Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
+        if (!TryReadHeaderAt(runtime, location.Offset, header))
+        {
+            return false;
+        }
+
+        return SegmentRecordCodec.TryConfirmRecordHeader(header, location.Length, artId, artHash, artSize);
+    }
+
+    /// <summary>
+    /// Reads <paramref name="header"/> at <paramref name="offset"/> and restores the stream position.
+    /// Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private static bool TryReadHeaderAt(SegmentRuntime runtime, long offset, Span<byte> header)
+    {
+        lock (runtime.Sync)
+        {
+            return ReadHeaderAt(runtime, offset, header);
+        }
+    }
+
+    private static bool ReadHeaderAt(SegmentRuntime runtime, long offset, Span<byte> header)
+    {
+        runtime.EnsureReadable();
+        var stream = runtime.Stream;
+        var restore = stream.Position;
+        stream.Seek(offset, SeekOrigin.Begin);
+        var filled = 0;
+        while (filled < header.Length)
+        {
+            var read = stream.Read(header[filled..]);
+            if (read == 0)
+            {
+                stream.Position = restore;
+                return false;
+            }
+
+            filled += read;
+        }
+
+        stream.Position = restore;
+        return true;
     }
 
     /// <summary>
@@ -991,14 +1607,19 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         SegmentRuntime runtime,
         long offset,
         int recordLength,
-        bool ambiguousComplete)
+        bool ambiguousComplete,
+        ArticleId artId,
+        ulong artHash,
+        int artSize,
+        bool publishActivation = true)
     {
         runtime.SizeBytes = offset + recordLength;
         _catalogue.RecordAppend(runtime.SegmentId, recordLength, runtime.SizeBytes);
-        if (offset == 0)
+        if (publishActivation && offset == 0)
         {
             NoteFirstDurableArticleUnlocked(runtime);
         }
+
         if (_deferDurableFlush > 0)
         {
             _unflushedCommittedAppend = true;
@@ -1006,7 +1627,10 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
         return new ActiveSegmentAppend(
             new StoredArticleLocation(runtime.SegmentId, offset, recordLength),
-            ambiguousComplete);
+            ambiguousComplete,
+            artId,
+            artHash,
+            artSize);
     }
 
     private AmbiguousAppend.Growth InspectSegmentAppend(
@@ -1148,7 +1772,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// <summary>Age-seal check. Caller holds <see cref="_writeGate"/>.</summary>
     private bool TrySealActiveForAgeUnlocked(ulong segmentId, bool scheduledWaitElapsed)
     {
-        if (_disposed || _activeSegmentId != segmentId)
+        if (_disposed || !_activeWriterIds.Contains(segmentId))
         {
             return false;
         }
@@ -1276,14 +1900,17 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             return;
         }
 
-        CancelAgeSealScheduleUnlocked();
+        CancelAgeSealScheduleUnlocked(segmentId);
         var remaining = SealDelayRemainingUnlocked(activated);
         runtime.AgeBudgetStartTimestamp = _time.GetTimestamp();
         runtime.AgeBudget = remaining;
         var cts = new CancellationTokenSource();
         _ageSealCts = cts;
         _ageSealSegmentId = segmentId;
-        _ageSealTask = SealWhenDueAsync(segmentId, remaining, cts);
+        var task = SealWhenDueAsync(segmentId, remaining, cts);
+        _ageSealTask = task;
+        _ageSealSources[segmentId] = cts;
+        _ageSealTasks[segmentId] = task;
     }
 
     /// <summary>Waits for the active segment's remaining age, then attempts one age seal.</summary>
@@ -1340,15 +1967,41 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 
-    /// <summary>Cancels the delay for the current active segment. Does not wait for it.</summary>
+    /// <summary>Cancels every age-seal delay. Does not wait. Caller holds <see cref="_writeGate"/>.</summary>
     private void CancelAgeSealScheduleUnlocked()
     {
-        var cts = _ageSealCts;
-        _ageSealCts = null;
-        _ageSealSegmentId = null;
-        if (cts is null)
+        foreach (var id in _ageSealSources.Keys.ToArray())
         {
+            CancelAgeSealScheduleUnlocked(id);
+        }
+    }
+
+    /// <summary>
+    /// Cancels the age-seal delay for <paramref name="segmentId"/> only.
+    /// A timer for another active segment keeps running. Does not wait.
+    /// Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private void CancelAgeSealScheduleUnlocked(ulong segmentId)
+    {
+        _ = _ageSealTasks.Remove(segmentId);
+        if (!_ageSealSources.Remove(segmentId, out var cts))
+        {
+            if (_ageSealSegmentId == segmentId)
+            {
+                _ageSealCts = null;
+                _ageSealSegmentId = null;
+            }
+
             return;
+        }
+
+        if (_ageSealSegmentId == segmentId)
+        {
+            _ageSealCts = null;
+            _ageSealSegmentId = null;
+            _ageSealTask = _ageSealTasks.Count == 1
+                ? _ageSealTasks.Values.First()
+                : Task.CompletedTask;
         }
 
         try
@@ -1364,11 +2017,18 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// <summary>Writes the activation instant durably next to the segment files.</summary>
     private void PersistActivationUnlocked(ulong segmentId, DateTimeOffset activated)
     {
-        var path = Path.Combine(_root, ActivationFileName);
-        var temporary = path + ".tmp";
         var buffer = new byte[16];
         BinaryPrimitives.WriteUInt64LittleEndian(buffer, segmentId);
         BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(8), activated.UtcTicks);
+        var path = _activeSegmentCount <= 1
+            ? Path.Combine(_root, ActivationFileName)
+            : ActivationPath(segmentId);
+        WriteActivationFile(path, buffer);
+    }
+
+    private static void WriteActivationFile(string path, byte[] buffer)
+    {
+        var temporary = path + ".tmp";
         using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
         {
             stream.Write(buffer);
@@ -1378,11 +2038,17 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         File.Move(temporary, path, overwrite: true);
     }
 
+    private string ActivationPath(ulong segmentId) =>
+        Path.Combine(
+            _root,
+            "segment-activation-" + segmentId.ToString("D20", System.Globalization.CultureInfo.InvariantCulture));
+
     /// <summary>Reads the activation instant when the file names <paramref name="segmentId"/>.</summary>
     private bool TryReadActivationUnlocked(ulong segmentId, out DateTimeOffset activated)
     {
         activated = default;
-        var path = Path.Combine(_root, ActivationFileName);
+        var perWriter = ActivationPath(segmentId);
+        var path = File.Exists(perWriter) ? perWriter : Path.Combine(_root, ActivationFileName);
         if (!File.Exists(path))
         {
             return false;
@@ -1428,10 +2094,56 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
         try
         {
-            File.Delete(Path.Combine(_root, ActivationFileName));
+            var perWriter = ActivationPath(segmentId);
+            if (File.Exists(perWriter))
+            {
+                File.Delete(perWriter);
+            }
+
+            if (TryReadLegacyActivation(segmentId))
+            {
+                File.Delete(Path.Combine(_root, ActivationFileName));
+            }
         }
         catch (IOException)
         {
+        }
+    }
+
+    /// <summary>True when the single-writer activation file still names <paramref name="segmentId"/>.</summary>
+    private bool TryReadLegacyActivation(ulong segmentId)
+    {
+        var path = Path.Combine(_root, ActivationFileName);
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var bytes = File.ReadAllBytes(path);
+            return bytes.Length == 16 && BinaryPrimitives.ReadUInt64LittleEndian(bytes) == segmentId;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    private void TrackActiveWriterUnlocked(ulong id)
+    {
+        if (!_activeWriterIds.Contains(id))
+        {
+            _activeWriterIds.Add(id);
+        }
+    }
+
+    private void UntrackActiveWriterUnlocked(ulong id)
+    {
+        _ = _activeWriterIds.Remove(id);
+        if (_activeSegmentId == id)
+        {
+            _activeSegmentId = _activeWriterIds.Count > 0 ? _activeWriterIds[0] : null;
         }
     }
 
@@ -1441,11 +2153,22 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     private void SealOrArmRecoveredActiveUnlocked()
     {
-        if (_maxSealDelay <= TimeSpan.Zero || _activeSegmentId is not ulong id)
+        if (_maxSealDelay <= TimeSpan.Zero)
         {
             return;
         }
 
+        foreach (var id in _activeWriterIds.ToArray())
+        {
+            SealOrArmRecoveredWriterUnlocked(id);
+        }
+    }
+
+    /// <summary>
+    /// Seals or arms one recovered active segment. Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private void SealOrArmRecoveredWriterUnlocked(ulong id)
+    {
         if (!_segments.TryGetValue(id, out var runtime)
             || runtime.State != SegmentState.Active
             || runtime.SizeBytes <= 0
@@ -1515,6 +2238,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         _catalogue.Upsert(info);
         _segments[id] = new SegmentRuntime(segmentId, SegmentState.Active, path, stream, sizeBytes: 0);
         _activeSegmentId = id;
+        TrackActiveWriterUnlocked(id);
         if (id >= _nextSegmentId)
         {
             _nextSegmentId = id + 1;
@@ -1523,15 +2247,27 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         FileSegmentStoreLogMessages.ActiveSelected(_logger, id, 0);
     }
 
-    private void CloseActiveUnlocked(ulong activeId, DateTimeOffset utcNow, SegmentSealCause cause)
+    /// <summary>
+    /// Seals <paramref name="activeId"/> when it is still active.
+    /// <paramref name="ignoreHold"/> is for the writer that already owns the append and has
+    /// released <see cref="SegmentRuntime.Sync"/>. Any other caller defers while <see cref="SegmentRuntime.AppendHold"/> is set.
+    /// Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private void CloseActiveUnlocked(
+        ulong activeId,
+        DateTimeOffset utcNow,
+        SegmentSealCause cause,
+        bool ignoreHold = false)
     {
         if (!_segments.TryGetValue(activeId, out var runtime) || runtime.State != SegmentState.Active)
         {
-            if (_activeSegmentId == activeId)
-            {
-                _activeSegmentId = null;
-            }
+            UntrackActiveWriterUnlocked(activeId);
+            return;
+        }
 
+        if (!ignoreHold && runtime.AppendHold > 0)
+        {
+            runtime.DeferredSeal = cause;
             return;
         }
 
@@ -1545,7 +2281,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         var beforeClose = TestHookBeforeActiveClose;
         TestHookBeforeActiveClose = null;
         beforeClose?.Invoke(activeId);
-        if (runtime.State != SegmentState.Active || _activeSegmentId != activeId)
+        if (runtime.State != SegmentState.Active)
         {
             return;
         }
@@ -1572,11 +2308,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             SizeBytes = runtime.SizeBytes,
             ClosedUtc = utcNow,
         });
-        _activeSegmentId = null;
-        if (_ageSealSegmentId == activeId)
-        {
-            CancelAgeSealScheduleUnlocked();
-        }
+        UntrackActiveWriterUnlocked(activeId);
+        CancelAgeSealScheduleUnlocked(activeId);
 
         DeleteActivationIfMatchUnlocked(activeId);
         if (cause == SegmentSealCause.Age)
@@ -1652,14 +2385,6 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         if (discovered.Count == 0)
         {
             return;
-        }
-
-        var activeCount = discovered.Count(static d => d.Kind == SegmentFileKind.Active);
-        if (activeCount > 1)
-        {
-            throw new SegmentStoreCorruptException(
-                $"Multiple active segment files found under '{_root}'.",
-                _root);
         }
 
         var catalogueEntries = new List<SegmentInfo>();
@@ -1740,6 +2465,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                     TestBeforeActiveDiscoverySeek?.Invoke(opened);
                     opened.Seek(0, SeekOrigin.End);
                     _activeSegmentId = item.Id.Value;
+                    TrackActiveWriterUnlocked(item.Id.Value);
                     _segments[item.Id.Value] = new SegmentRuntime(
                         item.Id,
                         state,
@@ -2488,6 +3214,21 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         out ReadOnlyMemory<byte> artData)
     {
         artData = default;
+        lock (runtime.Sync)
+        {
+            return TryReadInside(runtime, location, expectedArtId, expectedArtHash, expectedArtSize, out artData);
+        }
+    }
+
+    private static bool TryReadInside(
+        SegmentRuntime runtime,
+        in StoredArticleLocation location,
+        ArticleId? expectedArtId,
+        ulong? expectedArtHash,
+        int? expectedArtSize,
+        out ReadOnlyMemory<byte> artData)
+    {
+        artData = default;
         if (location.Offset < 0
             || location.Length < SegmentRecordCodec.MinimumRecordLength
             || location.Offset + location.Length > runtime.SizeBytes)
@@ -2583,6 +3324,19 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
         public PendingSegmentRecord? PendingRecord { get; set; }
 
+        /// <summary>
+        /// Serializes appends and reads of this segment's stream.
+        /// A writer holds this lock and does not take the store write gate.
+        /// A reader takes the store write gate first, then this lock.
+        /// </summary>
+        public object Sync { get; } = new();
+
+        /// <summary>Appends currently between pin and completion. The segment is not sealed while this is positive.</summary>
+        public int AppendHold { get; set; }
+
+        /// <summary>Seal requested while an append held the segment. Applied when the hold drops.</summary>
+        public SegmentSealCause? DeferredSeal { get; set; }
+
         private FileStream? _stream = stream;
 
         public void EnsureReadable()
@@ -2656,9 +3410,35 @@ internal sealed class PendingSegmentRecord
     internal int ArtSize { get; }
 }
 
+/// <summary>
+/// One append committed to the active segment cursor.
+/// Identity fields are those derived from the payload before the write.
+/// </summary>
+/// <param name="Location">Segment, offset, and full record length.</param>
+/// <param name="AmbiguousComplete">True when a failed flush was reconciled from bytes already present.</param>
+/// <param name="ArtId">Article identity derived from the payload Message-ID.</param>
+/// <param name="ArtHash">XxHash3 of the payload that was written.</param>
+/// <param name="ArtSize">Payload length that was written.</param>
 internal readonly record struct ActiveSegmentAppend(
     StoredArticleLocation Location,
-    bool AmbiguousComplete);
+    bool AmbiguousComplete,
+    ArticleId ArtId,
+    ulong ArtHash,
+    int ArtSize);
+
+/// <summary>
+/// A segment record whose payload was proved, framed, written, and durability-flushed,
+/// and whose header was read back and matched. The payload was not read back.
+/// </summary>
+/// <param name="Location">Flushed record location.</param>
+/// <param name="ArtId">Identity written into the header.</param>
+/// <param name="ArtHash">Hash written into the header.</param>
+/// <param name="ArtSize">Payload size written into the header.</param>
+internal readonly record struct FlushedSegmentAppend(
+    StoredArticleLocation Location,
+    ArticleId ArtId,
+    ulong ArtHash,
+    int ArtSize);
 
 /// <summary>One proven segment record. Payload is not retained.</summary>
 internal readonly record struct ProvenSegmentExtent(

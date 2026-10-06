@@ -45,6 +45,11 @@ public sealed class ArticleStorageOptions
     public static readonly TimeSpan DefaultMaxSegmentSealDelay = TimeSpan.FromSeconds(60);
 
     /// <summary>
+    /// Default number of segment files that may accept appends at the same time.
+    /// </summary>
+    public const int DefaultActiveSegmentCount = 1;
+
+    /// <summary>
     /// Gets or sets the SATA segment/cache root for append-oriented immutable article segments.
     /// </summary>
     /// <remarks>
@@ -143,6 +148,22 @@ public sealed class ArticleStorageOptions
     /// </para>
     /// </remarks>
     public TimeSpan MaxSegmentSealDelay { get; set; } = DefaultMaxSegmentSealDelay;
+
+    /// <summary>
+    /// Gets or sets how many segment files may accept appends concurrently.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>1</c> keeps a single active segment. <c>2</c> or <c>4</c> gives each active segment
+    /// its own file, segment id, and writer. Writers append only to the segment they own.
+    /// </para>
+    /// <para>
+    /// This does not add disks or segment roots. Every file stays under <see cref="CacheDir"/>.
+    /// Values outside 1, 2, and 4 are rejected.
+    /// </para>
+    /// </remarks>
+    [Range(1, 4)]
+    public int ActiveSegmentCount { get; set; } = DefaultActiveSegmentCount;
 
     /// <summary>
     /// Gets or sets process-local article memory-cache bounds under

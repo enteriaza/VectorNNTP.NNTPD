@@ -390,6 +390,49 @@ internal static class SegmentRecordCodec
     }
 
     /// <summary>
+    /// Confirms the fixed header names <paramref name="expectedArtId"/>,
+    /// <paramref name="expectedArtHash"/>, and <paramref name="expectedArtSize"/>,
+    /// and that <paramref name="recordLength"/> is the framed length of that size.
+    /// Does not read or hash the payload and does not check the record CRC.
+    /// </summary>
+    /// <param name="header">The 52-byte record header.</param>
+    /// <param name="recordLength">Full physical record length, including header, payload, and CRC.</param>
+    /// <param name="expectedArtId">Article identity the writer derived from the payload.</param>
+    /// <param name="expectedArtHash">XxHash3 the writer computed over that payload.</param>
+    /// <param name="expectedArtSize">Payload length the writer framed.</param>
+    /// <returns>True when the header is the expected schema and identity.</returns>
+    internal static bool TryConfirmRecordHeader(
+        ReadOnlySpan<byte> header,
+        int recordLength,
+        ArticleId expectedArtId,
+        ulong expectedArtHash,
+        int expectedArtSize)
+    {
+        if (header.Length != FixedHeaderLength
+            || expectedArtSize is < 1 or > MaxArtDataBytes
+            || recordLength != RecordLengthForArtSize(expectedArtSize))
+        {
+            return false;
+        }
+
+        var declaredLength = BinaryPrimitives.ReadUInt32LittleEndian(header);
+        if (declaredLength != (uint)recordLength)
+        {
+            return false;
+        }
+
+        if (header[4] != SchemaVersion || header[5] != 0 || header[6] != 0 || header[7] != 0)
+        {
+            return false;
+        }
+
+        var artId = ArticleId.FromSpan(header.Slice(8, ArticleId.Length));
+        var artHash = BinaryPrimitives.ReadUInt64LittleEndian(header.Slice(8 + ArticleId.Length, 8));
+        var artSize = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(8 + ArticleId.Length + 8, 4));
+        return artId == expectedArtId && artHash == expectedArtHash && artSize == expectedArtSize;
+    }
+
+    /// <summary>
     /// Proves one complete physical record against the expected Accept identity.
     /// CRC, schema, header identity, XxHash3, and Message-ID each run once over
     /// <paramref name="record"/>. The payload is not copied.

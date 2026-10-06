@@ -95,11 +95,16 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// <para>
 /// One physical worker drains whatever is already queued. Accept frames are durable before a
 /// sequence is queued, so the worker does not append them again. A drain writes the batch's
-/// segment records and flushes that file once, then its PhysicalWritten frames and flushes the
-/// journal once, then its Present frames and flushes the index once, then its IndexCommitted
-/// frames and flushes the journal once. Those in-memory states advance only after the covering
-/// flush returns. Work that arrives during a drain waits for the next one. Startup recovery
-/// still persists one sequence at a time.
+/// segment records and flushes that file once, confirms each record header, then its
+/// PhysicalWritten frames and flushes the journal once, confirms the header again, then its
+/// Present frames and flushes the index once, then its IndexCommitted frames and flushes the
+/// journal once. Those in-memory states advance only after the covering flush returns.
+/// A Present location is published from that write receipt only when the location was not
+/// replaced and the header still matches the Accept. The payload is not read again on that
+/// path. A recovered PhysicalWritten, a reused orphan, or a replaced location is still proved
+/// by reading the stored record. Work that arrives during a drain waits for the next one.
+/// Startup recovery still persists one sequence at a time and still read-proves a
+/// PhysicalWritten it did not flush in that call.
 /// </para>
 /// </remarks>
 public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IArticleStorageRecovery, IAsyncDisposable, IDisposable
@@ -251,6 +256,21 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>Number of worker drains that assembled a persistence batch. Tests only.</summary>
     internal long PersistBatchCount => Volatile.Read(ref _persistBatchCount);
+
+    /// <summary>
+    /// Sequences queued for the persist worker and not yet dequeued.
+    /// The worker takes the whole queue when it wakes, so this is the handoff depth, not the journal backlog.
+    /// </summary>
+    internal int PendingSequenceCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _pendingSequences.Count;
+            }
+        }
+    }
 
     /// <summary>Article count of the most recent worker batch. Tests only.</summary>
     internal int LastPersistBatchArticleCount => Volatile.Read(ref _lastPersistBatchArticleCount);
@@ -1310,6 +1330,16 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 record.ArtSize))
         {
             return Task.FromResult(ArticleAcceptResult.RejectedInvalid(record.ArtId, "integrity"));
+        }
+
+        if (_journal.AcceptParallelPreparation)
+        {
+            return AcceptPreparedAsync(record, artData, cancellationToken);
+        }
+
+        if (_journal.AcceptGroupLimit > 1)
+        {
+            return AcceptGroupedAsync(record, artData, cancellationToken);
         }
 
         JournalAcceptRecord journalRecord;
