@@ -65,6 +65,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// retirement-seal retry reserves another unwritten copy before it appends.
 /// Each durable Accept also reserves <c>ArtSize + 132</c> on the control ledger for the journal
 /// sequence. That reservation is released only after a checkpoint replacement omits the sequence.
+/// Checkpoint admission does not charge those IndexCommitted sequence reservations against the
+/// temporary image, so they do not by themselves refuse the replacement that releases them.
+/// Incomplete sequences stay reserved and stay charged. Drive used bytes are not credited.
 /// The same Accept reserves <see cref="ArticleIndexRecordCodec.RecordLength"/> bytes on the control
 /// ledger before the durable Present index frame.
 /// Every later physical index frame, including Evicted, Invalid, and relocation Present, reserves

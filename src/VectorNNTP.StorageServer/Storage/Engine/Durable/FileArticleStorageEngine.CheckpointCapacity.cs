@@ -108,9 +108,14 @@ public sealed partial class FileArticleStorageEngine
             TryReserve = TryReserveCheckpoint,
             TryIncrease = TryIncreaseCheckpoint,
             Release = ReleaseCheckpoint,
+            TryReserveOmittingJournalSequences = TryReserveCheckpointOmitting,
+            TryIncreaseOmittingJournalSequences = TryIncreaseCheckpointOmitting,
         };
 
-    private ulong? TryReserveCheckpoint(long bytes)
+    private ulong? TryReserveCheckpoint(long bytes) =>
+        TryReserveCheckpointOmitting(bytes, []);
+
+    private ulong? TryReserveCheckpointOmitting(long bytes, ulong[] omittedJournalSequences)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         var volume = RequireControlVolume();
@@ -118,7 +123,7 @@ public sealed partial class FileArticleStorageEngine
         return volume.WithLedger(ledger =>
         {
             TestBeforeCheckpointReserve?.Invoke(bytes);
-            if (!TryAdmitCheckpointBytes(volume, ledger, bytes))
+            if (!TryAdmitCheckpointBytes(volume, ledger, bytes, omittedJournalSequences))
             {
                 return (ulong?)null;
             }
@@ -127,7 +132,13 @@ public sealed partial class FileArticleStorageEngine
         });
     }
 
-    private bool TryIncreaseCheckpoint(ulong reservationId, long additionalBytes)
+    private bool TryIncreaseCheckpoint(ulong reservationId, long additionalBytes) =>
+        TryIncreaseCheckpointOmitting(reservationId, additionalBytes, []);
+
+    private bool TryIncreaseCheckpointOmitting(
+        ulong reservationId,
+        long additionalBytes,
+        ulong[] omittedJournalSequences)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(additionalBytes);
         var volume = RequireControlVolume();
@@ -135,7 +146,7 @@ public sealed partial class FileArticleStorageEngine
         return volume.WithLedger(ledger =>
         {
             TestBeforeCheckpointReserve?.Invoke(additionalBytes);
-            if (!TryAdmitCheckpointBytes(volume, ledger, additionalBytes))
+            if (!TryAdmitCheckpointBytes(volume, ledger, additionalBytes, omittedJournalSequences))
             {
                 return false;
             }
@@ -153,18 +164,35 @@ public sealed partial class FileArticleStorageEngine
     /// <summary>
     /// Checkpoint temps use the article ceiling on the control volume. When that volume is also
     /// the segment volume, the reservation participates in article and compaction decisions.
+    /// Reservations for <paramref name="omittedJournalSequences"/> are not charged against a
+    /// journal replacement, because counting them would refuse the only operation that releases
+    /// them. Index snapshots pass an empty list. Drive used bytes are not credited.
     /// </summary>
     private bool TryAdmitCheckpointBytes(
         CapacityVolume volume,
         ProcessLocalCapacityLedger ledger,
-        long bytes)
+        long bytes,
+        ulong[] omittedJournalSequences)
     {
         var snap = volume.Reader.Read();
-        if (ledger.WouldFit(
+        var journalReserved = ledger.JournalReservedBytes;
+        long credit = 0;
+        foreach (var sequence in omittedJournalSequences)
+        {
+            credit = checked(credit + ledger.JournalReservationBytes(sequence));
+        }
+
+        if (ProcessLocalCapacityLedger.WouldFit(
                 snap.UsedBytes,
+                ledger.ArticleReservedBytes,
+                ledger.CompactionReservedBytes,
                 snap.TotalBytes,
                 bytes,
-                _capacityMaximumUtilization))
+                _capacityMaximumUtilization,
+                ledger.CheckpointReservedBytes,
+                journalReserved - credit,
+                ledger.IndexReservedBytes,
+                ledger.CompactionJournalReservedBytes))
         {
             return true;
         }

@@ -23,6 +23,20 @@ internal sealed class CheckpointCapacityReservation
 
     /// <summary>Releases one reservation. Unknown ids are ignored.</summary>
     public required Action<ulong> Release { get; init; }
+
+    /// <summary>
+    /// Journal-checkpoint reserve. The sequence ids are IndexCommitted accepts this replacement
+    /// will omit; their journal reservations are not charged against the temp. Index snapshots
+    /// keep using <see cref="TryReserve"/> and do not supply sequences. The delegate must not
+    /// take the journal lock.
+    /// </summary>
+    public Func<long, ulong[], ulong?>? TryReserveOmittingJournalSequences { get; init; }
+
+    /// <summary>
+    /// Journal-checkpoint increase. Same sequence credit as
+    /// <see cref="TryReserveOmittingJournalSequences"/>. The delegate must not take the journal lock.
+    /// </summary>
+    public Func<ulong, long, ulong[], bool>? TryIncreaseOmittingJournalSequences { get; init; }
 }
 
 /// <summary>

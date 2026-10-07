@@ -30,7 +30,10 @@ public sealed partial class FileArticleJournal
             var image = MaterializeCheckpointImage(attempt);
             if (capacity is not null)
             {
-                attempt.ReservationId = capacity.TryReserve(image.Length);
+                attempt.OmittedJournalSequences = SequencesOmittedByCheckpoint(attempt);
+                attempt.ReservationId = capacity.TryReserveOmittingJournalSequences is { } reserveOmitting
+                    ? reserveOmitting(image.Length, attempt.OmittedJournalSequences)
+                    : capacity.TryReserve(image.Length);
                 if (attempt.ReservationId is null)
                 {
                     throw new CheckpointCapacityDeniedException(image.Length);
@@ -60,7 +63,13 @@ public sealed partial class FileArticleJournal
                     if (capacity is not null)
                     {
                         var total = attempt.ReservedBytes + suffix.Length;
-                        if (!capacity.TryIncrease(attempt.ReservationId!.Value, suffix.Length))
+                        var increased = capacity.TryIncreaseOmittingJournalSequences is { } increaseOmitting
+                            ? increaseOmitting(
+                                attempt.ReservationId!.Value,
+                                suffix.Length,
+                                attempt.OmittedJournalSequences)
+                            : capacity.TryIncrease(attempt.ReservationId!.Value, suffix.Length);
+                        if (!increased)
                         {
                             throw new CheckpointCapacityDeniedException(total);
                         }
@@ -326,6 +335,15 @@ public sealed partial class FileArticleJournal
         return frames.Count == 0 ? [] : ConcatFrames(frames);
     }
 
+    private ulong[] SequencesOmittedByCheckpoint(CheckpointAttempt attempt)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return CollectOmittedSequencesUnlocked(attempt);
+        }
+    }
+
     private ulong[] CollectOmittedSequencesUnlocked(CheckpointAttempt attempt)
     {
         var omitted = new List<ulong>();
@@ -414,6 +432,8 @@ public sealed partial class FileArticleJournal
         public ulong NextSequence { get; }
 
         public ulong NextSegmentId { get; }
+
+        public ulong[] OmittedJournalSequences { get; set; } = [];
 
         public ulong? ReservationId { get; set; }
 
