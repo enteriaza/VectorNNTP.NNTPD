@@ -238,13 +238,8 @@ public sealed class MemoryArticleStorageEngine : IArticleStorageEngine, IArticle
             return false;
         }
 
-        // Soft hint only — must not require durable NVMe/index journal writes.
-        var durableBefore = _index.DurableWriteCount;
+        // TouchHint enforces its own no-durable-write rule under the index lock.
         _index.TouchHint(artId, _timeProvider.GetUtcNow());
-        if (_index.DurableWriteCount != durableBefore)
-        {
-            throw new InvalidOperationException("TouchHint must not perform durable index writes.");
-        }
 
         _ = _index.TryGet(artId, out metadata);
         result = new ArticleReadResult(metadata, artData);

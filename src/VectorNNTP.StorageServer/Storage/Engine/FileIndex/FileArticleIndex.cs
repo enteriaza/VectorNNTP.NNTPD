@@ -840,22 +840,28 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     /// <inheritdoc />
     /// <remarks>
     /// Soft in-memory LastAccess hint only. Must not require a durable NVMe write; loss across
-    /// crash is acceptable and not required for recovery correctness.
+    /// crash is acceptable and not required for recovery correctness. The durable-write tripwire
+    /// runs while the index lock is held. A concurrent expiration or reclamation appends its own
+    /// frame under that same lock, so it is not observed as a write performed by this hint.
     /// </remarks>
     public void TouchHint(ArticleId artId, DateTimeOffset utcNow)
     {
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            var durableBefore = _durableWriteCount;
             _touchHintCount++;
-            if (!_entries.TryGetValue(artId, out var existing)
-                || existing.State != ArticleStorageState.Present)
+            if (_entries.TryGetValue(artId, out var existing)
+                && existing.State == ArticleStorageState.Present)
             {
-                return;
+                _entries[artId] = existing with { LastAccessUtc = utcNow };
+                _useCounts[artId] = _useCounts.GetValueOrDefault(artId) + 1;
             }
 
-            _entries[artId] = existing with { LastAccessUtc = utcNow };
-            _useCounts[artId] = _useCounts.GetValueOrDefault(artId) + 1;
+            if (_durableWriteCount != durableBefore)
+            {
+                throw new InvalidOperationException("TouchHint must not perform durable index writes.");
+            }
         }
     }
 

@@ -2718,12 +2718,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             return false;
         }
 
-        var durableBefore = _index.DurableWriteCount;
+        // TouchHint enforces its own no-durable-write rule under the index lock.
+        // Sampling DurableWriteCount here races with expiration and reclamation.
         _index.TouchHint(snapshot.ArtId, _timeProvider.GetUtcNow());
-        if (_index.DurableWriteCount != durableBefore)
-        {
-            throw new InvalidOperationException("TouchHint must not perform durable index writes.");
-        }
 
         if (!_index.TryGet(snapshot.ArtId, out var published)
             || published.State != ArticleStorageState.Present

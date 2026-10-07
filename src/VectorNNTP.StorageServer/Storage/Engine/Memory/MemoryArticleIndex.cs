@@ -166,19 +166,26 @@ public sealed class MemoryArticleIndex : IArticleIndex
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Soft in-memory hint only. The durable-write tripwire runs while the index lock is held,
+    /// so a concurrent logical transition is not charged to this hint.
+    /// </remarks>
     public void TouchHint(ArticleId artId, DateTimeOffset utcNow)
     {
         lock (_gate)
         {
+            var durableBefore = _durableWriteCount;
             _touchHintCount++;
-            if (!_entries.TryGetValue(artId, out var existing)
-                || existing.State != ArticleStorageState.Present)
+            if (_entries.TryGetValue(artId, out var existing)
+                && existing.State == ArticleStorageState.Present)
             {
-                return;
+                _entries[artId] = existing with { LastAccessUtc = utcNow };
             }
 
-            // Soft in-memory hint only — does not increment DurableWriteCount.
-            _entries[artId] = existing with { LastAccessUtc = utcNow };
+            if (_durableWriteCount != durableBefore)
+            {
+                throw new InvalidOperationException("TouchHint must not perform durable index writes.");
+            }
         }
     }
 
