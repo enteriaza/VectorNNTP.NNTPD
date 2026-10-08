@@ -558,6 +558,18 @@ Do not commit credentials. NNTPD and BackFiller read `RabbitMQ` username and pas
 
 File, RabbitMQ, and syslog may be enabled together, including with `--console`. Disabled targets are not validated beyond normal binding. RabbitMQ logging does not take host, username, password, virtual host, or TLS settings. A publish failure is reported through Serilog's self-log and does not stop the process.
 
+## BackFiller NNTP provider sessions (`BackFiller:Nntp`)
+
+Per-provider steady-state NNTP session capacity remains MySQL `maxconnections` (mapped to `MaxSessions` on each provider definition). That value is how many Ready sessions a provider pool may keep.
+
+`BackFiller:Nntp:MaxConcurrentSessionEstablishments` is a separate, application-wide bound on how many provider sessions may be **establishing** at the same time (TCP connect through greeting, CAPABILITIES, optional STARTTLS, and AUTHINFO). The host registers one gate from this value and injects it into the single provider registry, which passes that same gate to every provider pool. Startup warm-up, snapshot application, acquire-time create, and replenish/replacement all take it. The gate does **not** cap how many sessions may remain established once Ready, and `0` is invalid (not unlimited). Test code can construct a registry without a gate; that registry then gets a private gate at the default limit and is not a second production gate.
+
+| Key | Type | Default | Range | Description |
+|-----|------|---------|-------|-------------|
+| `MaxConcurrentSessionEstablishments` | int | `8` | `1–1024` | Application-wide concurrent provider-session establishment limit |
+
+Default `8` allows meaningful warm-up parallelism while preventing aggregate establishment from scaling as `providers × MaxSessions` during startup or mass replacement.
+
 ## BackFiller article retention (`BackFiller:ArticleRetention`)
 
 In-memory retention holds CanonicalV1 `ArtData` between ArticleWork Success and VATP OPEN. A published Success RequestId is a hard OPEN capability until OPEN consumes it, cancel, `RetentionTtlSeconds` expiry, or process dispose. FIFO reclaim under `MaximumRetainedPayloadGigabytes` skips entries that still have openable RequestIds; capacity pressure rejects new admissions (`CapacityUnavailable`) instead of invalidating those capabilities. See `docs/vatp.md`.

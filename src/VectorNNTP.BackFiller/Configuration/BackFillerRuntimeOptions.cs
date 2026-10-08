@@ -24,6 +24,7 @@ namespace VectorNNTP.BackFiller.Configuration
     /// <param name="CertificateDomainNames">Certificate DNS identities for <paramref name="Fqdn"/>.</param>
     /// <param name="NntpDb">NntpDB connection projection. <see cref="NntpDbRuntimeOptions.ConnectionString"/> is secret.</param>
     /// <param name="AccountRefreshInterval">MySQL account-refresh poll interval.</param>
+    /// <param name="Nntp">Validated outbound NNTP provider session bounds.</param>
     internal sealed record BackFillerRuntimeOptions(
         int ServerId,
         string DnsSuffix,
@@ -38,7 +39,8 @@ namespace VectorNNTP.BackFiller.Configuration
         BackFillerRabbitMqRuntimeOptions RabbitMq,
         IReadOnlyList<string> CertificateDomainNames,
         NntpDbRuntimeOptions NntpDb,
-        TimeSpan AccountRefreshInterval);
+        TimeSpan AccountRefreshInterval,
+        BackFillerNntpRuntimeOptions Nntp);
 
     /// <summary>Validated shutdown policy captured in the runtime snapshot.</summary>
     /// <param name="GracePeriod">Complete application shutdown budget. Also drives host <c>ShutdownTimeout</c>.</param>
@@ -67,6 +69,13 @@ namespace VectorNNTP.BackFiller.Configuration
         TimeSpan IoProgressTimeout,
         int MaxQueuedFoundPayloadBytes,
         int MaxActiveConnections);
+
+    /// <summary>Validated outbound NNTP provider session bounds.</summary>
+    /// <param name="MaxConcurrentSessionEstablishments">
+    /// Application-wide limit on concurrent provider-session establishment (TCP through Ready).
+    /// Does not cap per-provider steady-state <c>MaxSessions</c>.
+    /// </param>
+    internal sealed record BackFillerNntpRuntimeOptions(int MaxConcurrentSessionEstablishments);
 
     /// <summary>Validated retention policy.</summary>
     /// <param name="MaximumRetainedPayloadBytes">Maximum retained payload capacity in bytes.</param>

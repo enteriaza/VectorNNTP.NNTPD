@@ -213,17 +213,22 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
             }
         }
 
+        internal static ProviderSessionEstablishmentGate CreateEstablishmentGate(int maxConcurrent = 1024) =>
+            new(maxConcurrent);
+
         internal static NntpSessionPool CreatePool(
             ScriptedNntpTransportFactory factory,
             int max,
             int min = 0,
             byte keepAliveSeconds = 0,
             TimeProvider? time = null,
-            TimeSpan? commandTimeout = null)
+            TimeSpan? commandTimeout = null,
+            ProviderSessionEstablishmentGate? establishment = null,
+            string backbone = "Giganews")
         {
             return new NntpSessionPool(
                 new BackFillerProviderDefinition(
-                    "Giganews",
+                    backbone,
                     "127.0.0.1",
                     119,
                     false,
@@ -240,6 +245,7 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
                 },
                 factory,
                 NullLogger.Instance,
+                establishment ?? CreateEstablishmentGate(),
                 shutdownGrace: TimeSpan.FromSeconds(2),
                 timeProvider: time);
         }

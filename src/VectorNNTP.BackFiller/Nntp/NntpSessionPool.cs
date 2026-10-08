@@ -26,6 +26,12 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <summary>Factory used by <see cref="CreateReadySessionAsync"/>.</summary>
         private readonly INntpTransportFactory _transport;
 
+        /// <summary>
+        /// Application-wide establishment concurrency gate shared by every pool.
+        /// Held only around <see cref="NntpProviderSession.ConnectAsync"/>.
+        /// </summary>
+        private readonly ProviderSessionEstablishmentGate _establishment;
+
         /// <summary>Pool logger. Also passed to each <see cref="NntpProviderSession"/>.</summary>
         private readonly ILogger _logger;
 
@@ -98,15 +104,23 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <param name="options">Timeouts and buffers copied into each session.</param>
         /// <param name="transport">Opens sockets for new sessions.</param>
         /// <param name="logger">Pool and session logger.</param>
+        /// <param name="establishment">
+        /// Application-wide gate shared by every pool. Held only around
+        /// <see cref="NntpProviderSession.ConnectAsync"/>.
+        /// </param>
         /// <param name="shutdownGrace">How long <see cref="DisposeAsync"/> waits for leases. Two seconds when null.</param>
         /// <param name="timeProvider">Clock for DATE delays. <see cref="TimeProvider.System"/> when null.</param>
-        /// <exception cref="ArgumentNullException"><paramref name="provider"/>, <paramref name="options"/>, <paramref name="transport"/>, or <paramref name="logger"/> is null.</exception>
+        /// <exception cref="ArgumentNullException">
+        /// <paramref name="provider"/>, <paramref name="options"/>, <paramref name="transport"/>,
+        /// <paramref name="logger"/>, or <paramref name="establishment"/> is null.
+        /// </exception>
         /// <exception cref="ArgumentOutOfRangeException">The session bounds on <paramref name="provider"/> are outside the constructor checks.</exception>
         internal NntpSessionPool(
             BackFillerProviderDefinition provider,
             NntpSessionOptions options,
             INntpTransportFactory transport,
             ILogger logger,
+            ProviderSessionEstablishmentGate establishment,
             TimeSpan? shutdownGrace = null,
             TimeProvider? timeProvider = null)
         {
@@ -114,6 +128,7 @@ namespace VectorNNTP.BackFiller.Nntp
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(transport);
             ArgumentNullException.ThrowIfNull(logger);
+            ArgumentNullException.ThrowIfNull(establishment);
             if (provider.MaxSessions < 1)
             {
                 throw new ArgumentOutOfRangeException(nameof(provider), "MaxSessions must be at least 1.");
@@ -127,6 +142,7 @@ namespace VectorNNTP.BackFiller.Nntp
             _provider = provider;
             _options = options;
             _transport = transport;
+            _establishment = establishment;
             _logger = logger;
             _time = timeProvider ?? TimeProvider.System;
             _shutdownGrace = shutdownGrace ?? TimeSpan.FromSeconds(2);
@@ -181,7 +197,11 @@ namespace VectorNNTP.BackFiller.Nntp
         /// </summary>
         /// <param name="cancellationToken">Cancels in-flight connects. Cancellation fails this call. A connect failure does not.</param>
         /// <exception cref="ObjectDisposedException">The pool is already disposed.</exception>
-        /// <remarks>Starts the periodic replenish loop once. Missing slots are connected concurrently.</remarks>
+        /// <remarks>
+        /// Starts the periodic replenish loop once. Missing slots are scheduled concurrently, but
+        /// <see cref="ProviderSessionEstablishmentGate"/> bounds how many
+        /// <see cref="NntpProviderSession.ConnectAsync"/> calls run at once across all pools.
+        /// </remarks>
         internal async Task EnsureDesiredSessionsAsync(CancellationToken cancellationToken)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
@@ -494,10 +514,18 @@ namespace VectorNNTP.BackFiller.Nntp
         }
 
         /// <summary>Allocates a connection number, connects a session, and returns it only when it is <see cref="NntpSessionState.Ready"/>.</summary>
-        /// <param name="cancellationToken">Forwarded to <see cref="NntpProviderSession.ConnectAsync"/>.</param>
+        /// <param name="cancellationToken">
+        /// Cancels the establishment-gate wait and <see cref="NntpProviderSession.ConnectAsync"/>.
+        /// </param>
         /// <returns>The ready session. It is in <see cref="_live"/> and is not yet idle.</returns>
         /// <exception cref="InvalidOperationException"><see cref="_created"/> would exceed <see cref="BackFillerProviderDefinition.MaxSessions"/>, or no connection number is free.</exception>
         /// <exception cref="NntpProviderConnectException">Connect returned a failure or the session is not ready. The session is retired without replenish.</exception>
+        /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> cancels the gate wait or connect.</exception>
+        /// <remarks>
+        /// The application-wide <see cref="_establishment"/> gate is held only around
+        /// <see cref="NntpProviderSession.ConnectAsync"/> (TCP through Ready). Slot allocation and
+        /// session construction run before the wait so cancelled waiters do not leave half-open sockets.
+        /// </remarks>
         private async Task<NntpProviderSession> CreateReadySessionAsync(CancellationToken cancellationToken)
         {
             if (Interlocked.Increment(ref _created) > _provider.MaxSessions)
@@ -519,19 +547,54 @@ namespace VectorNNTP.BackFiller.Nntp
 
             var session = new NntpProviderSession(_provider, _options, _logger, connectionNumber);
             _live[session] = 0;
-            var failure = await session.ConnectAsync(_transport, cancellationToken).ConfigureAwait(false);
-            if (failure is null && session.State == NntpSessionState.Ready)
+            try
             {
-                NotifyActiveSessionCountChanged();
-                return session;
+                NntpLogMessages.SessionEstablishmentWaiting(_logger, _provider.Backbone, connectionNumber);
+                await _establishment.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                NntpLogMessages.SessionEstablishmentCancelled(_logger, _provider.Backbone, connectionNumber);
+                await RetireSessionAsync(session, "NNTP connect was cancelled", replenish: false)
+                    .ConfigureAwait(false);
+                throw;
             }
 
-            await RetireSessionAsync(session, failure?.Reason ?? "connect failed", replenish: false)
-                .ConfigureAwait(false);
-            throw new NntpProviderConnectException(
-                failure?.Kind ?? ArticleRetrievalKind.ProviderFailure,
-                failure?.StatusCode,
-                failure?.Reason ?? "NNTP connect failed.");
+            try
+            {
+                NntpLogMessages.SessionEstablishmentStarted(_logger, _provider.Backbone, connectionNumber);
+                var failure = await session.ConnectAsync(_transport, cancellationToken).ConfigureAwait(false);
+                if (failure is null && session.State == NntpSessionState.Ready)
+                {
+                    NntpLogMessages.SessionEstablishmentCompleted(_logger, _provider.Backbone, connectionNumber);
+                    NotifyActiveSessionCountChanged();
+                    return session;
+                }
+
+                if (failure?.Kind == ArticleRetrievalKind.Cancelled)
+                {
+                    NntpLogMessages.SessionEstablishmentCancelled(_logger, _provider.Backbone, connectionNumber);
+                }
+                else
+                {
+                    NntpLogMessages.SessionEstablishmentFailed(
+                        _logger,
+                        _provider.Backbone,
+                        connectionNumber,
+                        failure?.Reason ?? "connect failed");
+                }
+
+                await RetireSessionAsync(session, failure?.Reason ?? "connect failed", replenish: false)
+                    .ConfigureAwait(false);
+                throw new NntpProviderConnectException(
+                    failure?.Kind ?? ArticleRetrievalKind.ProviderFailure,
+                    failure?.StatusCode,
+                    failure?.Reason ?? "NNTP connect failed.");
+            }
+            finally
+            {
+                _establishment.Release();
+            }
         }
 
         /// <summary>Queues <paramref name="session"/> for acquire and starts its DATE loop when keepalive is enabled.</summary>

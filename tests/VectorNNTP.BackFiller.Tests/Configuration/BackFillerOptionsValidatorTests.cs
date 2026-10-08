@@ -223,6 +223,56 @@ namespace VectorNNTP.BackFiller.Tests.Configuration
         }
 
         [Theory]
+        [InlineData(1)]
+        [InlineData(8)]
+        [InlineData(1024)]
+        public void Validate_accepts_valid_max_concurrent_session_establishments(int value)
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.Nntp.MaxConcurrentSessionEstablishments = value;
+            var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+            Assert.True(result.Succeeded);
+        }
+
+        [Fact]
+        public void Validate_uses_default_max_concurrent_session_establishments_when_omitted()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            Assert.Equal(
+                BackFillerNntpOptions.DefaultMaxConcurrentSessionEstablishments,
+                options.Nntp.MaxConcurrentSessionEstablishments);
+            var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+            Assert.True(result.Succeeded);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(-1)]
+        [InlineData(1025)]
+        [InlineData(int.MaxValue)]
+        public void Validate_fails_for_invalid_max_concurrent_session_establishments(int value)
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.Nntp.MaxConcurrentSessionEstablishments = value;
+            var result = BackFillerTestOptions.CreateValidator().Validate(null, options);
+            Assert.True(result.Failed);
+            Assert.Contains(
+                result.Failures!,
+                static f => f.Contains("BackFiller:Nntp:MaxConcurrentSessionEstablishments", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void Runtime_options_project_max_concurrent_session_establishments()
+        {
+            var options = BackFillerTestOptions.CreateValid();
+            options.Nntp.MaxConcurrentSessionEstablishments = 4;
+            var runtime = BackFillerRuntimeOptionsFactory.Create(
+                options,
+                BackFillerTestOptions.CreateValidNntpDb());
+            Assert.Equal(4, runtime.Nntp.MaxConcurrentSessionEstablishments);
+        }
+
+        [Theory]
         [InlineData(4)]
         [InlineData(3601)]
         public void Validate_fails_when_account_refresh_interval_is_out_of_range(int seconds)

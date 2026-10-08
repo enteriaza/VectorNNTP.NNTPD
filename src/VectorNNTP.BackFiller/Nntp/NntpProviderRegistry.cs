@@ -28,6 +28,11 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <summary>Single drain budget shared by <see cref="StopAsync"/> and <see cref="DisposeAsync"/>.</summary>
         private readonly TimeSpan _shutdownGrace;
 
+        /// <summary>
+        /// Application-wide establishment concurrency gate shared by every pool this registry creates.
+        /// </summary>
+        private readonly ProviderSessionEstablishmentGate _establishment;
+
         /// <summary>Logger for capacity publication and consumer-reconcile failures.</summary>
         private readonly ILogger<NntpProviderRegistry> _logger;
 
@@ -55,6 +60,7 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <param name="catalog">Current provider snapshot.</param>
         /// <param name="transport">NNTP transport factory.</param>
         /// <param name="runtime">Validated runtime snapshot.</param>
+        /// <param name="establishment">Application-wide provider-session establishment gate.</param>
         /// <param name="logger">Registry logger.</param>
         /// <param name="capacity">Usable-capacity publisher.</param>
         /// <param name="services">
@@ -65,10 +71,20 @@ namespace VectorNNTP.BackFiller.Nntp
             IBackFillerProviderCatalog catalog,
             INntpTransportFactory transport,
             BackFillerRuntimeOptions runtime,
+            ProviderSessionEstablishmentGate establishment,
             ILogger<NntpProviderRegistry> logger,
             BackboneUsableCapacityState capacity,
             IServiceProvider? services = null)
-            : this(catalog, transport, NntpSessionOptions.Default, runtime.Shutdown.GracePeriod, logger, capacity, consumers: null, services)
+            : this(
+                catalog,
+                transport,
+                NntpSessionOptions.Default,
+                runtime.Shutdown.GracePeriod,
+                establishment,
+                logger,
+                capacity,
+                consumers: null,
+                services)
         {
         }
 
@@ -77,6 +93,20 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <param name="transport">NNTP transport factory.</param>
         /// <param name="options">Per-session NNTP options.</param>
         /// <param name="shutdownGrace">Shared drain budget for replaced or stopped pools.</param>
+        /// <param name="establishment">
+        /// Establishment gate shared by every pool this registry creates. When null, this
+        /// constructor allocates a private gate at
+        /// <see cref="Configuration.BackFillerNntpOptions.DefaultMaxConcurrentSessionEstablishments"/>.
+        /// </param>
+        /// <remarks>
+        /// The BackFiller host does not call this constructor. <c>AddBackFillerHosting</c> uses the
+        /// runtime overload and injects the single <see cref="ProviderSessionEstablishmentGate"/>
+        /// singleton, so every production pool shares that gate.
+        /// The private gate exists so existing test calls can keep their positional
+        /// <see cref="TimeSpan"/> argument. It bounds only the pools of this registry. A second
+        /// registry constructed the same way has its own gate and can establish in parallel.
+        /// That does not add a second gate to the host process, which constructs one registry.
+        /// </remarks>
         /// <param name="logger">Registry logger.</param>
         /// <param name="capacity">Usable-capacity publisher. Created when omitted.</param>
         /// <param name="consumers">Optional consumer reconciler for tests.</param>
@@ -89,16 +119,54 @@ namespace VectorNNTP.BackFiller.Nntp
             ILogger<NntpProviderRegistry> logger,
             BackboneUsableCapacityState? capacity = null,
             IArticleWorkConsumerReconciliation? consumers = null,
+            IServiceProvider? services = null,
+            ProviderSessionEstablishmentGate? establishment = null)
+            : this(
+                catalog,
+                transport,
+                options,
+                shutdownGrace,
+                establishment
+                ?? new ProviderSessionEstablishmentGate(
+                    Configuration.BackFillerNntpOptions.DefaultMaxConcurrentSessionEstablishments),
+                logger,
+                capacity,
+                consumers,
+                services)
+        {
+        }
+
+        /// <summary>Initializes the registry with an explicit shared establishment gate.</summary>
+        /// <param name="catalog">Current provider snapshot.</param>
+        /// <param name="transport">NNTP transport factory.</param>
+        /// <param name="options">Per-session NNTP options.</param>
+        /// <param name="shutdownGrace">Shared drain budget for replaced or stopped pools.</param>
+        /// <param name="establishment">Application-wide establishment gate shared by every pool.</param>
+        /// <param name="logger">Registry logger.</param>
+        /// <param name="capacity">Usable-capacity publisher. Created when omitted.</param>
+        /// <param name="consumers">Optional consumer reconciler for tests.</param>
+        /// <param name="services">Optional host service provider for deferred consumer resolve.</param>
+        internal NntpProviderRegistry(
+            IBackFillerProviderCatalog catalog,
+            INntpTransportFactory transport,
+            NntpSessionOptions options,
+            TimeSpan shutdownGrace,
+            ProviderSessionEstablishmentGate establishment,
+            ILogger<NntpProviderRegistry> logger,
+            BackboneUsableCapacityState? capacity = null,
+            IArticleWorkConsumerReconciliation? consumers = null,
             IServiceProvider? services = null)
         {
             ArgumentNullException.ThrowIfNull(catalog);
             ArgumentNullException.ThrowIfNull(transport);
             ArgumentNullException.ThrowIfNull(options);
+            ArgumentNullException.ThrowIfNull(establishment);
             ArgumentNullException.ThrowIfNull(logger);
             _catalog = catalog;
             _transport = transport;
             _options = options;
             _shutdownGrace = shutdownGrace;
+            _establishment = establishment;
             _logger = logger;
             _capacity = capacity ?? new BackboneUsableCapacityState();
             _consumers = consumers;
@@ -355,7 +423,7 @@ namespace VectorNNTP.BackFiller.Nntp
         /// <returns>The hooked pool. The caller inserts it into <see cref="_pools"/>.</returns>
         private NntpSessionPool CreatePool(BackFillerProviderDefinition provider)
         {
-            var pool = new NntpSessionPool(provider, _options, _transport, _logger, _shutdownGrace);
+            var pool = new NntpSessionPool(provider, _options, _transport, _logger, _establishment, _shutdownGrace);
             pool.ActiveSessionCountChanged += OnPoolActiveSessionCountChanged;
             return pool;
         }

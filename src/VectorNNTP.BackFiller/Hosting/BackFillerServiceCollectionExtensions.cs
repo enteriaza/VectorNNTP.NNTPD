@@ -200,10 +200,16 @@ namespace VectorNNTP.BackFiller.Hosting
                 provider.GetRequiredService<BackboneUsableCapacityState>());
             builder.Services.AddSingleton<IBackboneUsableCapacityStateWriter>(static provider =>
                 provider.GetRequiredService<BackboneUsableCapacityState>());
+            builder.Services.AddSingleton(static provider =>
+            {
+                var runtime = provider.GetRequiredService<BackFillerRuntimeOptions>();
+                return new ProviderSessionEstablishmentGate(runtime.Nntp.MaxConcurrentSessionEstablishments);
+            });
             builder.Services.AddSingleton(static provider => new NntpProviderRegistry(
                 provider.GetRequiredService<IBackFillerProviderCatalog>(),
                 provider.GetRequiredService<INntpTransportFactory>(),
                 provider.GetRequiredService<BackFillerRuntimeOptions>(),
+                provider.GetRequiredService<ProviderSessionEstablishmentGate>(),
                 provider.GetRequiredService<ILogger<NntpProviderRegistry>>(),
                 provider.GetRequiredService<BackboneUsableCapacityState>(),
                 provider));

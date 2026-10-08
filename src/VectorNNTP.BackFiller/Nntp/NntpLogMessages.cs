@@ -83,6 +83,67 @@ namespace VectorNNTP.BackFiller.Nntp
         internal static partial void SessionReplenishFailed(ILogger logger, string Backbone, string Reason);
 
         /// <summary>
+        /// Written at Debug before waiting for the application-wide establishment gate.
+        /// </summary>
+        /// <param name="logger">Logger that receives the debug event.</param>
+        /// <param name="Backbone">Provider backbone label.</param>
+        /// <param name="ConnectionNumber">One-based pool slot for the session being established.</param>
+        [LoggerMessage(
+            EventId = 5412,
+            Level = LogLevel.Debug,
+            Message = "NNTP session establishment waiting for capacity backbone={Backbone} connection={ConnectionNumber}")]
+        internal static partial void SessionEstablishmentWaiting(ILogger logger, string Backbone, int ConnectionNumber);
+
+        /// <summary>
+        /// Written at Debug after the establishment gate is acquired and before <c>ConnectAsync</c>.
+        /// </summary>
+        /// <param name="logger">Logger that receives the debug event.</param>
+        /// <param name="Backbone">Provider backbone label.</param>
+        /// <param name="ConnectionNumber">One-based pool slot for the session being established.</param>
+        [LoggerMessage(
+            EventId = 5413,
+            Level = LogLevel.Debug,
+            Message = "NNTP session establishment started backbone={Backbone} connection={ConnectionNumber}")]
+        internal static partial void SessionEstablishmentStarted(ILogger logger, string Backbone, int ConnectionNumber);
+
+        /// <summary>
+        /// Written at Debug when connect leaves the session Ready and the establishment gate is about to release.
+        /// </summary>
+        /// <param name="logger">Logger that receives the debug event.</param>
+        /// <param name="Backbone">Provider backbone label.</param>
+        /// <param name="ConnectionNumber">One-based pool slot for the session that became Ready.</param>
+        [LoggerMessage(
+            EventId = 5414,
+            Level = LogLevel.Debug,
+            Message = "NNTP session establishment completed backbone={Backbone} connection={ConnectionNumber}")]
+        internal static partial void SessionEstablishmentCompleted(ILogger logger, string Backbone, int ConnectionNumber);
+
+        /// <summary>
+        /// Written at Debug when establishment is cancelled while waiting for the gate or during connect.
+        /// </summary>
+        /// <param name="logger">Logger that receives the debug event.</param>
+        /// <param name="Backbone">Provider backbone label.</param>
+        /// <param name="ConnectionNumber">One-based pool slot for the cancelled establishment.</param>
+        [LoggerMessage(
+            EventId = 5415,
+            Level = LogLevel.Debug,
+            Message = "NNTP session establishment cancelled backbone={Backbone} connection={ConnectionNumber}")]
+        internal static partial void SessionEstablishmentCancelled(ILogger logger, string Backbone, int ConnectionNumber);
+
+        /// <summary>
+        /// Written at Debug when connect fails after the establishment gate was acquired.
+        /// </summary>
+        /// <param name="logger">Logger that receives the debug event.</param>
+        /// <param name="Backbone">Provider backbone label.</param>
+        /// <param name="ConnectionNumber">One-based pool slot for the failed establishment.</param>
+        /// <param name="Reason">Diagnostic text from the connect failure. Callers do not pass secrets.</param>
+        [LoggerMessage(
+            EventId = 5416,
+            Level = LogLevel.Debug,
+            Message = "NNTP session establishment failed backbone={Backbone} connection={ConnectionNumber} reason={Reason}")]
+        internal static partial void SessionEstablishmentFailed(ILogger logger, string Backbone, int ConnectionNumber, string Reason);
+
+        /// <summary>
         /// Written at Debug when a session starts connect, before the transport is opened.
         /// </summary>
         /// <param name="logger">Logger that receives the debug event.</param>

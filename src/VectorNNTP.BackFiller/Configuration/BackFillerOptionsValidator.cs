@@ -38,7 +38,7 @@ namespace VectorNNTP.BackFiller.Configuration
         }
 
         /// <summary>
-        /// Validates identity, TLS port, ACME, logging, shutdown, listener, account refresh, retention, systemd, and the RabbitMQ drain cross-check.
+        /// Validates identity, TLS port, ACME, logging, shutdown, listener, NNTP establishment concurrency, account refresh, retention, systemd, and the RabbitMQ drain cross-check.
         /// </summary>
         /// <param name="name">Named-options name. Not consulted; every instance is validated the same way.</param>
         /// <param name="options">Bound BackFiller options.</param>
@@ -60,6 +60,7 @@ namespace VectorNNTP.BackFiller.Configuration
             ValidateLogging(options, failures);
             ValidateShutdown(options, failures);
             ValidateListener(options, failures);
+            ValidateNntp(options, failures);
             ValidateAccountRefresh(options, failures);
             ValidateArticleRetention(options, failures);
             ValidateSystemd(options, failures);
@@ -272,6 +273,29 @@ namespace VectorNNTP.BackFiller.Configuration
             if (listener.MaxActiveConnections < 1)
             {
                 failures.Add("BackFiller:Listener:MaxActiveConnections must be between 1 and 2,147,483,647.");
+            }
+        }
+
+        /// <summary>
+        /// Appends a failure when concurrent provider-session establishment is outside 1–1024.
+        /// </summary>
+        /// <param name="options">Options whose <see cref="BackFillerOptions.Nntp"/> section is checked.</param>
+        /// <param name="failures">Failure list to append. Not cleared.</param>
+        /// <remarks>
+        /// Zero and negative values are rejected. Zero does not mean unlimited.
+        /// Values above <see cref="BackFillerNntpOptions.MaximumMaxConcurrentSessionEstablishments"/> fail.
+        /// </remarks>
+        private static void ValidateNntp(BackFillerOptions options, List<string> failures)
+        {
+            var nntp = options.Nntp;
+            if (nntp.MaxConcurrentSessionEstablishments
+                is < BackFillerNntpOptions.MinimumMaxConcurrentSessionEstablishments
+                or > BackFillerNntpOptions.MaximumMaxConcurrentSessionEstablishments)
+            {
+                failures.Add(
+                    "BackFiller:Nntp:MaxConcurrentSessionEstablishments must be between "
+                    + $"{BackFillerNntpOptions.MinimumMaxConcurrentSessionEstablishments} and "
+                    + $"{BackFillerNntpOptions.MaximumMaxConcurrentSessionEstablishments}.");
             }
         }
 

@@ -150,6 +150,7 @@ namespace VectorNNTP.BackFiller.Tests.Nntp
                 },
                 factory,
                 logger,
+                NntpSessionPoolTests.CreateEstablishmentGate(),
                 shutdownGrace: TimeSpan.FromSeconds(2));
 
             await pool.EnsureDesiredSessionsAsync(CancellationToken.None);

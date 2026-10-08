@@ -152,6 +152,7 @@ namespace VectorNNTP.BackFiller.Configuration
             var retention = options.ArticleRetention ?? throw new InvalidOperationException("BackFiller:ArticleRetention is required.");
             var listener = options.Listener ?? throw new InvalidOperationException("BackFiller:Listener is required.");
             var shutdown = options.Shutdown ?? throw new InvalidOperationException("BackFiller:Shutdown is required.");
+            var nntp = options.Nntp ?? throw new InvalidOperationException("BackFiller:Nntp is required.");
 
             return new BackFillerRuntimeOptions(
                 ServerId: serverId,
@@ -184,7 +185,8 @@ namespace VectorNNTP.BackFiller.Configuration
                     nntpDb.ConnectionString.Trim(),
                     nntpDbBuilder.Server ?? string.Empty,
                     nntpDbBuilder.Database ?? string.Empty),
-                AccountRefreshInterval: TimeSpan.FromSeconds(options.BackFillerAccountRefreshIntervalSeconds));
+                AccountRefreshInterval: TimeSpan.FromSeconds(options.BackFillerAccountRefreshIntervalSeconds),
+                Nntp: new BackFillerNntpRuntimeOptions(nntp.MaxConcurrentSessionEstablishments));
         }
 
         /// <summary>Resolves the file-log directory, or returns empty when that directory is blank.</summary>

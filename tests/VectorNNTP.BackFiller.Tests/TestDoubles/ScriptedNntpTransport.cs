@@ -10,6 +10,10 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
     {
         private readonly ConcurrentQueue<ScriptedNntpServer> _servers = new();
 
+        private int _currentConnects;
+
+        private int _maxObservedConnects;
+
         public List<BackFillerProviderDefinition> ConnectAttempts { get; } = [];
 
         public Exception? ConnectException { get; set; }
@@ -19,6 +23,12 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
         public TaskCompletionSource? ConnectStarted { get; set; }
 
         public TaskCompletionSource? BlockConnect { get; set; }
+
+        /// <summary>Gets the highest concurrent <see cref="ConnectAsync"/> occupancy observed.</summary>
+        public int MaxObservedConcurrentConnects => Volatile.Read(ref _maxObservedConnects);
+
+        /// <summary>Gets how many <see cref="ConnectAsync"/> calls are inside the method right now.</summary>
+        public int CurrentConcurrentConnects => Volatile.Read(ref _currentConnects);
 
         public void Enqueue(ScriptedNntpServer server)
         {
@@ -33,29 +43,47 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
         {
             ArgumentNullException.ThrowIfNull(provider);
             ConnectAttempts.Add(provider);
-            ConnectStarted?.TrySetResult();
-            if (BlockConnect is not null)
+            var current = Interlocked.Increment(ref _currentConnects);
+            try
             {
-                await BlockConnect.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
+                while (true)
+                {
+                    var observed = Volatile.Read(ref _maxObservedConnects);
+                    if (current <= observed
+                        || Interlocked.CompareExchange(ref _maxObservedConnects, current, observed) == observed)
+                    {
+                        break;
+                    }
+                }
 
-            if (ConnectDelay is { } delay)
+                ConnectStarted?.TrySetResult();
+                if (BlockConnect is not null)
+                {
+                    await BlockConnect.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                if (ConnectDelay is { } delay)
+                {
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ConnectException is not null)
+                {
+                    throw ConnectException;
+                }
+
+                if (!_servers.TryDequeue(out var server))
+                {
+                    throw new InvalidOperationException("No scripted NNTP server was queued.");
+                }
+
+                return await server.AcceptClientAsync().ConfigureAwait(false);
+            }
+            finally
             {
-                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                Interlocked.Decrement(ref _currentConnects);
             }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (ConnectException is not null)
-            {
-                throw ConnectException;
-            }
-
-            if (!_servers.TryDequeue(out var server))
-            {
-                throw new InvalidOperationException("No scripted NNTP server was queued.");
-            }
-
-            return await server.AcceptClientAsync().ConfigureAwait(false);
         }
     }
 

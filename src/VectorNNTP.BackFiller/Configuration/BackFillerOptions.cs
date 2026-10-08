@@ -187,6 +187,11 @@ namespace VectorNNTP.BackFiller.Configuration
         public BackFillerListenerOptions Listener { get; set; } = new();
 
         /// <summary>
+        /// Gets or sets outbound NNTP provider session resource bounds.
+        /// </summary>
+        public BackFillerNntpOptions Nntp { get; set; } = new();
+
+        /// <summary>
         /// Gets or sets Linux systemd notify/watchdog options.
         /// </summary>
         public BackFillerSystemdOptions Systemd { get; set; } = new();
@@ -270,6 +275,43 @@ namespace VectorNNTP.BackFiller.Configuration
 
         /// <summary>Maximum concurrently active accepted connections.</summary>
         public int MaxActiveConnections { get; set; } = 1024;
+    }
+
+    /// <summary>Outbound NNTP provider session resource bounds.</summary>
+    /// <remarks>
+    /// Per-provider steady-state capacity remains MySQL <c>maxconnections</c>
+    /// (<see cref="VectorNNTP.BackFiller.Nntp.BackFillerProviderDefinition.MaxSessions"/>).
+    /// <see cref="MaxConcurrentSessionEstablishments"/> only bounds how many provider
+    /// sessions may be in the process of connecting across the entire application.
+    /// </remarks>
+    internal sealed class BackFillerNntpOptions
+    {
+        /// <summary>Default application-wide concurrent provider-session establishment limit.</summary>
+        /// <remarks>
+        /// Chosen to allow meaningful startup parallelism while preventing aggregate
+        /// establishment activity from scaling as providers × MaxSessions. Eight concurrent
+        /// TCP/TLS/capability/auth handshakes is protective under multi-provider warm-up and
+        /// mass replacement without serializing pool fill.
+        /// </remarks>
+        internal const int DefaultMaxConcurrentSessionEstablishments = 8;
+
+        /// <summary>Minimum accepted concurrent establishment limit.</summary>
+        internal const int MinimumMaxConcurrentSessionEstablishments = 1;
+
+        /// <summary>Maximum accepted concurrent establishment limit.</summary>
+        internal const int MaximumMaxConcurrentSessionEstablishments = 1024;
+
+        /// <summary>
+        /// Gets or sets how many provider NNTP sessions may establish concurrently across all pools.
+        /// </summary>
+        /// <remarks>
+        /// Default <see cref="DefaultMaxConcurrentSessionEstablishments"/>. Range
+        /// <see cref="MinimumMaxConcurrentSessionEstablishments"/>–
+        /// <see cref="MaximumMaxConcurrentSessionEstablishments"/>.
+        /// Zero is invalid and does not mean unlimited. This does not cap steady-state
+        /// <c>MaxSessions</c> per provider.
+        /// </remarks>
+        public int MaxConcurrentSessionEstablishments { get; set; } = DefaultMaxConcurrentSessionEstablishments;
     }
 
     /// <summary>In-memory article retention policy.</summary>
