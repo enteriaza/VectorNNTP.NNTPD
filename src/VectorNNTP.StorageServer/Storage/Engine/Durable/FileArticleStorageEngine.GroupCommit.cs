@@ -166,7 +166,7 @@ public sealed partial class FileArticleStorageEngine
             _pendingAcceptAdmission = null;
             if (!SuspendBackgroundPersist)
             {
-                EnqueuePersistWorkUnlocked(journalRecord.Sequence);
+                EnqueuePersistWorkUnlocked(journalRecord.Sequence, journalRecord.ArtSize);
                 enqueue = true;
             }
         }
@@ -450,7 +450,7 @@ public sealed partial class FileArticleStorageEngine
             return false;
         }
 
-        EnqueuePersistWorkUnlocked(journalRecord.Sequence);
+        EnqueuePersistWorkUnlocked(journalRecord.Sequence, journalRecord.ArtSize);
         return true;
     }
 

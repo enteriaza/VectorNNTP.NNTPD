@@ -18,14 +18,14 @@ public sealed partial class FileArticleStorageEngine
     private static bool IsRetryablePersistFailure(Exception ex) =>
         ex is IOException or UnauthorizedAccessException;
 
-    private void EnqueuePersistWorkUnlocked(ulong sequence)
+    private void EnqueuePersistWorkUnlocked(ulong sequence, int artSize)
     {
         if (!_pendingSet.Add(sequence))
         {
             return;
         }
 
-        _pendingSequences.Enqueue(sequence);
+        _pendingSequences.Enqueue(new PendingPersistWork(sequence, artSize));
     }
 
     private void SignalPersistWorker()
@@ -68,7 +68,7 @@ public sealed partial class FileArticleStorageEngine
 
                 if (_pendingSet.Add(sequence))
                 {
-                    _pendingSequences.Enqueue(sequence);
+                    _pendingSequences.Enqueue(new PendingPersistWork(sequence, incomplete.Accept.ArtSize));
                     enqueued = true;
                 }
             }
@@ -362,7 +362,8 @@ public sealed partial class FileArticleStorageEngine
                 return;
             }
 
-            EnqueuePersistWorkUnlocked(sequence);
+            // ArtSize is unknown on this retry path. Zero counts toward the article cap only.
+            EnqueuePersistWorkUnlocked(sequence, 0);
         }
 
         SignalPersistWorker();

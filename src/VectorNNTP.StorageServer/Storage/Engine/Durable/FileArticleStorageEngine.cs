@@ -160,7 +160,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// </summary>
     private readonly object _retryStateGate = new();
 
-    private readonly Queue<ulong> _pendingSequences = new();
+    private readonly Queue<PendingPersistWork> _pendingSequences = new();
     private readonly HashSet<ulong> _pendingSet = new();
     private readonly HashSet<ulong> _persistInFlight = new();
     private readonly Dictionary<ulong, int> _persistRetryAttempts = new();
@@ -182,6 +182,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private long _persistBatchCount;
     private int _lastPersistBatchArticleCount;
     private long _lastPersistBatchByteCount;
+    private long _lastPersistBatchWaitMicroseconds;
+    private int _persistBatchMaxArticles;
+    private long _persistBatchMaxBytes;
     private long _cacheArticleReadCount;
     private long _segmentArticleReadCount;
     private long _journalArticleReadCount;
@@ -282,7 +285,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>
     /// Sequences queued for the persist worker and not yet dequeued.
-    /// The worker takes the whole queue when it wakes, so this is the handoff depth, not the journal backlog.
+    /// The worker may wait a bounded interval for more already-ACKed sequences before it takes a batch.
+    /// This is the handoff depth, not the journal backlog.
     /// </summary>
     internal int PendingSequenceCount
     {
@@ -300,6 +304,25 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>Sum of ArtSize for the most recent worker batch. Tests only.</summary>
     internal long LastPersistBatchByteCount => Volatile.Read(ref _lastPersistBatchByteCount);
+
+    /// <summary>Worker batches formed after the post-ACK coalesce window. Same counter as <see cref="PersistBatchCount"/>.</summary>
+    internal long PersistenceBatchCount => Volatile.Read(ref _persistBatchCount);
+
+    /// <summary>Article count of the most recent coalesced persistence batch.</summary>
+    internal int PersistenceBatchArticles => Volatile.Read(ref _lastPersistBatchArticleCount);
+
+    /// <summary>ArtSize sum of the most recent coalesced persistence batch.</summary>
+    internal long PersistenceBatchBytes => Volatile.Read(ref _lastPersistBatchByteCount);
+
+    /// <summary>How long the worker waited before taking the most recent batch. Zero when the cap was already met.</summary>
+    internal TimeSpan PersistenceBatchWaitTime =>
+        TimeSpan.FromMicroseconds(Volatile.Read(ref _lastPersistBatchWaitMicroseconds));
+
+    /// <summary>Largest article count taken in one persistence batch since the engine opened.</summary>
+    internal int PersistenceBatchMaxObservedArticles => Volatile.Read(ref _persistBatchMaxArticles);
+
+    /// <summary>Largest ArtSize sum taken in one persistence batch since the engine opened.</summary>
+    internal long PersistenceBatchMaxObservedBytes => Volatile.Read(ref _persistBatchMaxBytes);
 
     /// <summary>Successful <see cref="TryRead(ArticleId, out ArticleReadResult)"/> results taken from the RAM cache. Diagnostics only.</summary>
     internal long CacheArticleReadCount => Volatile.Read(ref _cacheArticleReadCount);
@@ -1958,7 +1981,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
                 if (!SuspendBackgroundPersist)
                 {
-                    EnqueuePersistWorkUnlocked(journalRecord.Sequence);
+                    EnqueuePersistWorkUnlocked(journalRecord.Sequence, journalRecord.ArtSize);
                 }
             }
             finally
@@ -2392,10 +2415,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         _segments.Catalogue.RebuildLiveDeadFromIndex(_index.Snapshot());
     }
 
-    /// <summary>Waits until no incomplete journal sequences remain.</summary>
+    /// <summary>Waits until no incomplete journal sequences remain and the worker has finished the batch that committed them.</summary>
     public async Task DrainPendingAsync(CancellationToken cancellationToken)
     {
-        while (_journal.EnumerateIncomplete().Count > 0)
+        while (PersistenceHandoffBusy())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (SuspendBackgroundPersist)
@@ -2409,6 +2432,24 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
             await Task.Delay(TimeSpan.FromMilliseconds(1), _timeProvider, cancellationToken)
                 .ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// True while a durable Accept is incomplete or the worker still holds the batch that just committed it.
+    /// IndexCommitted clears the journal record before the same batch populates the cache, so journal
+    /// completeness alone can return before that population finishes.
+    /// </summary>
+    private bool PersistenceHandoffBusy()
+    {
+        if (_journal.EnumerateIncomplete().Count > 0)
+        {
+            return true;
+        }
+
+        lock (_gate)
+        {
+            return _pendingSequences.Count > 0 || _persistInFlight.Count > 0;
         }
     }
 
@@ -4669,27 +4710,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 await _workerSignal.WaitAsync(cancellationToken).ConfigureAwait(false);
                 while (true)
                 {
-                    List<ulong> batch;
-                    lock (_gate)
-                    {
-                        if (_pendingSequences.Count == 0)
-                        {
-                            break;
-                        }
-
-                        batch = new List<ulong>(_pendingSequences.Count);
-                        while (_pendingSequences.TryDequeue(out var sequence))
-                        {
-                            _ = _pendingSet.Remove(sequence);
-                            if (!_persistInFlight.Add(sequence))
-                            {
-                                continue;
-                            }
-
-                            batch.Add(sequence);
-                        }
-                    }
-
+                    var batch = await TakeCoalescedBatchAsync(cancellationToken).ConfigureAwait(false);
                     if (batch.Count == 0)
                     {
                         break;
