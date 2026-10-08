@@ -221,13 +221,17 @@ namespace VectorNNTP.BackFiller.Tests.Fixtures
             RabbitMqManualAckDelivery delivery,
             FakeBackFillerRabbitMqChannel channel,
             Func<bool>? channelStillCurrent = null,
-            CancellationToken cancellationToken = default) =>
-            Pipeline.ProcessAsync(
+            CancellationToken cancellationToken = default)
+        {
+            var parsed = ArticleWorkRequestParser.Parse(delivery, "Giganews", Pipeline.MaxPayloadBytes);
+            return Pipeline.ProcessAsync(
                 delivery,
                 "Giganews",
                 channel,
                 channelStillCurrent ?? (static () => true),
-                cancellationToken);
+                cancellationToken,
+                parsed);
+        }
 
         public Task<ArticleWorkOutcome> ProcessCanonicalAsync(
             FakeBackFillerRabbitMqChannel channel,

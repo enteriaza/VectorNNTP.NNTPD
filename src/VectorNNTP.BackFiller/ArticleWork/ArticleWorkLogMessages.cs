@@ -59,14 +59,15 @@ namespace VectorNNTP.BackFiller.ArticleWork
 
         /// <summary>
         /// Writes a Warning event after the pipeline returns <see cref="ArticleWorkOutcome.InvalidRequest"/> for a delivery.
+        /// The reason is produced during the initial bounded parse; the message body is not reparsed for diagnostics.
         /// </summary>
         /// <param name="logger">Logger that receives the event.</param>
         /// <param name="backbone">Provider backbone of the session that processed the delivery.</param>
         /// <param name="generation">Delivery connection generation.</param>
         /// <param name="deliveryTag">Channel-scoped delivery tag.</param>
         /// <param name="reason">
-        /// Rejection text from a second parse of the same body, or <c>InvalidRequest</c> when that parse has no failure.
-        /// This method logs the text and does not throw.
+        /// Bounded failure reason from the pipeline's parser. Examples: "RabbitMQ article-work payload exceeds WorkRequestMaxPayloadBytes",
+        /// "Invalid JSON", "Missing required field MessageId". This method logs the text and does not throw.
         /// </param>
         [LoggerMessage(
             EventId = 5304,

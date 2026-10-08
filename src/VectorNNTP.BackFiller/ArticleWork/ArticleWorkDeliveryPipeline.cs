@@ -16,6 +16,9 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// <summary>Maximum JSON body size passed to <see cref="ArticleWorkRequestParser.Parse"/>.</summary>
         private readonly int _maxPayloadBytes;
 
+        /// <summary>Maximum JSON body size passed to <see cref="ArticleWorkRequestParser.Parse"/>.</summary>
+        internal int MaxPayloadBytes => _maxPayloadBytes;
+
         /// <summary>
         /// Initializes a new pipeline.
         /// </summary>
@@ -54,33 +57,42 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// The invalid-request path still publishes when replyable; this token only cancels that publication.
         /// </param>
         /// <returns>
-        /// The handler or parse outcome when that disposition was submitted for settlement, or when the channel was already stale and settlement was skipped.
-        /// Returns <see cref="ArticleWorkOutcome.UnexpectedFailure"/> when publication is cancelled, or when publication fails for a disposition that requeues; those paths NACK requeue.
-        /// A handler result of <see cref="ArticleWorkOutcome.InvalidRequest"/> is treated as <see cref="ArticleWorkOutcome.UnexpectedFailure"/>.
-        /// When <see cref="IArticleWorkResponsePublisher.CompletesSuccessPublication"/> is <see langword="false"/>, Success is NACK-requeued without publication, and this method still returns <see cref="ArticleWorkOutcome.Success"/>.
+        /// The <see cref="ArticleWorkOutcome"/> classification for the delivery. Diagnostic parse failures are returned
+        /// through the optional <c>preParsed</c> value and are not reparsed by diagnostic code. Returns
+        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> when publication is cancelled, or when publication fails for a
+        /// disposition that requeues; those paths NACK requeue. A handler result of <see cref="ArticleWorkOutcome.InvalidRequest"/> is
+        /// treated as <see cref="ArticleWorkOutcome.UnexpectedFailure"/>. When <see cref="IArticleWorkResponsePublisher.CompletesSuccessPublication"/>
+        /// is <see langword="false"/>, Success is NACK-requeued without publication, and this method still returns
+        /// <see cref="ArticleWorkOutcome.Success"/>.
         /// </returns>
         /// <exception cref="ArgumentException">Thrown when <paramref name="consumingBackbone"/> is null or whitespace.</exception>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="channel"/> or <paramref name="channelStillCurrent"/> is null.</exception>
+        /// <param name="preParsed">Optional pre-parsed result. When supplied, the pipeline will not reparse the body and will use
+        /// the supplied failure reason for diagnostics when the delivery is invalid.</param>
         /// <remarks>
-        /// Settlement calls use <see cref="CancellationToken.None"/>. A stale <paramref name="channelStillCurrent"/> result, or a lease that is not the original channel, returns without ACK or NACK.
-        /// After the handler returns, a cancelled token forces <see cref="ArticleWorkOutcome.Cancelled"/> settlement even when the handler outcome was terminal.
-        /// A non-cancellation publication failure still settles a disposition that does not requeue, including ACK.
-        /// Cancellation of the publication attempt always NACK-requeues and returns <see cref="ArticleWorkOutcome.UnexpectedFailure"/>.
-        /// Any <see cref="ArticleWorkHandlerResult.Article"/> is disposed before settlement. Other handler exceptions become
-        /// <see cref="ArticleWorkOutcome.UnexpectedFailure"/> and the error text is the exception type name.
+        /// Settlement calls use <see cref="CancellationToken.None"/>. A stale <paramref name="channelStillCurrent"/> result, or a lease
+        /// that is not the original channel, returns without ACK or NACK. After the handler returns, a cancelled token forces
+        /// <see cref="ArticleWorkOutcome.Cancelled"/> settlement even when the handler outcome was terminal. A non-cancellation publication
+        /// failure still settles a disposition that does not requeue, including ACK. Cancellation of the publication attempt always
+        /// NACK-requeues and returns <see cref="ArticleWorkOutcome.UnexpectedFailure"/>. Any <see cref="ArticleWorkHandlerResult.Article"/>
+        /// is disposed before settlement. Other handler exceptions become <see cref="ArticleWorkOutcome.UnexpectedFailure"/> and the error
+        /// text is the exception type name.
+        /// SECURITY: The diagnostic reason is captured from the parse failure and returned directly. This ensures the configured payload
+        /// limit is never bypassed by diagnostic code that might reparse the body with an unbounded limit.
         /// </remarks>
         internal async Task<ArticleWorkOutcome> ProcessAsync(
             RabbitMqManualAckDelivery delivery,
             string consumingBackbone,
             IRabbitMqManualAckChannel channel,
             Func<bool> channelStillCurrent,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ArticleWorkParseResult? preParsed = null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(consumingBackbone);
             ArgumentNullException.ThrowIfNull(channel);
             ArgumentNullException.ThrowIfNull(channelStillCurrent);
 
-            var parsed = ArticleWorkRequestParser.Parse(delivery, consumingBackbone, _maxPayloadBytes);
+            var parsed = preParsed ?? ArticleWorkRequestParser.Parse(delivery, consumingBackbone, _maxPayloadBytes);
             var lease = new ArticleWorkSettlementLease(channel, delivery.DeliveryTag, delivery.Generation);
             var replyable = !string.IsNullOrWhiteSpace(delivery.CorrelationId)
                             && !string.IsNullOrWhiteSpace(delivery.ReplyTo);
@@ -111,7 +123,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
                         articleIdHex: null,
                         cancellationToken)
                     .ConfigureAwait(false);
-                return await CompleteAfterPublishAttemptAsync(
+                var publishOutcome = await CompleteAfterPublishAttemptAsync(
                         invalidPublished,
                         invalid,
                         ArticleWorkOutcome.InvalidRequest,
@@ -119,6 +131,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
                         channel,
                         channelStillCurrent)
                     .ConfigureAwait(false);
+                return publishOutcome;
             }
 
             var item = new ArticleWorkItem(
@@ -180,7 +193,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
                         pending,
                         channelStillCurrent() && lease.IsOriginalChannel(channel),
                         CancellationToken.None)
-                    .ConfigureAwait(false);
+                .ConfigureAwait(false);
                 return outcome;
             }
 
@@ -203,7 +216,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
                     .ConfigureAwait(false);
             }
 
-            return await CompleteAfterPublishAttemptAsync(
+            ArticleWorkOutcome finalOutcome = await CompleteAfterPublishAttemptAsync(
                     published,
                     disposition,
                     outcome,
@@ -211,6 +224,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
                     channel,
                     channelStillCurrent)
                 .ConfigureAwait(false);
+            return finalOutcome;
         }
 
         /// <summary>NACK-requeues the lease when the original channel is still current.</summary>
@@ -269,7 +283,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
                     channelStillCurrent() && lease.IsOriginalChannel(channel),
                     CancellationToken.None)
                 .ConfigureAwait(false);
-            return outcome;
+                return outcome;
         }
 
         /// <summary>

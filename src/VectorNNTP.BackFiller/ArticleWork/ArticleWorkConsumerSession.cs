@@ -625,7 +625,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
         /// <c>ChannelStillCurrent</c> is true only while the process connection generation equals the delivery generation,
         /// that connection is still current, the session still references this channel, and the channel is open.
         /// It is a local function because the pipeline must evaluate it again at settlement time.
-        /// The invalid-request log parses the body again and does not change the settlement.
+        /// The invalid-request log uses the diagnostic reason from the pipeline and does not reparse the body with an unbounded limit.
         /// </remarks>
         private async Task ProcessCurrentAsync(RabbitMqManualAckDelivery delivery, CancellationToken cancellationToken)
         {
@@ -648,21 +648,23 @@ namespace VectorNNTP.BackFiller.ArticleWork
                 && ReferenceEquals(_channel, channel)
                 && channel.IsOpen;
 
+            // Perform the initial bounded parse here so we capture the failure reason and
+            // prevent any downstream code from reparsing the body with a different limit.
+            var parsed = ArticleWorkRequestParser.Parse(delivery, _backbone, _pipeline.MaxPayloadBytes);
+
             var outcome = await _pipeline
-                .ProcessAsync(delivery, _backbone, channel, ChannelStillCurrent, cancellationToken)
+                .ProcessAsync(delivery, _backbone, channel, ChannelStillCurrent, cancellationToken, parsed)
                 .ConfigureAwait(false);
+
             if (outcome == ArticleWorkOutcome.InvalidRequest)
             {
-                var parsed = ArticleWorkRequestParser.Parse(
-                    delivery,
-                    _backbone,
-                    int.MaxValue);
+                var reason = parsed.IsValid ? "InvalidRequest" : parsed.Failure?.Reason ?? "InvalidRequest";
                 ArticleWorkLogMessages.RequestRejected(
                     _logger,
                     _backbone,
                     delivery.Generation,
                     delivery.DeliveryTag,
-                    parsed.Failure?.Reason ?? "InvalidRequest");
+                    reason);
             }
         }
 

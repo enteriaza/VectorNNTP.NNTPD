@@ -386,6 +386,93 @@ namespace VectorNNTP.BackFiller.Tests.ArticleWork
             Assert.Equal(body.Length, delivery.Body.Length);
         }
 
+        /// <summary>
+        /// Regression test: oversized message must be rejected before JSON parsing,
+        /// with a bounded, specific diagnostic reason, never by reparsinig with an unbounded limit.
+        /// </summary>
+        [Fact]
+        public void Oversized_payload_rejection_reason_is_bounded_and_specific()
+        {
+            // The rejection reason must come from the initial size check, not a second parse.
+            // This prevents unbounded JSON parsing on an error path.
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Canonical(),
+                "Giganews",
+                maxPayloadBytes: 8);
+
+            Assert.False(parsed.IsValid);
+            var reason = parsed.Failure!.Reason;
+            Assert.NotNull(reason);
+            Assert.Contains("WorkRequestMaxPayloadBytes", reason, StringComparison.Ordinal);
+            // The reason must not require parsing the entire body; it must be deterministic from size check alone.
+            Assert.DoesNotContain("JSON", reason, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("schema", reason, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("field", reason, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Boundary test: maximum + 1 byte is rejected; maximum byte is accepted for further parsing.
+        /// </summary>
+        [Theory]
+        [InlineData(1023, true)]  // At maximum - 1
+        [InlineData(1024, true)]  // At maximum
+        [InlineData(1025, false)] // At maximum + 1
+        public void Payload_size_boundary_is_enforced(int payloadSize, bool shouldBeValid)
+        {
+            const int configuredMaximum = 1024;
+            var json = ArticleWorkTestDeliveries.CanonicalRequestJson;
+            // Pad the backbone field to reach the desired size
+            var padding = new string(' ', Math.Max(0, payloadSize - json.Length));
+            var paddedJson = json.Replace("\"Giganews\"", $"\"{padding}Giganews\"");
+            var body = Encoding.UTF8.GetBytes(paddedJson);
+
+            var delivery = new VectorNNTP.Common.Messaging.RabbitMq.RabbitMqManualAckDelivery(
+                1,
+                body,
+                ArticleWorkTestDeliveries.CanonicalCorrelationId,
+                ArticleWorkTestDeliveries.CanonicalReplyTo,
+                ArticleWorkRequestParser.JsonContentType,
+                ArticleWorkTestDeliveries.CanonicalRequestId,
+                false,
+                "backfiller.giganews",
+                "backfiller.giganews",
+                "ctag",
+                1);
+
+            var parsed = ArticleWorkRequestParser.Parse(delivery, "Giganews", configuredMaximum);
+
+            if (shouldBeValid)
+            {
+                // At or below maximum, parsing should continue past size check.
+                // It may fail for other reasons (schema, content), but not for size.
+                Assert.DoesNotContain("WorkRequestMaxPayloadBytes", parsed.Failure?.Reason ?? string.Empty, StringComparison.Ordinal);
+            }
+            else
+            {
+                // Above maximum, must be rejected on size.
+                Assert.False(parsed.IsValid);
+                Assert.Contains("WorkRequestMaxPayloadBytes", parsed.Failure!.Reason, StringComparison.Ordinal);
+            }
+        }
+
+        /// <summary>
+        /// Regression test: malformed JSON within the size limit must produce a distinct error from oversized,
+        /// not be mistaken for an unbounded reparse scenario.
+        /// </summary>
+        [Fact]
+        public void Malformed_json_within_size_limit_produces_distinct_error()
+        {
+            var json = "{invalid-json";
+            var parsed = ArticleWorkRequestParser.Parse(
+                ArticleWorkTestDeliveries.Create(json),
+                "Giganews",
+                MaxPayload);
+
+            Assert.False(parsed.IsValid);
+            Assert.Contains("not valid JSON", parsed.Failure!.Reason, StringComparison.Ordinal);
+            Assert.DoesNotContain("WorkRequestMaxPayloadBytes", parsed.Failure.Reason, StringComparison.Ordinal);
+        }
+
         private static ArticleWorkParseResult ParseMessageId(string messageId)
         {
             var json = "{\"version\":1,\"requestId\":\"7c1cb8a0-95f9-4c13-8e53-339773e3afaa\",\"messageId\":\""

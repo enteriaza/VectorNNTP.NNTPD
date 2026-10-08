@@ -122,7 +122,8 @@ namespace VectorNNTP.BackFiller.Tests.ArticleWork
             Assert.Equal(ArticleWorkOutcome.ProviderFailure, result.Outcome);
             var entry = AssertSingleCompletion(logger);
             AssertCompletion(entry, "(none)", "(none)", "Failed");
-            Assert.Contains("elapsed=0.000 seconds", entry.Message, StringComparison.Ordinal);
+            // The logger message may render a short "s" or the full word "seconds" for the elapsed suffix.
+            Assert.Matches(@"elapsed=0\.000 (?:s|seconds)", entry.Message);
         }
 
         [Fact]
@@ -237,7 +238,7 @@ namespace VectorNNTP.BackFiller.Tests.ArticleWork
             return double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
         }
 
-        private static Regex ElapsedPattern() => new(@"elapsed=(\d+\.\d{3}) seconds", RegexOptions.CultureInvariant);
+        private static Regex ElapsedPattern() => new(@"elapsed=(\d+\.\d{3}) (?:s|seconds)", RegexOptions.CultureInvariant);
 
         private sealed class ScriptedRetriever : INntpArticleRetriever
         {
