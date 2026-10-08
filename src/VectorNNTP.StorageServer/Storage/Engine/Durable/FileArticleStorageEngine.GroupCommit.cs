@@ -60,6 +60,18 @@ public sealed partial class FileArticleStorageEngine
                 reservedIndex = true;
             }
 
+            if (cancellationToken.IsCancellationRequested)
+            {
+                RollbackUnboundAccept(
+                    reservedSegment,
+                    reservedJournal,
+                    reservedIndex,
+                    segmentBytes,
+                    journalBytes,
+                    indexBytes);
+                throw new OperationCanceledException(cancellationToken);
+            }
+
             try
             {
                 durability = _journal.StageGroupedAccept(
@@ -82,10 +94,10 @@ public sealed partial class FileArticleStorageEngine
             }
         }
 
-        GroupedJournalAccept grouped;
+        GroupFlushObservation observation;
         try
         {
-            grouped = await durability!.ConfigureAwait(false);
+            observation = await WaitForGroupFlushAsync(durability!, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -102,6 +114,8 @@ public sealed partial class FileArticleStorageEngine
 
             throw;
         }
+
+        var grouped = observation.Result;
 
         if (!grouped.Appended || grouped.Record is null)
         {
@@ -181,8 +195,40 @@ public sealed partial class FileArticleStorageEngine
             record.ArtId.ToString() ?? string.Empty,
             journalRecord.Sequence,
             record.ArtSize);
+        if (observation.Canceled)
+        {
+            // The shared flush already committed this member. The caller observed cancellation,
+            // so Accept does not return success. The journal record stays for recovery and retry.
+            throw new OperationCanceledException(cancellationToken);
+        }
+
         return ArticleAcceptResult.Accepted(record.ArtId, journalRecord.Sequence);
     }
+
+    /// <summary>
+    /// Waits for the shared journal flush. A cancelled caller still observes the flush outcome.
+    /// A flush that already succeeded is not rolled back.
+    /// </summary>
+    private static async Task<GroupFlushObservation> WaitForGroupFlushAsync(
+        Task<GroupedJournalAccept> durability,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await durability.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return new GroupFlushObservation(result, false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            var result = await durability.ConfigureAwait(false);
+            return new GroupFlushObservation(result, true);
+        }
+    }
+
+    /// <summary>Shared flush result plus whether the caller cancelled while waiting.</summary>
+    /// <param name="Result">Journal result after the flush attempt.</param>
+    /// <param name="Canceled">True when the caller cancelled and the flush still finished.</param>
+    private readonly record struct GroupFlushObservation(GroupedJournalAccept Result, bool Canceled);
 
     /// <summary>
     /// Reserves journal order under the engine gate, encodes outside that gate, then the journal
@@ -316,10 +362,10 @@ public sealed partial class FileArticleStorageEngine
             throw;
         }
 
-        GroupedJournalAccept grouped;
+        GroupFlushObservation observation;
         try
         {
-            grouped = await ticket.Durability!.ConfigureAwait(false);
+            observation = await WaitForGroupFlushAsync(ticket.Durability!, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -335,6 +381,21 @@ public sealed partial class FileArticleStorageEngine
             }
 
             throw;
+        }
+
+        var grouped = observation.Result;
+        if (observation.Canceled && grouped.Appended && grouped.Record is not null)
+        {
+            _ = CompletePreparedAccept(
+                record,
+                grouped.Record,
+                reservedSegment,
+                reservedJournal,
+                reservedIndex,
+                segmentBytes,
+                journalBytes,
+                indexBytes);
+            throw new OperationCanceledException(cancellationToken);
         }
 
         if (!grouped.Appended || grouped.Record is null)
