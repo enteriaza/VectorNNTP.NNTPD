@@ -201,6 +201,49 @@ namespace VectorNNTP.BackFiller.Tests.ArticleWork
         }
 
         [Fact]
+        public async Task Shutdown_cancels_active_replacement_retirement_started_before_stop()
+        {
+            var factory = new FakeBackFillerRabbitMqConnectionFactory();
+            var connections = RabbitMqServiceTests.CreateService(factory);
+            await connections.StartAsync(CancellationToken.None);
+            var handler = new ControllableArticleWorkHandler
+            {
+                Outcome = ArticleWorkOutcome.Success,
+                Started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+                Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            var consumer = CreateConsumerService(
+                connections,
+                handler,
+                catalog: CreateCatalog("Giganews", maxSessions: 1),
+                capacity: CreateCapacity("Giganews", active: 1));
+            await consumer.StartAsync(CancellationToken.None);
+
+            var oldSession = Assert.Single(consumer.Sessions);
+            var oldChannel = Assert.IsType<FakeBackFillerRabbitMqChannel>(oldSession.Channel);
+            var processing = oldChannel.DeliverAsync(ArticleWorkTestDeliveries.Canonical(generation: 1));
+            await handler.Started!.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            var secondConnected = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            factory.Connected = secondConnected;
+            factory.LastConnection!.SimulateLost();
+            await secondConnected.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await ArticleWorkTestDeliveries.WaitUntilAsync(
+                () => oldChannel.CancelCount == 1,
+                TimeSpan.FromSeconds(2));
+
+            using var shutdown = new CancellationTokenSource();
+            shutdown.Cancel();
+            await consumer.StopAsync(shutdown.Token).WaitAsync(TimeSpan.FromSeconds(2));
+            await processing.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.Equal(1, oldChannel.DisposeCount);
+            Assert.Equal(1, handler.HandleCount);
+
+            await connections.DisposeAsync();
+        }
+
+        [Fact]
         public async Task Stale_session_does_not_mutate_a_newer_generation()
         {
             var factory = new FakeBackFillerRabbitMqConnectionFactory();

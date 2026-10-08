@@ -74,6 +74,12 @@ namespace VectorNNTP.BackFiller.ArticleWork
         private bool _stopping;
 
         /// <summary>
+        /// Cancellation source shared by replacement-triggered retirement calls.
+        /// It remains not-cancelled during normal operation and is cancelled when shutdown budget is cancelled.
+        /// </summary>
+        private readonly CancellationTokenSource _replacementRetirementCts = new();
+
+        /// <summary>
         /// Initializes a new consumer service.
         /// </summary>
         /// <param name="connections">Sole connection owner.</param>
@@ -319,6 +325,11 @@ namespace VectorNNTP.BackFiller.ArticleWork
 
             _connections.ConnectionReplaced -= OnConnectionReplaced;
             _capacity.SnapshotPublished -= OnCapacitySnapshotPublished;
+            using var shutdownRegistration = cancellationToken.Register(static state =>
+            {
+                var cts = (CancellationTokenSource)state!;
+                cts.Cancel();
+            }, _replacementRetirementCts);
             await _reconcileCts.CancelAsync().ConfigureAwait(false);
             var loop = _reconcileLoop;
             if (loop is not null)
@@ -357,6 +368,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
                 _replaceGate.Release();
                 _replaceGate.Dispose();
                 _reconcileCts.Dispose();
+                _replacementRetirementCts.Dispose();
             }
         }
 
@@ -767,7 +779,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
             await started.ConfigureAwait(false);
             try
             {
-                await RetireTrackedSessionsAsync(removed, CancellationToken.None).ConfigureAwait(false);
+                await RetireTrackedSessionsAsync(removed, _replacementRetirementCts.Token).ConfigureAwait(false);
                 if (ReplacementStopped())
                 {
                     return;
@@ -825,7 +837,7 @@ namespace VectorNNTP.BackFiller.ArticleWork
                 return;
             }
 
-            await StopSessionsAsync(CancellationToken.None).ConfigureAwait(false);
+            await StopSessionsAsync(_replacementRetirementCts.Token).ConfigureAwait(false);
             if (ReplacementStopped())
             {
                 return;
