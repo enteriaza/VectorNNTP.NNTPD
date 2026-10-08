@@ -1,0 +1,6 @@
+# Temporary repository ownership until a GitHub Team is created in the VectorNNTP organization.
+# Planned target entry (activate after team creation):
+# * @VectorNNTP/<team-slug>
+
+# Current fallback owner for all paths.
+* @enteriaza
