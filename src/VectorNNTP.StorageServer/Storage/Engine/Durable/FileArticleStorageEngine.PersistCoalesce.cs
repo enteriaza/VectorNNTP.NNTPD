@@ -59,10 +59,12 @@ public sealed partial class FileArticleStorageEngine
 
     /// <summary>
     /// Default ArtSize cap for one persistence batch.
-    /// Matches the one-caller batch that formed at <see cref="DefaultPersistCoalesceDelay"/>
-    /// and stays under the 128 MiB journal hard limit.
+    /// 32 MiB lets <see cref="DefaultPersistCoalesceMaxArticles"/> bind for a ~722 KiB article.
+    /// A 16 MiB cap stopped that batch at 23 articles. With eight grouped callers the smaller
+    /// batches left persistence behind admission until the 128 MiB journal ceiling.
+    /// One caller at <see cref="DefaultPersistCoalesceDelay"/> still closes on the timer.
     /// </summary>
-    internal const long DefaultPersistCoalesceMaxBytes = 16L * 1024 * 1024;
+    internal const long DefaultPersistCoalesceMaxBytes = 32L * 1024 * 1024;
 
     private long _persistCoalesceMaxDelayMicroseconds = (long)DefaultPersistCoalesceDelay.TotalMicroseconds;
     private int _persistCoalesceMaxArticles = DefaultPersistCoalesceMaxArticles;
