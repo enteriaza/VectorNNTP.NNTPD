@@ -138,9 +138,21 @@ namespace VectorNNTP.BackFiller.Accounts
                 return false;
             }
 
+            if (ContainsAsciiControlCharacters(row.Username))
+            {
+                reason = "Username contains invalid control characters.";
+                return false;
+            }
+
             if (string.IsNullOrWhiteSpace(row.Password))
             {
                 reason = "Password is required.";
+                return false;
+            }
+
+            if (ContainsAsciiControlCharacters(row.Password))
+            {
+                reason = "Password contains invalid control characters.";
                 return false;
             }
 
@@ -162,6 +174,26 @@ namespace VectorNNTP.BackFiller.Accounts
                 KeepAliveSeconds: row.KeepAliveSeconds);
             reason = string.Empty;
             return true;
+        }
+
+        /// <summary>
+        /// Returns <see langword="true"/> if the string contains any ASCII control characters (0x00–0x1F or 0x7F).
+        /// </summary>
+        /// <param name="value"></param>
+        /// <returns></returns>
+        private static bool ContainsAsciiControlCharacters(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return false;
+            foreach (var ch in value)
+            {
+                var code = ch;
+                // Reject C0 control range 0x00-0x1F and DEL 0x7F.
+                if (code <= 0x1F || code == 0x7F)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 }

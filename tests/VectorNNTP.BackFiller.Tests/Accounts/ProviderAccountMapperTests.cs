@@ -118,6 +118,19 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
             Assert.Equal("Username is required.", Assert.Single(mapped.Rejected).Reason);
         }
 
+        [Theory]
+        [InlineData("user\rname")]
+        [InlineData("user\nname")]
+        [InlineData("user\0name")]
+        [InlineData("user\x7Fname")]
+        public void Map_rejects_username_with_control_characters(string username)
+        {
+            var mapped = ProviderAccountMapper.Map([ProviderAccountTestRows.Create(username: username)]);
+
+            Assert.Empty(mapped.Providers);
+            Assert.Equal("Username contains invalid control characters.", Assert.Single(mapped.Rejected).Reason);
+        }
+
         [Fact]
         public void Map_rejects_null_password_without_including_it_in_the_reason()
         {
@@ -130,6 +143,19 @@ namespace VectorNNTP.BackFiller.Tests.Accounts
                 ProviderAccountTestRows.SecretPassword,
                 Assert.Single(mapped.Rejected).Reason,
                 StringComparison.Ordinal);
+        }
+
+        [Theory]
+        [InlineData("pass\rword")]
+        [InlineData("pass\nword")]
+        [InlineData("pass\0word")]
+        [InlineData("pass\x7Fword")]
+        public void Map_rejects_password_with_control_characters(string password)
+        {
+            var mapped = ProviderAccountMapper.Map([ProviderAccountTestRows.Create(password: password)!]);
+
+            Assert.Empty(mapped.Providers);
+            Assert.Equal("Password contains invalid control characters.", Assert.Single(mapped.Rejected).Reason);
         }
 
         [Theory]
