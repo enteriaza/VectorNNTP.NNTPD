@@ -224,9 +224,26 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             failures.Add("StorageServer:Storage:ArticleCache:MaxBytes must be greater than or equal to 0.");
         }
 
+        ValidateEgressCache(options.Storage.EgressCache, failures);
         ValidateCompactionPolicy(options.Storage.Compaction, failures);
         ValidateCapacityPolicy(options.Storage.Capacity, failures);
         ValidateBulkPressure(options.Storage.BulkPressure, failures);
+    }
+
+    private static void ValidateEgressCache(EgressCacheOptions? egress, List<string> failures)
+    {
+        egress ??= new EgressCacheOptions();
+        if (egress.CapacityBytes < 0)
+        {
+            failures.Add(
+                "StorageServer:Storage:EgressCache:CapacityBytes must be greater than or equal to 0.");
+        }
+
+        if (egress.ReserveBytes < 0)
+        {
+            failures.Add(
+                "StorageServer:Storage:EgressCache:ReserveBytes must be greater than or equal to 0.");
+        }
     }
 
     private static void ValidateCapacityPolicy(

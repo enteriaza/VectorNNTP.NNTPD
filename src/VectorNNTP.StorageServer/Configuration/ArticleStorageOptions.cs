@@ -194,6 +194,16 @@ public sealed class ArticleStorageOptions
     public ArticleMemoryCacheOptions ArticleCache { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets the disposable NVMe egress cache under
+    /// <c>StorageServer:Storage:EgressCache</c>.
+    /// </summary>
+    /// <remarks>
+    /// The cache is stored at <c>{ControlDir}/egress</c>. <see cref="EgressCacheOptions.CapacityBytes"/>
+    /// of <c>0</c> leaves it off. It does not share a quota with SATA retention.
+    /// </remarks>
+    public EgressCacheOptions EgressCache { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets Closed-segment compaction victim-selection thresholds under
     /// <c>StorageServer:Storage:Compaction</c>.
     /// </summary>

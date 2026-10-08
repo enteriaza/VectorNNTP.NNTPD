@@ -1,6 +1,7 @@
 using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage.Cache;
+using VectorNNTP.StorageServer.Storage.Cache.Egress;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
 using Microsoft.Extensions.Options;
 
@@ -88,13 +89,36 @@ public sealed class StorageEngineApplicationService : IApplicationService, IAsyn
 
             var cacheOptions = _options.Value.Storage?.ArticleCache ?? new ArticleMemoryCacheOptions();
             var cache = new ArticleMemoryCache(cacheOptions);
+            var storageOptions = _options.Value.Storage ?? new ArticleStorageOptions();
+            var egressOptions = storageOptions.EgressCache ?? new EgressCacheOptions();
+            EgressCacheStart? egress = null;
+            if (egressOptions.CapacityBytes > 0)
+            {
+                var capacity = storageOptions.Capacity ?? new ArticleCapacityOptions();
+                egress = new EgressCacheStart
+                {
+                    ControlDir = storage.ControlDir,
+                    CapacityBytes = egressOptions.CapacityBytes,
+                    ReserveBytes = egressOptions.ReserveBytes,
+                    JournalHardLimitBytes = storage.JournalHardLimitBytes,
+                    JournalCheckpointThresholdBytes = storageOptions.JournalCheckpointThresholdBytes,
+                    IndexCheckpointThresholdBytes = storageOptions.IndexCheckpointThresholdBytes,
+                    MaximumUtilizationPercent = capacity.MaximumUtilization,
+                    MaximumUsageCapacityPercent = capacity.MaximumUsageCapacity,
+                    FreeCapacityPercent = capacity.FreeCapacity,
+                };
+            }
 
             engine = FileArticleStorageEngine.Open(
                 storage,
-                _logger,
-                _timeProvider,
-                cache,
-                maxConcurrentPhysicalReads: _runtime.Listener.MaxActiveConnections);
+                volumeProbe: null,
+                capacityReader: null,
+                controlCapacityReader: null,
+                logger: _logger,
+                timeProvider: _timeProvider,
+                articleCache: cache,
+                maxConcurrentPhysicalReads: _runtime.Listener.MaxActiveConnections,
+                egressCache: egress);
 
             var beforeRecover = TestBeforeRecover;
             TestBeforeRecover = null;

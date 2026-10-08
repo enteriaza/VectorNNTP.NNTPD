@@ -28,6 +28,8 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(ArticleStorageOptions.DefaultActiveSegmentCount, storage.ActiveSegmentCount);
         Assert.Equal(1, storage.ActiveSegmentCount);
         Assert.Equal(0, storage.ArticleCache.MaxBytes);
+        Assert.Equal(0, storage.EgressCache.CapacityBytes);
+        Assert.Equal(0, storage.EgressCache.ReserveBytes);
         Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Enabled"));
         Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Maintenance" + "Enabled"));
         Assert.Equal(ArticleCompactionPolicyOptions.DefaultInterval, storage.Compaction.Interval);
@@ -293,6 +295,9 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal("00:01:00", storage.GetProperty("MaxSegmentSealDelay").GetString());
         Assert.Equal(10737418240, storage.GetProperty("SegmentTargetSizeBytes").GetInt64());
         Assert.Equal(1073741824, storage.GetProperty("ArticleCache").GetProperty("MaxBytes").GetInt64());
+        var egress = storage.GetProperty("EgressCache");
+        Assert.Equal(0, egress.GetProperty("CapacityBytes").GetInt64());
+        Assert.Equal(0, egress.GetProperty("ReserveBytes").GetInt64());
         var compaction = storage.GetProperty("Compaction");
         Assert.False(compaction.TryGetProperty("Enabled", out _));
         Assert.False(compaction.TryGetProperty("Maintenance" + "Enabled", out _));
@@ -307,6 +312,7 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(70, capacity.GetProperty("MaximumUtilization").GetInt32());
         AssertJsonPropertiesMatchOptions(storage, typeof(ArticleStorageOptions));
         AssertJsonPropertiesMatchOptions(storage.GetProperty("ArticleCache"), typeof(ArticleMemoryCacheOptions));
+        AssertJsonPropertiesMatchOptions(storage.GetProperty("EgressCache"), typeof(EgressCacheOptions));
         AssertJsonPropertiesMatchOptions(storage.GetProperty("Capacity"), typeof(ArticleCapacityOptions));
         AssertJsonPropertiesMatchOptions(storage.GetProperty("Compaction"), typeof(ArticleCompactionPolicyOptions));
 
@@ -318,6 +324,47 @@ public sealed class ArticleStorageOptionsTests
             .Bind(probe.Storage);
         var validation = new StorageServerOptionsValidator().Validate(Options.DefaultName, probe);
         Assert.True(validation.Succeeded, string.Join("; ", validation.Failures ?? []));
+    }
+
+    [Fact]
+    public void EgressCache_binds_capacity_and_reserve()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["StorageServer:Storage:EgressCache:CapacityBytes"] = "4096",
+                ["StorageServer:Storage:EgressCache:ReserveBytes"] = "0",
+            })
+            .Build();
+        var bound = new StorageServerOptions();
+        configuration.GetSection(StorageServerOptions.SectionName).Bind(bound);
+        Assert.Equal(4096, bound.Storage.EgressCache.CapacityBytes);
+        Assert.Equal(0, bound.Storage.EgressCache.ReserveBytes);
+    }
+
+    [Fact]
+    public void EgressCache_rejects_negative_byte_values()
+    {
+        var negativeCapacity = StorageServerTestOptions.CreateValid();
+        negativeCapacity.Storage.EgressCache.CapacityBytes = -1;
+        var capacity = new StorageServerOptionsValidator().Validate(Options.DefaultName, negativeCapacity);
+        Assert.True(capacity.Failed);
+        Assert.Contains(capacity.Failures!, static failure => failure.Contains("CapacityBytes", StringComparison.Ordinal));
+
+        var negativeReserve = StorageServerTestOptions.CreateValid();
+        negativeReserve.Storage.EgressCache.ReserveBytes = -1;
+        var reserve = new StorageServerOptionsValidator().Validate(Options.DefaultName, negativeReserve);
+        Assert.True(reserve.Failed);
+        Assert.Contains(reserve.Failures!, static failure => failure.Contains("ReserveBytes", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void EgressCache_zero_capacity_is_valid()
+    {
+        var options = StorageServerTestOptions.CreateValid();
+        options.Storage.EgressCache.CapacityBytes = 0;
+        options.Storage.EgressCache.ReserveBytes = 0;
+        Assert.True(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Succeeded);
     }
 
     private static void AssertJsonPropertiesMatchOptions(JsonElement element, Type optionsType)

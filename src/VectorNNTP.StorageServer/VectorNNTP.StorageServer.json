@@ -25,6 +25,10 @@
       "ArticleCache": {
         "MaxBytes": 1073741824
       },
+      "EgressCache": {
+        "CapacityBytes": 0,
+        "ReserveBytes": 0
+      },
       "CacheDir": "spool/cache",
       "BulkPressure": {
         "CriticalPercent": 90,

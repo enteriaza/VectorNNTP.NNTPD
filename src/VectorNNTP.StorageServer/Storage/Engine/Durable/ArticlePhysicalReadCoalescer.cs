@@ -211,6 +211,20 @@ internal sealed class ArticlePhysicalReadCoalescer
         return RunOwner(articleId, owned, cancellationToken, read, out result);
     }
 
+    /// <summary>
+    /// Waiters joined to the in-flight read of <paramref name="articleId"/>, excluding the owner.
+    /// Zero when this article has no registered flight, including a direct read past the cap.
+    /// </summary>
+    /// <param name="articleId">Article whose shared read may still be registered.</param>
+    /// <returns>The waiter count observed under the registry lock.</returns>
+    internal int CurrentWaiters(ArticleId articleId)
+    {
+        lock (_gate)
+        {
+            return _flights.TryGetValue(articleId, out var flight) ? flight.Waiters : 0;
+        }
+    }
+
     /// <summary>Performs the read without registering a flight. Used when a bound is already reached.</summary>
     private bool RunDirect(Func<ArticleReadResult?> read, out ArticleReadResult result)
     {

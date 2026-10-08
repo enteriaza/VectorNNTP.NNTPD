@@ -6,6 +6,7 @@ using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.Cache;
+using VectorNNTP.StorageServer.Storage.Cache.Egress;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
@@ -45,9 +46,12 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 /// <para>
 /// Concurrent published-segment reads of one article share a single in-flight physical read.
 /// The registry is capped by the listener connection limit (default 1024) and holds only reads
-/// that have not finished. Cache hits and outstanding journal Accepts do not enter it. A
-/// cancelled waiter leaves the shared read running. Overflow past the in-flight or per-article
-/// waiter limit uses the existing direct segment path and does not enlarge the registry.
+/// that have not finished. RAM hits, NVMe egress-cache hits, and outstanding journal Accepts
+/// do not enter it. A cancelled waiter leaves the shared read running. Overflow past the
+/// in-flight or per-article waiter limit uses the existing direct segment path and does not
+/// enlarge the registry. The egress cache under <c>ControlDir/egress</c> is a disposable
+/// acceleration copy. It is off when its capacity is zero, and losing it does not change
+/// article existence, lifecycle, or retention.
 /// </para>
 /// <para>
 /// Phase 5E.1 / 5E.2: optional process-local capacity reservation under
@@ -119,6 +123,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     private readonly FileSegmentStore _segments;
     private readonly FileArticleIndex _index;
     private readonly IArticleMemoryCache _articleCache;
+    private readonly ArticleEgressCache _egress;
+    private readonly Dictionary<ArticleId, ulong> _ramSequences = new();
+    private readonly object _ramSequenceGate = new();
     private readonly ILogger _logger;
     private readonly TimeProvider _timeProvider;
     private readonly CapacityVolume? _segmentCapacity;
@@ -199,14 +206,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         int capacityCompactionHeadroom,
         int capacityMaximumUsageCapacity,
         int capacityFreeCapacity,
-        BulkStoragePressurePolicy bulkPressure)
+        BulkStoragePressurePolicy bulkPressure,
+        ArticleEgressCache egress)
     {
         ArgumentNullException.ThrowIfNull(capacity);
         ArgumentNullException.ThrowIfNull(bulkPressure);
+        ArgumentNullException.ThrowIfNull(egress);
         _journal = journal;
         _segments = segments;
         _index = index;
         _articleCache = articleCache;
+        _egress = egress;
         _logger = logger;
         _timeProvider = timeProvider;
         _segmentCapacity = capacity.Segment;
@@ -299,6 +309,45 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>Successful <see cref="TryRead(ArticleId, out ArticleReadResult)"/> results taken from an outstanding journal Accept. Diagnostics only.</summary>
     internal long JournalArticleReadCount => Volatile.Read(ref _journalArticleReadCount);
+
+    /// <summary>Disposable NVMe egress cache. Disabled when capacity is zero.</summary>
+    internal ArticleEgressCache Egress => _egress;
+
+    /// <summary>Verified egress-cache hits. Not counted as segment reads.</summary>
+    internal long EgressCacheHitCount => _egress.HitCount;
+
+    /// <summary>Egress lookups that did not return a hit.</summary>
+    internal long EgressCacheMissCount => _egress.MissCount;
+
+    /// <summary>Egress records published after a proved segment read.</summary>
+    internal long EgressCachePopulateCount => _egress.PopulateCount;
+
+    /// <summary>Egress fills dropped because the queue was full.</summary>
+    internal long EgressCachePopulateDroppedCount => _egress.PopulateDroppedCount;
+
+    /// <summary>Egress entries removed to free cache space.</summary>
+    internal long EgressCacheEvictionCount => _egress.EvictionCount;
+
+    /// <summary>Egress entries dropped for identity, incarnation, or logical death.</summary>
+    internal long EgressCacheInvalidationCount => _egress.InvalidationCount;
+
+    /// <summary>Egress records rejected by framing or ArtHash.</summary>
+    internal long EgressCacheCorruptionCount => _egress.CorruptionCount;
+
+    /// <summary>Live egress occupancy in bytes.</summary>
+    internal long EgressCacheBytes => _egress.CacheBytes;
+
+    /// <summary>Configured egress occupancy ceiling.</summary>
+    internal long EgressCacheCapacityBytes => _egress.CapacityBytes;
+
+    /// <summary>Configured ControlDir free-space reserve for the egress cache.</summary>
+    internal long EgressCacheReserveBytes => _egress.ReserveBytes;
+
+    /// <summary>Live egress entry count.</summary>
+    internal int EgressCacheEntryCount => _egress.EntryCount;
+
+    /// <summary>Egress fills refused by capacity, reserve, or the ControlDir floor.</summary>
+    internal long EgressCacheAdmissionRejectedCount => _egress.AdmissionRejectedCount;
 
     /// <summary>Callers that joined an in-flight published-segment read instead of starting one.</summary>
     internal long ArticleReadCoalescedCount => _physicalReads.CoalescedCount;
@@ -1455,6 +1504,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// Cap on simultaneous in-flight published-segment reads and on waiters per article.
     /// Null uses <see cref="ArticlePhysicalReadCoalescer.DefaultMaxInFlight"/>.
     /// </param>
+    /// <param name="egressCache">
+    /// NVMe egress-cache limits. Null or a zero capacity leaves the cache off.
+    /// A failure to replace <c>live/</c> disables the cache and still opens the engine.
+    /// </param>
     internal static FileArticleStorageEngine Open(
         ArticleStorageRuntimeOptions options,
         IStorageVolumeProbe? volumeProbe,
@@ -1463,7 +1516,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         ILogger? logger = null,
         TimeProvider? timeProvider = null,
         IArticleMemoryCache? articleCache = null,
-        int? maxConcurrentPhysicalReads = null)
+        int? maxConcurrentPhysicalReads = null,
+        EgressCacheStart? egressCache = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ControlDir);
@@ -1473,6 +1527,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         FileArticleJournal? journal = null;
         FileSegmentStore? segments = null;
         FileArticleIndex? index = null;
+        ArticleEgressCache? openedEgress = null;
         try
         {
             journal = FileArticleJournal.Open(options, log);
@@ -1484,6 +1539,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 capacityReader,
                 controlCapacityReader,
                 volumeProbe);
+            openedEgress = egressCache is null
+                ? ArticleEgressCache.Disabled
+                : ArticleEgressCache.Open(egressCache, log);
 
             var engine = new FileArticleStorageEngine(
                 journal,
@@ -1498,7 +1556,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 options.CapacityCompactionHeadroom,
                 options.CapacityMaximumUsageCapacity,
                 options.CapacityFreeCapacity,
-                new BulkStoragePressurePolicy(options.BulkPressure));
+                new BulkStoragePressurePolicy(options.BulkPressure),
+                openedEgress);
+            openedEgress = null;
             var knownSegments = new HashSet<ulong>();
             foreach (var info in segments.Catalogue.Snapshot())
             {
@@ -1521,6 +1581,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         }
         catch
         {
+            openedEgress?.Dispose();
             index?.Dispose();
             segments?.Dispose();
             journal?.Dispose();
@@ -1723,7 +1784,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     if (existing.ArtHash == record.ArtHash && existing.ArtSize == record.ArtSize)
                     {
                         // Idempotent duplicate: best-effort LRU refresh; never replace with conflict.
-                        _ = _articleCache.Put(in record);
+                        var duplicateCache = _articleCache.Put(in record);
+                        if (duplicateCache is ArticleMemoryCachePutOutcome.Inserted
+                            or ArticleMemoryCachePutOutcome.IdempotentNoOp)
+                        {
+                            RememberRamSequence(record.ArtId, existing.Sequence);
+                        }
+
                         return Task.FromResult(ArticleAcceptResult.Duplicate(record.ArtId));
                     }
 
@@ -2475,44 +2542,74 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// <param name="result">Proved article when this returns true.</param>
     /// <returns>True when the cache or the published segment served the article.</returns>
     /// <remarks>
-    /// A cache hit is returned only when the index still publishes the same identity as Present.
-    /// Any other cache entry is removed. A missing or non-Present index row returns false
-    /// without consulting the journal. A Present miss shares one physical segment read among
-    /// concurrent callers of <paramref name="artId"/>.
+    /// The index is checked before either cache. A hit is returned only when that row is
+    /// Present and the stored bytes match its sequence, ArtHash, and ArtSize. A RAM hit also
+    /// requires the sequence recorded when this process published the entry. Any other cached
+    /// bytes are removed. A missing or non-Present index row returns false without consulting
+    /// the journal. A RAM miss may return a verified egress copy. An egress miss shares one
+    /// physical segment read among concurrent callers of <paramref name="artId"/>.
     /// </remarks>
     private bool TryReadPublished(ArticleId artId, CancellationToken cancellationToken, out ArticleReadResult result)
     {
         result = default;
-
-        if (_articleCache.TryGet(artId, out var cached))
+        if (!_index.TryGet(artId, out var metadata) || metadata.State != ArticleStorageState.Present)
         {
-            var cacheCoherent = _index.TryGet(artId, out var cachedIndexMeta)
-                && cachedIndexMeta.State == ArticleStorageState.Present
-                && cachedIndexMeta.ArtHash == cached.ArtHash
-                && cachedIndexMeta.ArtSize == cached.ArtSize;
-            if (!cacheCoherent)
+            if (_articleCache.TryGet(artId, out _))
             {
                 BestEffortCacheRemove(artId);
             }
             else
             {
-                result = new ArticleReadResult(
-                    new StoredArticleMetadata(
-                        cached.ArtId,
-                        cached.ArtHash,
-                        cached.ArtSize,
-                        cachedIndexMeta.Location,
-                        ArticleStorageState.Present,
-                        _timeProvider.GetUtcNow(),
-                        cachedIndexMeta.Sequence,
-                        cachedIndexMeta.AcceptedUtc),
-                    cached.ArtData);
-                Interlocked.Increment(ref _cacheArticleReadCount);
-                return true;
+                DropEgress(artId);
             }
+
+            return false;
         }
 
-        if (!_index.TryGet(artId, out var metadata) || metadata.State != ArticleStorageState.Present)
+        var ramHit = _articleCache.TryGet(artId, out var cached);
+        if (ramHit
+            && cached.ArtHash == metadata.ArtHash
+            && cached.ArtSize == metadata.ArtSize
+            && TryGetRamSequence(artId, out var ramSequence)
+            && ramSequence == metadata.Sequence)
+        {
+            result = new ArticleReadResult(
+                new StoredArticleMetadata(
+                    cached.ArtId,
+                    cached.ArtHash,
+                    cached.ArtSize,
+                    metadata.Location,
+                    ArticleStorageState.Present,
+                    _timeProvider.GetUtcNow(),
+                    metadata.Sequence,
+                    metadata.AcceptedUtc),
+                cached.ArtData);
+            Interlocked.Increment(ref _cacheArticleReadCount);
+            return true;
+        }
+
+        if (ramHit)
+        {
+            BestEffortCacheRemove(artId, dropEgress: false);
+        }
+
+        if (_egress.IsEnabled
+            && _egress.TryCopy(artId, metadata.Sequence, metadata.ArtHash, metadata.ArtSize, out var egressBytes))
+        {
+            if (_index.TryGet(artId, out var live)
+                && live.State == ArticleStorageState.Present
+                && live.Sequence == metadata.Sequence
+                && live.ArtHash == metadata.ArtHash
+                && live.ArtSize == metadata.ArtSize)
+            {
+                result = new ArticleReadResult(live, egressBytes);
+                return true;
+            }
+
+            DropEgress(artId);
+        }
+
+        if (!_index.TryGet(artId, out metadata) || metadata.State != ArticleStorageState.Present)
         {
             return false;
         }
@@ -2741,6 +2838,21 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         if (TryCreateCacheRecord(in published, artData, out var cacheRecord))
         {
             _ = PublishCreatedCacheRecord(in cacheRecord);
+        }
+
+        try
+        {
+            _egress.ConsiderFill(
+                published.ArtId,
+                published.Sequence,
+                published.ArtHash,
+                published.ArtSize,
+                artData.Span,
+                _physicalReads.CurrentWaiters(published.ArtId));
+        }
+        catch (Exception)
+        {
+            // A cache fill must not fail the article that was already proved.
         }
 
         return true;
@@ -3212,6 +3324,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
         _workerCts.Dispose();
         _workerSignal.Dispose();
+        _egress.Dispose();
         _index.Dispose();
         _segments.Dispose();
         _journal.Dispose();
@@ -4361,14 +4474,19 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
-    /// Removes <paramref name="artId"/> from the process-local cache without affecting durable
-    /// outcomes. On unexpected failure, clears the whole cache as a coherence salvage.
+    /// Removes <paramref name="artId"/> from the process-local caches without affecting durable
+    /// outcomes. On unexpected RAM failure, clears the whole RAM cache as a coherence salvage.
     /// </summary>
-    private void BestEffortCacheRemove(ArticleId artId)
+    private void BestEffortCacheRemove(ArticleId artId, bool dropEgress = true)
     {
+        if (dropEgress)
+        {
+            DropEgress(artId);
+        }
         try
         {
             _ = _articleCache.Remove(artId);
+            ForgetRamSequence(artId);
         }
         catch (Exception)
         {
@@ -4381,6 +4499,56 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 // Cache is non-authoritative; durable state already reflects logical death when
                 // this runs after TrySetState. TryRead also drops Evicted/Invalid cache hits.
             }
+
+            ClearRamSequences();
+        }
+    }
+
+    /// <summary>Drops one egress entry. A failure leaves the authoritative article untouched.</summary>
+    private void DropEgress(ArticleId artId)
+    {
+        try
+        {
+            _egress.Drop(artId);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>Records the sequence of a RAM entry this process kept.</summary>
+    private void RememberRamSequence(ArticleId artId, ulong sequence)
+    {
+        lock (_ramSequenceGate)
+        {
+            _ramSequences[artId] = sequence;
+        }
+    }
+
+    /// <summary>Reads the sequence recorded for a RAM entry.</summary>
+    private bool TryGetRamSequence(ArticleId artId, out ulong sequence)
+    {
+        lock (_ramSequenceGate)
+        {
+            return _ramSequences.TryGetValue(artId, out sequence);
+        }
+    }
+
+    /// <summary>Forgets one RAM sequence companion.</summary>
+    private void ForgetRamSequence(ArticleId artId)
+    {
+        lock (_ramSequenceGate)
+        {
+            _ = _ramSequences.Remove(artId);
+        }
+    }
+
+    /// <summary>Forgets every RAM sequence companion.</summary>
+    private void ClearRamSequences()
+    {
+        lock (_ramSequenceGate)
+        {
+            _ramSequences.Clear();
         }
     }
 
@@ -4394,12 +4562,17 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// </remarks>
     private ArticleMemoryCachePutOutcome PublishCreatedCacheRecord(in ArticleRecord record)
     {
-        if (_articleCache is IArticleMemoryCacheAdoption adoption)
+        var outcome = _articleCache is IArticleMemoryCacheAdoption adoption
+            ? adoption.AdoptOwned(in record)
+            : _articleCache.Put(in record);
+        if (outcome is ArticleMemoryCachePutOutcome.Inserted or ArticleMemoryCachePutOutcome.IdempotentNoOp
+            && _index.TryGet(record.ArtId, out var metadata)
+            && metadata.State == ArticleStorageState.Present)
         {
-            return adoption.AdoptOwned(in record);
+            RememberRamSequence(record.ArtId, metadata.Sequence);
         }
 
-        return _articleCache.Put(in record);
+        return outcome;
     }
 
     /// <summary>

@@ -101,7 +101,11 @@ public sealed class FileArticleStorageEngineCacheTests
         await using (var engineA = FileArticleStorageEngine.Open(dir.Options, articleCache: cache))
         {
             await AcceptAndDrainAsync(engineA, record);
-            Assert.True(engineA.TryRead(record.ArtId, out _));
+            engineA.TestFailNextIndexedProvenReads = 1;
+            Assert.True(engineA.TryRead(record.ArtId, out var read));
+            Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+            Assert.Equal(0, engineA.SegmentArticleReadCount);
+            Assert.Equal(1, engineA.TestFailNextIndexedProvenReads);
         }
 
         foreach (var path in Directory.EnumerateFiles(dir.Options.SegmentDir, "seg-*"))
@@ -110,8 +114,8 @@ public sealed class FileArticleStorageEngineCacheTests
         }
 
         await using var engineB = FileArticleStorageEngine.Open(dir.Options, articleCache: cache);
-        Assert.True(engineB.TryRead(record.ArtId, out var read));
-        Assert.True(read.ArtData.Span.SequenceEqual(record.ArtData.Span));
+        Assert.False(engineB.TryRead(record.ArtId, out _));
+        Assert.False(cache.Inner.TryGet(record.ArtId, out _));
     }
 
     [Fact]
