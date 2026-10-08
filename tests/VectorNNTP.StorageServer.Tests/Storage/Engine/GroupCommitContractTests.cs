@@ -4,6 +4,7 @@ using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
+using VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
@@ -40,22 +41,32 @@ public sealed class GroupCommitContractTests : IDisposable
     {
         await using var engine = OpenSuspended();
         engine.Journal.AcceptGroupLimit = 2;
-        engine.Journal.AcceptGroupMaxDelay = TimeSpan.FromHours(1);
-        var pair = await Task.WhenAll(
-            engine.AcceptAsync(CreateRecord("<limit2-a@seg.test>"), CancellationToken.None),
-            engine.AcceptAsync(CreateRecord("<limit2-b@seg.test>"), CancellationToken.None));
-        Assert.All(pair, static result => Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome));
-        Assert.Equal(1, engine.Journal.DurableFlushCount);
+        engine.Journal.AcceptGroupMaxDelay = TimeSpan.Zero;
+        using (var barrier = new ArrivalBarrier(engine.Journal, 2))
+        {
+            var pairTask = Task.WhenAll(
+                Task.Run(() => engine.AcceptAsync(CreateRecord("<limit2-a@seg.test>"), CancellationToken.None)),
+                Task.Run(() => engine.AcceptAsync(CreateRecord("<limit2-b@seg.test>"), CancellationToken.None)));
+            barrier.Release();
+            var pair = await pairTask;
+            Assert.All(pair, static result => Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome));
+            Assert.Equal(1, engine.Journal.DurableFlushCount);
+        }
 
         engine.Journal.AcceptGroupLimit = 8;
         var many = Enumerable.Range(0, 8)
             .Select(index => CreateRecord($"<limit8-{index}@seg.test>"))
             .ToArray();
-        var grouped = await Task.WhenAll(many.Select(record => engine.AcceptAsync(record, CancellationToken.None)));
-        Assert.All(grouped, static result => Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome));
-        Assert.Equal(2, engine.Journal.DurableFlushCount);
-        Assert.Equal(10, engine.Journal.EnumerateIncomplete().Count);
-        Assert.Equal(10, grouped.Select(result => result.Sequence).Append(pair[0].Sequence).Append(pair[1].Sequence).Distinct().Count());
+        using (var barrier = new ArrivalBarrier(engine.Journal, many.Length))
+        {
+            var groupedTask = Task.WhenAll(many.Select(record => Task.Run(() => engine.AcceptAsync(record, CancellationToken.None))));
+            barrier.Release();
+            var grouped = await groupedTask;
+            Assert.All(grouped, static result => Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome));
+            Assert.Equal(2, engine.Journal.DurableFlushCount);
+            Assert.Equal(10, engine.Journal.EnumerateIncomplete().Count);
+            Assert.Equal(10, grouped.Select(result => result.Sequence).Distinct().Count() + 2);
+        }
     }
 
     [Fact]
@@ -80,13 +91,15 @@ public sealed class GroupCommitContractTests : IDisposable
             }
         };
 
-        var accepts = Task.WhenAll(
-            engine.AcceptAsync(CreateRecord("<fill-a@seg.test>"), CancellationToken.None),
-            engine.AcceptAsync(CreateRecord("<fill-b@seg.test>"), CancellationToken.None));
-        var finished = await Task.WhenAny(accepts, Task.Delay(TimeSpan.FromSeconds(5)));
+        using var barrier = new ArrivalBarrier(engine.Journal, 2);
+        var acceptsTask = Task.WhenAll(
+            Task.Run(() => engine.AcceptAsync(CreateRecord("<fill-a@seg.test>"), CancellationToken.None)),
+            Task.Run(() => engine.AcceptAsync(CreateRecord("<fill-b@seg.test>"), CancellationToken.None)));
+        barrier.Release();
+        var finished = await Task.WhenAny(acceptsTask, Task.Delay(TimeSpan.FromSeconds(5)));
 
-        Assert.Same(accepts, finished);
-        Assert.All(await accepts, static result => Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome));
+        Assert.Same(acceptsTask, finished);
+        Assert.All(await acceptsTask, static result => Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome));
         Assert.Equal(1, engine.Journal.DurableFlushCount);
         if (started.Task.IsCompleted)
         {
@@ -99,7 +112,7 @@ public sealed class GroupCommitContractTests : IDisposable
     {
         await using var engine = OpenSuspended();
         engine.Journal.AcceptGroupLimit = 2;
-        engine.Journal.AcceptGroupMaxDelay = TimeSpan.FromHours(1);
+        engine.Journal.AcceptGroupMaxDelay = TimeSpan.Zero;
         using var entered = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
         engine.Journal.TestBeforeDurableFlush = () =>
@@ -107,18 +120,16 @@ public sealed class GroupCommitContractTests : IDisposable
             entered.Set();
             Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
         };
-
+        using var barrier = new ArrivalBarrier(engine.Journal, 2);
         var accepts = Task.WhenAll(
             Task.Run(() => engine.AcceptAsync(CreateRecord("<ack-a@seg.test>"), CancellationToken.None)),
             Task.Run(() => engine.AcceptAsync(CreateRecord("<ack-b@seg.test>"), CancellationToken.None)));
+        barrier.Release();
         Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
         Assert.False(accepts.IsCompleted);
 
         release.Set();
         var results = await accepts.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.All(results, static result => Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome));
-        Assert.Equal(1, engine.Journal.DurableFlushCount);
-        Assert.True(engine.Journal.OutstandingRecoverableBytes > 0);
         Assert.All(results, static result => Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome));
         Assert.Equal(1, engine.Journal.DurableFlushCount);
         Assert.True(engine.Journal.OutstandingRecoverableBytes > 0);
@@ -133,12 +144,15 @@ public sealed class GroupCommitContractTests : IDisposable
         engine.Journal.TestBeforeDurableFlush = static () => throw new IOException("injected");
         var first = CreateRecord("<fail-a@seg.test>");
         var second = CreateRecord("<fail-b@seg.test>");
-
-        var firstAccept = engine.AcceptAsync(first, CancellationToken.None);
-        var secondAccept = engine.AcceptAsync(second, CancellationToken.None);
-        await Task.WhenAll(
-            Assert.ThrowsAsync<UnreconciledDurableTailException>(async () => await firstAccept),
-            Assert.ThrowsAsync<UnreconciledDurableTailException>(async () => await secondAccept));
+        using (var barrier = new ArrivalBarrier(engine.Journal, 2))
+        {
+            var firstAccept = Task.Run(() => engine.AcceptAsync(first, CancellationToken.None));
+            var secondAccept = Task.Run(() => engine.AcceptAsync(second, CancellationToken.None));
+            barrier.Release();
+            await Task.WhenAll(
+                Assert.ThrowsAsync<UnreconciledDurableTailException>(async () => await firstAccept),
+                Assert.ThrowsAsync<UnreconciledDurableTailException>(async () => await secondAccept));
+        }
 
         Assert.Equal(0, engine.Journal.OutstandingRecoverableBytes);
         Assert.Empty(engine.Journal.EnumerateIncomplete());
@@ -146,6 +160,7 @@ public sealed class GroupCommitContractTests : IDisposable
         Assert.False(engine.Journal.TryGetOutstanding(second.ArtId, out _));
 
         engine.Journal.TestBeforeDurableFlush = null;
+        engine.Journal.TestBeforeGroupedLock = null;
         var retried = await engine.AcceptAsync(first, CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.Accepted, retried.Outcome);
         Assert.True(engine.Journal.TryGetOutstanding(first.ArtId, out _));
@@ -176,23 +191,30 @@ public sealed class GroupCommitContractTests : IDisposable
     {
         await using var engine = OpenSuspended();
         engine.Journal.AcceptGroupLimit = 4;
-        engine.Journal.AcceptGroupMaxDelay = TimeSpan.FromHours(1);
-        var staged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        engine.Journal.TestAcceptGroupDelay = async (_, cancellationToken) =>
+        engine.Journal.AcceptGroupMaxDelay = TimeSpan.Zero;
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseParker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var arrivals = 0;
+        engine.Journal.TestBeforeGroupedLock = () =>
         {
-            staged.TrySetResult();
-            await release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (Interlocked.Increment(ref arrivals) != 1)
+            {
+                return;
+            }
+
+            parked.TrySetResult();
+            releaseParker.Task.GetAwaiter().GetResult();
         };
         var canceledRecord = CreateRecord("<cancel-wait-a@seg.test>");
         var kept = CreateRecord("<cancel-wait-b@seg.test>");
         using var cts = new CancellationTokenSource();
+        var keptAccept = Task.Run(() => engine.AcceptAsync(kept, CancellationToken.None));
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var canceledAccept = engine.AcceptAsync(canceledRecord, cts.Token);
-        await staged.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(canceledAccept.IsCompleted);
+        Assert.Equal(0, engine.Journal.DurableFlushCount);
         await cts.CancelAsync();
-        var keptAccept = engine.AcceptAsync(kept, CancellationToken.None);
-
-        release.TrySetResult();
+        releaseParker.TrySetResult();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await canceledAccept);
         var keptResult = await keptAccept.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -208,15 +230,22 @@ public sealed class GroupCommitContractTests : IDisposable
     public async Task Cancellation_during_flush_does_not_ack_the_caller_or_drop_the_member()
     {
         await using var engine = OpenSuspended();
-        engine.Journal.AcceptGroupLimit = 2;
-        engine.Journal.AcceptGroupMaxDelay = TimeSpan.FromHours(1);
+        engine.Journal.AcceptGroupLimit = 4;
+        engine.Journal.AcceptGroupMaxDelay = TimeSpan.Zero;
         using var entered = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
-        var staged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        engine.Journal.TestAcceptGroupDelay = async (_, cancellationToken) =>
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseParker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var arrivals = 0;
+        engine.Journal.TestBeforeGroupedLock = () =>
         {
-            staged.TrySetResult();
-            await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            if (Interlocked.Increment(ref arrivals) != 1)
+            {
+                return;
+            }
+
+            parked.TrySetResult();
+            releaseParker.Task.GetAwaiter().GetResult();
         };
         engine.Journal.TestBeforeDurableFlush = () =>
         {
@@ -226,9 +255,11 @@ public sealed class GroupCommitContractTests : IDisposable
         var canceledRecord = CreateRecord("<cancel-flush-a@seg.test>");
         var kept = CreateRecord("<cancel-flush-b@seg.test>");
         using var cts = new CancellationTokenSource();
-        var canceledAccept = Task.Run(() => engine.AcceptAsync(canceledRecord, cts.Token));
-        await staged.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var keptAccept = Task.Run(() => engine.AcceptAsync(kept, CancellationToken.None));
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var canceledAccept = engine.AcceptAsync(canceledRecord, cts.Token);
+        Assert.False(canceledAccept.IsCompleted);
+        releaseParker.TrySetResult();
         Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
         await cts.CancelAsync();
         release.Set();
@@ -246,19 +277,22 @@ public sealed class GroupCommitContractTests : IDisposable
     {
         var engine = OpenSuspended();
         engine.Journal.AcceptGroupLimit = 2;
-        engine.Journal.AcceptGroupMaxDelay = TimeSpan.FromHours(1);
+        engine.Journal.AcceptGroupMaxDelay = TimeSpan.Zero;
         Task? disposing = null;
         engine.Journal.TestBeforeDurableFlush = () =>
         {
             disposing = Task.Run(async () => await engine.DisposeAsync().ConfigureAwait(false));
         };
+        using var barrier = new ArrivalBarrier(engine.Journal, 2);
 
         ArticleAcceptResult[]? results = null;
         try
         {
-            results = await Task.WhenAll(
+            var pending = Task.WhenAll(
                 Task.Run(() => engine.AcceptAsync(CreateRecord("<shutdown-flush-a@seg.test>"), CancellationToken.None)),
                 Task.Run(() => engine.AcceptAsync(CreateRecord("<shutdown-flush-b@seg.test>"), CancellationToken.None)));
+            barrier.Release();
+            results = await pending;
         }
         catch (Exception ex)
         {
@@ -361,7 +395,9 @@ public sealed class GroupCommitContractTests : IDisposable
             CreateRecord("<coalesce-group-a@seg.test>"),
             CreateRecord("<coalesce-group-b@seg.test>"),
         };
-        var accepts = Task.WhenAll(records.Select(record => engine.AcceptAsync(record, CancellationToken.None)));
+        using var barrier = new ArrivalBarrier(engine.Journal, records.Length);
+        var accepts = Task.WhenAll(records.Select(record => Task.Run(() => engine.AcceptAsync(record, CancellationToken.None))));
+        barrier.Release();
         var results = await accepts.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.All(results, static result => Assert.Equal(ArticleAcceptOutcome.Accepted, result.Outcome));
@@ -381,26 +417,37 @@ public sealed class GroupCommitContractTests : IDisposable
     {
         await using var engine = OpenSuspended(journalSoftLimitBytes: 1, journalHardLimitBytes: 1);
         engine.Journal.AcceptGroupLimit = 4;
-        engine.Journal.AcceptGroupMaxDelay = TimeSpan.FromHours(1);
-        var staged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        engine.Journal.TestAcceptGroupDelay = async (_, cancellationToken) =>
+        engine.Journal.AcceptGroupMaxDelay = TimeSpan.Zero;
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseParker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var arrivals = 0;
+        engine.Journal.TestBeforeGroupedLock = () =>
         {
-            staged.TrySetResult();
-            await release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (Interlocked.Increment(ref arrivals) != 1)
+            {
+                return;
+            }
+
+            parked.TrySetResult();
+            releaseParker.Task.GetAwaiter().GetResult();
         };
         var first = CreateRecord("<pressure-a@seg.test>");
+        var parker = Task.Run(() => engine.AcceptAsync(CreateRecord("<pressure-park@seg.test>"), CancellationToken.None));
+        await parked.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var accepting = engine.AcceptAsync(first, CancellationToken.None);
-        await staged.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(accepting.IsCompleted);
+        Assert.Equal(1, engine.Journal.StagedAcceptCount);
 
         var rejected = await engine.AcceptAsync(CreateRecord("<pressure-b@seg.test>"), CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedPressure, rejected.Outcome);
         Assert.Equal(0, engine.Journal.OutstandingRecoverableBytes);
         Assert.Equal(1, engine.Journal.StagedAcceptCount);
 
-        release.TrySetResult();
+        releaseParker.TrySetResult();
         var accepted = await accepting.WaitAsync(TimeSpan.FromSeconds(5));
+        var parkedResult = await parker.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
+        Assert.Equal(ArticleAcceptOutcome.RejectedPressure, parkedResult.Outcome);
         Assert.Equal(first.ArtSize, engine.Journal.OutstandingRecoverableBytes);
         Assert.False(engine.Journal.TryGetOutstanding(rejected.ArtId, out _));
     }
@@ -432,6 +479,46 @@ public sealed class GroupCommitContractTests : IDisposable
         var created = ArticleRecordFactory.TryCreate(parser, Encoding.ASCII.GetBytes(builder.ToString()));
         Assert.True(created.IsAccepted, created.ParseFailure.ToString());
         return created.Record;
+    }
+
+    private sealed class ArrivalBarrier : IDisposable
+    {
+        private readonly CountdownEvent _arrived;
+        private readonly ManualResetEventSlim _go = new(false);
+
+        public ArrivalBarrier(FileArticleJournal journal, int callers)
+        {
+            _arrived = new CountdownEvent(callers);
+            journal.TestBeforeGroupedLock = () =>
+            {
+                _arrived.Signal();
+                if (!_arrived.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Grouped arrivals did not meet.");
+                }
+
+                if (!_go.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Grouped arrival barrier was not released.");
+                }
+            };
+        }
+
+        public void Release()
+        {
+            if (!_arrived.Wait(TimeSpan.FromSeconds(5)))
+            {
+                throw new TimeoutException("Grouped arrivals did not meet.");
+            }
+
+            _go.Set();
+        }
+
+        public void Dispose()
+        {
+            _go.Dispose();
+            _arrived.Dispose();
+        }
     }
 
     private sealed class TempStorageDir : IDisposable

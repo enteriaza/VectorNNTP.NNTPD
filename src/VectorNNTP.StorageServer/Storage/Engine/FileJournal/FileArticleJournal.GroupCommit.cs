@@ -54,9 +54,10 @@ public sealed partial class FileArticleJournal
     }
 
     /// <summary>
-    /// Upper bound on how long the first staged Accept waits for another article before
-    /// the open group is flushed. <see cref="TimeSpan.Zero"/> flushes each staged Accept
-    /// immediately, so concurrent callers do not coalesce.
+    /// Fallback bound used only after another Accept is already in the arrival section.
+    /// A lone Accept flushes immediately and does not arm this delay.
+    /// <see cref="TimeSpan.Zero"/> adds no timer. Concurrent callers already waiting on
+    /// the journal lock still share one flush, up to <see cref="AcceptGroupLimit"/>.
     /// </summary>
     internal TimeSpan AcceptGroupMaxDelay
     {
@@ -92,11 +93,18 @@ public sealed partial class FileArticleJournal
 
     /// <summary>
     /// Replaces <see cref="Task.Delay(TimeSpan, CancellationToken)"/> for the group-commit
-    /// bound. Tests only. The production path is null.
+    /// fallback bound. Tests only. The production path is null.
     /// </summary>
     internal Func<TimeSpan, CancellationToken, Task>? TestAcceptGroupDelay { get; set; }
 
+    /// <summary>
+    /// Runs after <see cref="EnterGroupedAccept"/> and before the engine gate.
+    /// <see cref="VectorNNTP.StorageServer.Storage.Engine.Durable.FileArticleStorageEngine"/> invokes it. Tests only. The production path is null.
+    /// </summary>
+    internal Action? TestBeforeGroupedLock { get; set; }
+
     private int _acceptGroupLimit = 1;
+    private int _groupedAcceptArrivals;
     private long _acceptGroupMaxBytes = long.MaxValue;
     private TimeSpan _acceptGroupMaxDelay = TimeSpan.Zero;
     private long _stagedRecoverableBytes;
@@ -104,10 +112,26 @@ public sealed partial class FileArticleJournal
     private AcceptCommitGroup? _failedAcceptGroup;
     private readonly Dictionary<ArticleId, JournalAcceptRecord> _stagedArtIds = new();
 
+    /// <summary>Counts an Accept that has reached the grouped path and has not yet left it.</summary>
+    internal void EnterGroupedAccept() => Interlocked.Increment(ref _groupedAcceptArrivals);
+
+    /// <summary>
+    /// Drops one grouped arrival. The last departure flushes a group that was left open for a caller
+    /// that did not append.
+    /// </summary>
+    internal void ExitGroupedAccept()
+    {
+        if (Interlocked.Decrement(ref _groupedAcceptArrivals) == 0)
+        {
+            FlushLingeringAcceptGroup();
+        }
+    }
+
     /// <summary>
     /// Stages one Accept. The returned task completes only after the group's durability
     /// flush has returned and the record is readable as outstanding. A rejection completes
     /// successfully with <see cref="GroupedJournalAccept.Appended"/> false and does not write.
+    /// The caller has already called <see cref="EnterGroupedAccept"/>.
     /// </summary>
     internal Task<GroupedJournalAccept> StageGroupedAccept(
         ArticleId artId,
@@ -121,6 +145,20 @@ public sealed partial class FileArticleJournal
             return Task.FromResult(GroupedJournalAccept.Rejected(ArticleAcceptOutcome.RejectedInvalid));
         }
 
+        return StageGroupedAcceptUnderLock(artId, artHash, artSize, utcNow, artData);
+    }
+
+    /// <summary>
+    /// Appends one Accept and flushes when the group is full, this caller is alone, or the
+    /// fallback delay is not needed. The caller already holds an arrival count.
+    /// </summary>
+    private Task<GroupedJournalAccept> StageGroupedAcceptUnderLock(
+        ArticleId artId,
+        ulong artHash,
+        int artSize,
+        DateTimeOffset utcNow,
+        ReadOnlyMemory<byte> artData)
+    {
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -188,19 +226,35 @@ public sealed partial class FileArticleJournal
             _stagedArtIds[artId] = accept;
             var slot = new AcceptGroupSlot(accept, encoded);
             group.Slots.Add(slot);
-            var full = group.Slots.Count >= _acceptGroupLimit
-                || _stagedRecoverableBytes >= _acceptGroupMaxBytes
-                || _acceptGroupMaxDelay <= TimeSpan.Zero;
-            if (full)
+            var arrivals = Volatile.Read(ref _groupedAcceptArrivals);
+            var reachedBound = group.Slots.Count >= _acceptGroupLimit
+                || _stagedRecoverableBytes >= _acceptGroupMaxBytes;
+            if (reachedBound || arrivals <= 1)
             {
                 FlushOpenAcceptGroupUnlocked();
             }
-            else if (group.Slots.Count == 1)
+            else if (group.Slots.Count == 1 && _acceptGroupMaxDelay > TimeSpan.Zero)
             {
                 ArmAcceptGroupDelayUnlocked(group);
             }
 
             return slot.Done.Task;
+        }
+    }
+
+    /// <summary>
+    /// Flushes a group left open for a caller that left the arrival section without appending.
+    /// </summary>
+    private void FlushLingeringAcceptGroup()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            FlushOpenAcceptGroupIfAnyUnlocked();
         }
     }
 

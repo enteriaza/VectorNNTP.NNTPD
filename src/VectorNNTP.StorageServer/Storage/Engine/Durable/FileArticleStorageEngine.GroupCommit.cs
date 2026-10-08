@@ -9,7 +9,8 @@ public sealed partial class FileArticleStorageEngine
 {
     /// <summary>
     /// Accept path used when <see cref="FileArticleJournal.AcceptGroupLimit"/> is greater than one.
-    /// The engine gate is not held while this call waits for the shared journal flush.
+    /// Arrival is counted before the engine gate so a concurrent caller is visible. The gate is not
+    /// held while this call waits for the shared journal flush.
     /// </summary>
     private async Task<ArticleAcceptResult> AcceptGroupedAsync(
         ArticleRecord record,
@@ -26,72 +27,81 @@ public sealed partial class FileArticleStorageEngine
         var journalBytes = 0L;
         var indexBytes = 0L;
         Task<GroupedJournalAccept>? durability = null;
-        lock (_gate)
+        _journal.EnterGroupedAccept();
+        try
         {
-            if (_index.TryGet(record.ArtId, out var existing)
-                && existing.State == ArticleStorageState.Present)
+            _journal.TestBeforeGroupedLock?.Invoke();
+            lock (_gate)
             {
-                if (existing.ArtHash == record.ArtHash && existing.ArtSize == record.ArtSize)
+                if (_index.TryGet(record.ArtId, out var existing)
+                    && existing.State == ArticleStorageState.Present)
                 {
-                    _ = _articleCache.Put(in record);
-                    return ArticleAcceptResult.Duplicate(record.ArtId);
-                }
-
-                return ArticleAcceptResult.Conflict(record.ArtId);
-            }
-
-            if (_capacityAdmissionEnabled)
-            {
-                segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
-                journalBytes = ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize);
-                indexBytes = ArticleIndexRecordCodec.RecordLength;
-                if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
-                {
-                    if (TryResolveOutstandingAccept(record, out var outstandingGrouped))
+                    if (existing.ArtHash == record.ArtHash && existing.ArtSize == record.ArtSize)
                     {
-                        return outstandingGrouped;
+                        _ = _articleCache.Put(in record);
+                        return ArticleAcceptResult.Duplicate(record.ArtId);
                     }
 
-                    return RejectCapacityAdmission(record, recoveryAttempted, recoveryReclaimedSpace);
+                    return ArticleAcceptResult.Conflict(record.ArtId);
                 }
 
-                reservedSegment = true;
-                reservedJournal = true;
-                reservedIndex = true;
-            }
+                if (_capacityAdmissionEnabled)
+                {
+                    segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
+                    journalBytes = ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize);
+                    indexBytes = ArticleIndexRecordCodec.RecordLength;
+                    if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
+                    {
+                        if (TryResolveOutstandingAccept(record, out var outstandingGrouped))
+                        {
+                            return outstandingGrouped;
+                        }
 
-            if (cancellationToken.IsCancellationRequested)
-            {
-                RollbackUnboundAccept(
-                    reservedSegment,
-                    reservedJournal,
-                    reservedIndex,
-                    segmentBytes,
-                    journalBytes,
-                    indexBytes);
-                throw new OperationCanceledException(cancellationToken);
-            }
+                        return RejectCapacityAdmission(record, recoveryAttempted, recoveryReclaimedSpace);
+                    }
 
-            try
-            {
-                durability = _journal.StageGroupedAccept(
-                    record.ArtId,
-                    record.ArtHash,
-                    record.ArtSize,
-                    _timeProvider.GetUtcNow(),
-                    artData);
+                    reservedSegment = true;
+                    reservedJournal = true;
+                    reservedIndex = true;
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    RollbackUnboundAccept(
+                        reservedSegment,
+                        reservedJournal,
+                        reservedIndex,
+                        segmentBytes,
+                        journalBytes,
+                        indexBytes);
+                    throw new OperationCanceledException(cancellationToken);
+                }
+
+                try
+                {
+                    durability = _journal.StageGroupedAccept(
+                        record.ArtId,
+                        record.ArtHash,
+                        record.ArtSize,
+                        _timeProvider.GetUtcNow(),
+                        artData);
+                }
+                catch
+                {
+                    RollbackUnboundAccept(
+                        reservedSegment,
+                        reservedJournal,
+                        reservedIndex,
+                        segmentBytes,
+                        journalBytes,
+                        indexBytes);
+                    throw;
+                }
             }
-            catch
-            {
-                RollbackUnboundAccept(
-                    reservedSegment,
-                    reservedJournal,
-                    reservedIndex,
-                    segmentBytes,
-                    journalBytes,
-                    indexBytes);
-                throw;
-            }
+        }
+        finally
+        {
+            _journal.ExitGroupedAccept();
         }
 
         GroupFlushObservation observation;
