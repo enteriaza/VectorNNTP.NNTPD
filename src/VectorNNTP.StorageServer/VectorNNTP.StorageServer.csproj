@@ -20,6 +20,7 @@
     <InternalsVisibleTo Include="VectorNNTP.StorageServer.Tests" />
     <InternalsVisibleTo Include="VectorNNTP.StorageServer.PersistenceBench" />
     <InternalsVisibleTo Include="VectorNNTP.StorageServer.RetentionScale" />
+    <InternalsVisibleTo Include="VectorNNTP.StorageServer.ClosedAccountingScale" />
   </ItemGroup>
 
   <ItemGroup>

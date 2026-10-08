@@ -247,21 +247,28 @@ internal static class SegmentRecordCodec
         Corrupt = 4,
     }
 
-    /// <summary>Tries to decode one record at the start of <paramref name="span"/>.</summary>
-    public static bool TryDecode(
+    /// <summary>
+    /// Proves one complete physical record at the start of <paramref name="span"/> and extracts
+    /// framed identity. Performs the same integrity checks as <see cref="TryDecode"/> (length,
+    /// CRC, schema, header fields, XxHash3, Message-ID→ArticleId) without copying ArtData.
+    /// </summary>
+    /// <remarks>
+    /// Closed-segment accounting and sequential scans only need the proved identity and location.
+    /// Callers that must retain ArtData after the backing buffer is released should use
+    /// <see cref="TryDecode"/> (owned payload copy) or slice a still-rooted buffer themselves.
+    /// </remarks>
+    public static bool TryProveFramedRecord(
         ReadOnlySpan<byte> span,
         out int recordLength,
         out ArticleId artId,
         out ulong artHash,
         out int artSize,
-        out ReadOnlyMemory<byte> artData,
         out DecodeError error)
     {
         recordLength = 0;
         artId = default;
         artHash = 0;
         artSize = 0;
-        artData = default;
         error = DecodeError.None;
 
         if (span.Length < 4)
@@ -314,9 +321,7 @@ internal static class SegmentRecordCodec
             return false;
         }
 
-        var copyStart = PhysicalProofProbe.Mark();
-        var payload = record.Slice(FixedHeaderLength, artSize).ToArray();
-        PhysicalProofProbe.AddCopy(copyStart, artSize);
+        var payload = record.Slice(FixedHeaderLength, artSize);
         PhysicalProofProbe.PushInner();
         var proved = ArticleStorageIntegrity.TryProve(payload, artId, artHash, artSize);
         PhysicalProofProbe.PopLayer();
@@ -326,6 +331,28 @@ internal static class SegmentRecordCodec
             return false;
         }
 
+        return true;
+    }
+
+    /// <summary>Tries to decode one record at the start of <paramref name="span"/>.</summary>
+    public static bool TryDecode(
+        ReadOnlySpan<byte> span,
+        out int recordLength,
+        out ArticleId artId,
+        out ulong artHash,
+        out int artSize,
+        out ReadOnlyMemory<byte> artData,
+        out DecodeError error)
+    {
+        artData = default;
+        if (!TryProveFramedRecord(span, out recordLength, out artId, out artHash, out artSize, out error))
+        {
+            return false;
+        }
+
+        var copyStart = PhysicalProofProbe.Mark();
+        var payload = span.Slice(FixedHeaderLength, artSize).ToArray();
+        PhysicalProofProbe.AddCopy(copyStart, artSize);
         artData = payload;
         return true;
     }

@@ -3637,7 +3637,89 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         return true;
     }
 
-    private static bool TryReadProvenAt(
+    /// <summary>
+    /// Reads and proves one physical record at <paramref name="offset"/> for sequential scans.
+    /// </summary>
+    /// <remarks>
+    /// Phase 35: peeks the u32 length, allocates one record buffer, finishes the read without
+    /// seeking back over the length prefix, then proves via
+    /// <see cref="SegmentRecordCodec.TryProveFramedRecord"/> (no ArtData copy). When
+    /// <paramref name="payload"/> is retained, it is a slice of that single buffer. Closed
+    /// accounting discards the payload and only keeps <see cref="ProvenSegmentExtent"/>.
+    /// Internal for Phase 35 reference/equivalence tests.
+    /// </remarks>
+    internal static bool TryReadProvenAt(
+        FileStream stream,
+        SegmentId segmentId,
+        long sizeBytes,
+        long offset,
+        out ProvenSegmentExtent extent,
+        out ReadOnlyMemory<byte> payload,
+        out int consumed)
+    {
+        extent = default;
+        payload = default;
+        consumed = 0;
+        if (offset < 0 || offset + 4 > sizeBytes)
+        {
+            return false;
+        }
+
+        stream.Seek(offset, SeekOrigin.Begin);
+        Span<byte> lengthBytes = stackalloc byte[4];
+        if (stream.Read(lengthBytes) != 4)
+        {
+            return false;
+        }
+
+        var total = BinaryPrimitives.ReadUInt32LittleEndian(lengthBytes);
+        if (total < SegmentRecordCodec.MinimumRecordLength
+            || total > SegmentRecordCodec.MaxRecordLength
+            || offset + total > sizeBytes)
+        {
+            return false;
+        }
+
+        var buffer = new byte[total];
+        lengthBytes.CopyTo(buffer);
+        var remaining = buffer.Length - 4;
+        if (remaining > 0 && stream.Read(buffer, 4, remaining) != remaining)
+        {
+            return false;
+        }
+
+        if (!SegmentRecordCodec.TryProveFramedRecord(
+                buffer,
+                out var recordLength,
+                out var artId,
+                out var artHash,
+                out var artSize,
+                out _))
+        {
+            return false;
+        }
+
+        if (recordLength != buffer.Length)
+        {
+            return false;
+        }
+
+        extent = new ProvenSegmentExtent(
+            new StoredArticleLocation(segmentId, offset, recordLength),
+            artId,
+            artHash,
+            artSize);
+        payload = buffer.AsMemory(SegmentRecordCodec.FixedHeaderLength, artSize);
+        consumed = recordLength;
+        return true;
+    }
+
+    /// <summary>
+    /// Phase 34 reference algorithm for <see cref="TryReadProvenAt"/>: length peek, seek-back,
+    /// full-record allocate+read, then <see cref="SegmentRecordCodec.TryDecode"/> (payload copy).
+    /// Test-only equivalence oracle; production scans use <see cref="TryReadProvenAt"/>.
+    /// </summary>
+    internal static bool TryReadProvenAtReference(
         FileStream stream,
         SegmentId segmentId,
         long sizeBytes,
