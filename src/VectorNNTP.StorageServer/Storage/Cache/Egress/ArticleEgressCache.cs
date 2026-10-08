@@ -12,8 +12,10 @@ namespace VectorNNTP.StorageServer.Storage.Cache.Egress;
 /// <remarks>
 /// <para>
 /// The memory index is the only directory of entries. Startup renames any previous
-/// <c>live/</c> aside and serves with an empty index. Payload bytes are not scanned
-/// before the engine can read authoritative articles.
+/// <c>live/</c> aside, deletes <c>trash-*</c> directories under <c>egress/</c>, and
+/// serves with an empty index. Payload bytes are not read before the engine can
+/// serve authoritative articles. A delete that fails stays in an unreclaimed list
+/// until a later pass removes the path.
 /// </para>
 /// <para>
 /// A hit checks <see cref="ArticleId"/>, sequence, ArtHash, and ArtSize, then XxHash3
@@ -62,7 +64,7 @@ internal sealed class ArticleEgressCache : IDisposable
     private readonly SemaphoreSlim _signal = new(0);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Task _worker;
-    private readonly Task? _trash;
+    private readonly List<UnreclaimedPath> _unreclaimed = [];
     private Slab? _open;
     private int _nextSlab;
     private long _occupancy;
@@ -71,6 +73,8 @@ internal sealed class ArticleEgressCache : IDisposable
     private int _disposed;
     private TaskCompletionSource? _idle;
     private long _queueBytes;
+    private long _unreclaimedBytes;
+    private int _testFailDeletes;
 
     private long _hitCount;
     private long _missCount;
@@ -91,7 +95,7 @@ internal sealed class ArticleEgressCache : IDisposable
         _worker = Task.CompletedTask;
     }
 
-    private ArticleEgressCache(EgressCacheStart start, ILogger logger, string liveDir, Task? trash)
+    private ArticleEgressCache(EgressCacheStart start, ILogger logger, string liveDir)
     {
         _enabled = true;
         _logger = logger;
@@ -109,7 +113,7 @@ internal sealed class ArticleEgressCache : IDisposable
         _fillQueueDepth = start.FillQueueDepth > 0 ? start.FillQueueDepth : DefaultFillQueueDepth;
         _fillQueueMaxBytes = start.FillQueueMaxBytes > 0 ? start.FillQueueMaxBytes : DefaultFillQueueMaxBytes;
         _space = start.Space ?? new DriveEgressVolumeSpace(start.ControlDir);
-        _trash = trash;
+        _testFailDeletes = start.TestFailNextDeletes;
         _worker = Task.Run(WorkerAsync);
     }
 
@@ -142,6 +146,33 @@ internal sealed class ArticleEgressCache : IDisposable
 
     /// <summary>Gets fills refused by capacity, reserve, or the ControlDir floor.</summary>
     public long AdmissionRejectedCount => Volatile.Read(ref _admissionRejectedCount);
+
+    /// <summary>Gets bytes of trash or slab files whose delete has not succeeded.</summary>
+    public long UnreclaimedBytes
+    {
+        get
+        {
+            lock (_index)
+            {
+                return _unreclaimedBytes;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Test-only. The next successful calls consume one failure each and leave the path on disk.
+    /// </summary>
+    internal int TestFailNextDeletes
+    {
+        get => Volatile.Read(ref _testFailDeletes);
+        set => Volatile.Write(ref _testFailDeletes, value < 0 ? 0 : value);
+    }
+
+    /// <summary>
+    /// Test-only. Invoked on the fill worker immediately before a record is admitted.
+    /// A thrown exception is logged and that fill is dropped.
+    /// </summary>
+    internal Action? TestThrowOnPublish { get; set; }
 
     /// <summary>Gets live accounted bytes.</summary>
     public long CacheBytes
@@ -214,22 +245,30 @@ internal sealed class ArticleEgressCache : IDisposable
 
         var root = Path.Combine(start.ControlDir, "egress");
         var live = Path.Combine(root, "live");
+        ArticleEgressCache? cache = null;
         try
         {
             Directory.CreateDirectory(root);
-            Task? trash = null;
             if (Directory.Exists(live))
             {
+                if (IsReparsePoint(live))
+                {
+                    ArticleEgressCacheLogMessages.Disabled(log, start.ControlDir, "reparse");
+                    return Disabled;
+                }
+
                 var trashDir = Path.Combine(root, "trash-" + Guid.NewGuid().ToString("N"));
                 Directory.Move(live, trashDir);
-                trash = Task.Run(() => DeleteTrash(trashDir));
             }
 
             Directory.CreateDirectory(live);
-            return new ArticleEgressCache(start, log, live, trash);
+            cache = new ArticleEgressCache(start, log, live);
+            cache.ReclaimOrphanedTrash();
+            return cache;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
+            cache?.Dispose();
             ArticleEgressCacheLogMessages.Disabled(log, start.ControlDir, ex.GetType().Name);
             return Disabled;
         }
@@ -482,15 +521,6 @@ internal sealed class ArticleEgressCache : IDisposable
         {
         }
 
-        if (_trash is not null)
-        {
-            _ = _trash.ContinueWith(
-                static task => _ = task.Exception,
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default);
-        }
-
         lock (_index)
         {
             foreach (var slab in _slabs.Values)
@@ -508,19 +538,61 @@ internal sealed class ArticleEgressCache : IDisposable
         _shutdown.Dispose();
     }
 
-    /// <summary>Deletes one renamed cache tree. Failure leaves authoritative storage untouched.</summary>
-    /// <param name="trashDir">Directory previously named <c>live</c>.</param>
-    private static void DeleteTrash(string trashDir)
+    /// <summary>
+    /// Deletes orphaned <c>trash-*</c> directories under this cache and retries failed slab deletes.
+    /// One pass. <c>live/</c>, journal files, and paths outside <c>egress/</c> are not deleted.
+    /// </summary>
+    internal void ReclaimOrphanedTrash()
     {
+        if (!_enabled)
+        {
+            return;
+        }
+
+        var root = Path.GetDirectoryName(_liveDir);
+        if (string.IsNullOrEmpty(root))
+        {
+            return;
+        }
+
+        List<UnreclaimedPath> found = [];
+        List<string> removed = [];
         try
         {
-            if (Directory.Exists(trashDir))
+            foreach (var dir in Directory.EnumerateDirectories(root))
             {
-                Directory.Delete(trashDir, recursive: true);
+                if (!IsEgressTrashDirectory(root, dir) || IsReparsePoint(dir))
+                {
+                    continue;
+                }
+
+                if (TryDeleteTree(dir))
+                {
+                    removed.Add(dir);
+                    continue;
+                }
+
+                var measured = MeasureTree(dir);
+                var bytes = measured < 0 ? _capacityBytes : measured;
+                found.Add(new UnreclaimedPath(dir, bytes, IsDirectory: true));
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+        }
+
+        lock (_index)
+        {
+            RetryPendingDeletes();
+            foreach (var path in removed)
+            {
+                ForgetUnreclaimed(path);
+            }
+
+            foreach (var item in found)
+            {
+                RememberUnreclaimed(item);
+            }
         }
     }
 
@@ -568,6 +640,10 @@ internal sealed class ArticleEgressCache : IDisposable
                         ArticleEgressCacheLogMessages.FillsStopped(_logger, _controlDir, ex);
                     }
                 }
+                catch (Exception ex)
+                {
+                    ArticleEgressCacheLogMessages.FillFaulted(_logger, _controlDir, ex);
+                }
                 finally
                 {
                     lock (_queueGate)
@@ -579,6 +655,11 @@ internal sealed class ArticleEgressCache : IDisposable
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception ex)
+        {
+            ArticleEgressCacheLogMessages.FillFaulted(_logger, _controlDir, ex);
+            Interlocked.Exchange(ref _fillsEnabled, 0);
         }
         finally
         {
@@ -593,6 +674,7 @@ internal sealed class ArticleEgressCache : IDisposable
 
     private void Publish(FillRequest item)
     {
+        TestThrowOnPublish?.Invoke();
         var recordLength = EgressCacheRecordCodec.RecordLength(item.ArtSize);
         if (!TryPrepareSpace(recordLength))
         {
@@ -677,6 +759,12 @@ internal sealed class ArticleEgressCache : IDisposable
 
     private bool TryPrepareSpace(int recordLength)
     {
+        if (recordLength < 1 || (long)recordLength > _capacityBytes)
+        {
+            Interlocked.Increment(ref _admissionRejectedCount);
+            return false;
+        }
+
         EvictForFloor();
         if (!SpaceAllows(recordLength))
         {
@@ -693,6 +781,13 @@ internal sealed class ArticleEgressCache : IDisposable
         var low = Percent(_capacityBytes, Math.Max(0, _usagePercent - _freePercent));
         lock (_index)
         {
+            RetryPendingDeletes();
+            if (RecordCannotFit(recordLength))
+            {
+                Interlocked.Increment(ref _admissionRejectedCount);
+                return false;
+            }
+
             if (_occupancy >= high)
             {
                 while (_occupancy > low && TryEvictOne())
@@ -700,11 +795,11 @@ internal sealed class ArticleEgressCache : IDisposable
                 }
             }
 
-            while (_occupancy + recordLength > _capacityBytes && TryEvictOne())
+            while (_occupancy + _unreclaimedBytes + recordLength > _capacityBytes && TryEvictOne())
             {
             }
 
-            if (_occupancy + recordLength > _capacityBytes)
+            if (_occupancy + _unreclaimedBytes + recordLength > _capacityBytes)
             {
                 Interlocked.Increment(ref _admissionRejectedCount);
                 return false;
@@ -864,16 +959,13 @@ internal sealed class ArticleEgressCache : IDisposable
         _slabs.Remove(slab.Id);
         slab.Stream?.Dispose();
         slab.Stream = null;
-        try
+        var bytes = PhysicalLength(slab);
+        if (TryDeleteFile(slab.Path))
         {
-            if (File.Exists(slab.Path))
-            {
-                File.Delete(slab.Path);
-            }
+            return;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-        }
+
+        RememberUnreclaimed(new UnreclaimedPath(slab.Path, bytes, IsDirectory: false));
     }
 
     private Slab ReserveSlab(int recordLength)
@@ -985,6 +1077,234 @@ internal sealed class ArticleEgressCache : IDisposable
         return left + right;
     }
 
+    /// <summary>
+    /// True when live eviction cannot make <paramref name="recordLength"/> fit
+    /// because unreclaimed files already consume the ceiling.
+    /// </summary>
+    /// <param name="recordLength">On-disk record length.</param>
+    /// <returns>True when the record must be rejected without eviction.</returns>
+    private bool RecordCannotFit(int recordLength)
+    {
+        if (_unreclaimedBytes >= _capacityBytes)
+        {
+            return true;
+        }
+
+        return (long)recordLength > _capacityBytes - _unreclaimedBytes;
+    }
+
+    /// <summary>Adds a path that is still on disk. A second add of the same path does not double-count.</summary>
+    /// <param name="item">Path and the bytes still allocated.</param>
+    private void RememberUnreclaimed(UnreclaimedPath item)
+    {
+        foreach (var existing in _unreclaimed)
+        {
+            if (PathsEqual(existing.Path, item.Path))
+            {
+                return;
+            }
+        }
+
+        _unreclaimed.Add(item);
+        _unreclaimedBytes = SaturatingAdd(_unreclaimedBytes, item.Bytes);
+        ArticleEgressCacheLogMessages.ReclaimDeferred(_logger, _controlDir, item.Path);
+    }
+
+    /// <summary>Drops accounting for a path that is no longer on disk.</summary>
+    /// <param name="path">Trash directory or slab file.</param>
+    private void ForgetUnreclaimed(string path)
+    {
+        for (var i = _unreclaimed.Count - 1; i >= 0; i--)
+        {
+            if (!PathsEqual(_unreclaimed[i].Path, path))
+            {
+                continue;
+            }
+
+            _unreclaimedBytes -= _unreclaimed[i].Bytes;
+            if (_unreclaimedBytes < 0)
+            {
+                _unreclaimedBytes = 0;
+            }
+
+            _unreclaimed.RemoveAt(i);
+        }
+    }
+
+    /// <summary>One delete attempt for each pending path. Failures stay on the list.</summary>
+    private void RetryPendingDeletes()
+    {
+        for (var i = _unreclaimed.Count - 1; i >= 0; i--)
+        {
+            var item = _unreclaimed[i];
+            var deleted = item.IsDirectory ? TryDeleteTree(item.Path) : TryDeleteFile(item.Path);
+            if (!deleted)
+            {
+                continue;
+            }
+
+            _unreclaimedBytes -= item.Bytes;
+            if (_unreclaimedBytes < 0)
+            {
+                _unreclaimedBytes = 0;
+            }
+
+            _unreclaimed.RemoveAt(i);
+        }
+    }
+
+    /// <summary>Deletes a trash directory. An injected failure leaves the directory in place.</summary>
+    /// <param name="path">Direct child of <c>egress/</c> whose name starts with <c>trash-</c>.</param>
+    /// <returns>True when the directory is gone.</returns>
+    private bool TryDeleteTree(string path)
+    {
+        if (ConsumeInjectedDeleteFailure())
+        {
+            return false;
+        }
+
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Deletes a slab file. An injected failure leaves the file in place.</summary>
+    /// <param name="path">Slab path under <c>live/</c>.</param>
+    /// <returns>True when the file is gone.</returns>
+    private bool TryDeleteFile(string path)
+    {
+        if (ConsumeInjectedDeleteFailure())
+        {
+            return false;
+        }
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Consumes one injected delete failure when the test counter is positive.</summary>
+    /// <returns>True when this attempt must fail without touching the path.</returns>
+    private bool ConsumeInjectedDeleteFailure()
+    {
+        var remaining = Volatile.Read(ref _testFailDeletes);
+        while (remaining > 0)
+        {
+            if (Interlocked.CompareExchange(ref _testFailDeletes, remaining - 1, remaining) == remaining)
+            {
+                return true;
+            }
+
+            remaining = Volatile.Read(ref _testFailDeletes);
+        }
+
+        return false;
+    }
+
+    /// <summary>Sums file lengths under <paramref name="directory"/>. Does not follow reparse points.</summary>
+    /// <param name="directory">Trash directory.</param>
+    /// <returns>The byte sum, or <c>-1</c> when the tree cannot be measured.</returns>
+    private static long MeasureTree(string directory)
+    {
+        try
+        {
+            long sum = 0;
+            foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+            {
+                if (IsReparsePoint(file))
+                {
+                    continue;
+                }
+
+                sum = SaturatingAdd(sum, new FileInfo(file).Length);
+            }
+
+            return sum;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return -1;
+        }
+    }
+
+    /// <summary>True for a direct <c>egress/trash-*</c> child that is not <c>live</c>.</summary>
+    /// <param name="egressRoot"><c>{ControlDir}/egress</c>.</param>
+    /// <param name="candidate">Directory returned by enumeration.</param>
+    /// <returns>True when the cache may delete <paramref name="candidate"/>.</returns>
+    private static bool IsEgressTrashDirectory(string egressRoot, string candidate)
+    {
+        var name = Path.GetFileName(candidate.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrEmpty(name)
+            || !name.StartsWith("trash-", StringComparison.Ordinal)
+            || name.Length <= "trash-".Length)
+        {
+            return false;
+        }
+
+        var parent = Path.GetDirectoryName(Path.GetFullPath(candidate));
+        return parent is not null
+            && string.Equals(parent, Path.GetFullPath(egressRoot), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>True when <paramref name="path"/> is a junction or symlink.</summary>
+    /// <param name="path">File or directory.</param>
+    /// <returns>True when the cache must not delete <paramref name="path"/>.</returns>
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Bytes still allocated by a slab whose delete has not been attempted yet.</summary>
+    /// <param name="slab">Empty slab removed from the live map.</param>
+    /// <returns>The larger of the logical slab length and the file length.</returns>
+    private static long PhysicalLength(Slab slab)
+    {
+        var bytes = slab.Length;
+        try
+        {
+            var info = new FileInfo(slab.Path);
+            if (info.Exists && info.Length > bytes)
+            {
+                bytes = info.Length;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        return bytes < 0 ? 0 : bytes;
+    }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
     private sealed class Entry
     {
         public ArticleId Id { get; set; }
@@ -1042,4 +1362,10 @@ internal sealed class ArticleEgressCache : IDisposable
     }
 
     private readonly record struct PendingKey(ArticleId ArtId, ulong Sequence);
+
+    /// <summary>A trash directory or slab file that still occupies ControlDir bytes.</summary>
+    /// <param name="Path">Absolute or cache-relative path. Not article payload.</param>
+    /// <param name="Bytes">Bytes still allocated. Zero is a directory with no files.</param>
+    /// <param name="IsDirectory">True when <see cref="Path"/> is a trash directory.</param>
+    private readonly record struct UnreclaimedPath(string Path, long Bytes, bool IsDirectory);
 }

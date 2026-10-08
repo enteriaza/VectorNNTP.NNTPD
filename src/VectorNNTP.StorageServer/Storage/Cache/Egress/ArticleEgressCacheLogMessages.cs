@@ -18,4 +18,21 @@ internal static partial class ArticleEgressCacheLogMessages
         Level = LogLevel.Warning,
         Message = "Egress cache fills stopped after a write failure (controlDir={ControlDir})")]
     public static partial void FillsStopped(ILogger logger, string ControlDir, Exception exception);
+
+    /// <summary>
+    /// One fill failed for a reason other than cancellation or a cache write error.
+    /// The queued item is dropped. The worker keeps running.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 3442,
+        Level = LogLevel.Warning,
+        Message = "Egress cache fill failed (controlDir={ControlDir})")]
+    public static partial void FillFaulted(ILogger logger, string ControlDir, Exception exception);
+
+    /// <summary>A trash directory or empty slab could not be deleted and remains counted.</summary>
+    [LoggerMessage(
+        EventId = 3443,
+        Level = LogLevel.Warning,
+        Message = "Egress cache reclaim deferred (controlDir={ControlDir}, path={Path})")]
+    public static partial void ReclaimDeferred(ILogger logger, string ControlDir, string Path);
 }

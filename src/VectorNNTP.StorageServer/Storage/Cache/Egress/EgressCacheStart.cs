@@ -43,4 +43,10 @@ internal sealed class EgressCacheStart
 
     /// <summary>Gets the fill-queue byte cap. <c>0</c> uses <see cref="ArticleEgressCache.DefaultFillQueueMaxBytes"/>.</summary>
     public long FillQueueMaxBytes { get; init; }
+
+    /// <summary>
+    /// Test-only count of the next delete attempts that fail and leave the path on disk.
+    /// Production leaves this at <c>0</c>.
+    /// </summary>
+    internal int TestFailNextDeletes { get; init; }
 }

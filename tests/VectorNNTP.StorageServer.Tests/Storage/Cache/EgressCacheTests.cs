@@ -12,7 +12,7 @@ namespace VectorNNTP.StorageServer.Tests.Storage.Cache;
 /// <summary>
 /// Disposable NVMe egress cache: read path, admission, eviction, and restart.
 /// </summary>
-public sealed class EgressCacheTests
+public sealed partial class EgressCacheTests
 {
     [Fact]
     public async Task Disabled_cache_does_not_create_files_or_change_the_read()
@@ -374,7 +374,8 @@ public sealed class EgressCacheTests
         long queueBytes = 0,
         int usage = 80,
         int free = 5,
-        long journalHard = 0) =>
+        long journalHard = 0,
+        int testFailDeletes = 0) =>
         new()
         {
             ControlDir = controlDir,
@@ -386,6 +387,7 @@ public sealed class EgressCacheTests
             FreeCapacityPercent = free,
             Space = space,
             FillQueueMaxBytes = queueBytes,
+            TestFailNextDeletes = testFailDeletes,
         };
 
     private static string Live(TempDir dir) => Path.Combine(dir.Options.ControlDir, "egress", "live");
