@@ -14,7 +14,8 @@ public sealed class ArticleStorageOptionsTests
     public void Defaults_are_documented_values()
     {
         var storage = new ArticleStorageOptions();
-        Assert.Equal("spool/cache", storage.CacheDir);
+        Assert.Equal("spool/cache", storage.SegmentPools.Directories[0].CacheDir);
+        Assert.Equal(SegmentPoolDirectoryOptions.DefaultMaxCapacityBytes, storage.SegmentPools.Directories[0].MaxCapacity);
         Assert.Equal("spool/", storage.ControlDir);
         Assert.Equal(64L * 1024 * 1024, storage.JournalSoftLimitBytes);
         Assert.Equal(128L * 1024 * 1024, storage.JournalHardLimitBytes);
@@ -39,24 +40,24 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(ArticleCapacityOptions.DefaultCompactionHeadroom, storage.Capacity.CompactionHeadroom);
         Assert.Equal(ArticleCapacityOptions.DefaultMaximumUsageCapacity, storage.Capacity.MaximumUsageCapacity);
         Assert.Equal(ArticleCapacityOptions.DefaultFreeCapacity, storage.Capacity.FreeCapacity);
-        Assert.Equal(BulkStoragePressureOptions.DefaultWarningPercent, storage.BulkPressure.WarningPercent);
-        Assert.Equal(75, storage.BulkPressure.WarningPercent);
-        Assert.Equal(BulkStoragePressureOptions.DefaultPressurePercent, storage.BulkPressure.PressurePercent);
-        Assert.Equal(80, storage.BulkPressure.PressurePercent);
-        Assert.Equal(BulkStoragePressureOptions.DefaultHighPercent, storage.BulkPressure.HighPercent);
-        Assert.Equal(85, storage.BulkPressure.HighPercent);
-        Assert.Equal(BulkStoragePressureOptions.DefaultCriticalPercent, storage.BulkPressure.CriticalPercent);
-        Assert.Equal(90, storage.BulkPressure.CriticalPercent);
-        Assert.Equal(BulkStoragePressureOptions.DefaultEmergencyPercent, storage.BulkPressure.EmergencyPercent);
-        Assert.Equal(95, storage.BulkPressure.EmergencyPercent);
-        Assert.Equal(BulkStoragePressureOptions.DefaultOperationalReservePercent, storage.BulkPressure.OperationalReservePercent);
-        Assert.Equal(5, storage.BulkPressure.OperationalReservePercent);
-        Assert.Equal(BulkStoragePressureOptions.DefaultRecoveryReservePercent, storage.BulkPressure.RecoveryReservePercent);
-        Assert.Equal(5, storage.BulkPressure.RecoveryReservePercent);
-        Assert.Equal(BulkStoragePressureOptions.DefaultRewriteReservePercent, storage.BulkPressure.RewriteReservePercent);
-        Assert.Equal(10, storage.BulkPressure.RewriteReservePercent);
-        Assert.Equal(BulkStoragePressureOptions.DefaultPressureRecoveryMarginPercent, storage.BulkPressure.PressureRecoveryMarginPercent);
-        Assert.Equal(5, storage.BulkPressure.PressureRecoveryMarginPercent);
+        Assert.Equal(SegmentPoolOptions.DefaultWarningPercent, storage.SegmentPools.WarningPercent);
+        Assert.Equal(75, storage.SegmentPools.WarningPercent);
+        Assert.Equal(SegmentPoolOptions.DefaultPressurePercent, storage.SegmentPools.PressurePercent);
+        Assert.Equal(80, storage.SegmentPools.PressurePercent);
+        Assert.Equal(SegmentPoolOptions.DefaultHighPercent, storage.SegmentPools.HighPercent);
+        Assert.Equal(85, storage.SegmentPools.HighPercent);
+        Assert.Equal(SegmentPoolOptions.DefaultCriticalPercent, storage.SegmentPools.CriticalPercent);
+        Assert.Equal(90, storage.SegmentPools.CriticalPercent);
+        Assert.Equal(SegmentPoolOptions.DefaultEmergencyPercent, storage.SegmentPools.EmergencyPercent);
+        Assert.Equal(95, storage.SegmentPools.EmergencyPercent);
+        Assert.Equal(SegmentPoolOptions.DefaultOperationalReservePercent, storage.SegmentPools.OperationalReservePercent);
+        Assert.Equal(5, storage.SegmentPools.OperationalReservePercent);
+        Assert.Equal(SegmentPoolOptions.DefaultRecoveryReservePercent, storage.SegmentPools.RecoveryReservePercent);
+        Assert.Equal(5, storage.SegmentPools.RecoveryReservePercent);
+        Assert.Equal(SegmentPoolOptions.DefaultRewriteReservePercent, storage.SegmentPools.RewriteReservePercent);
+        Assert.Equal(10, storage.SegmentPools.RewriteReservePercent);
+        Assert.Equal(SegmentPoolOptions.DefaultPressureRecoveryMarginPercent, storage.SegmentPools.PressureRecoveryMarginPercent);
+        Assert.Equal(5, storage.SegmentPools.PressureRecoveryMarginPercent);
         Assert.Null(typeof(ArticleCapacityOptions).GetProperty("Enabled"));
         Assert.Equal(ArticleStorageOptions.DefaultControlDir, StorageServerTestOptions.CreateValid().Storage.ControlDir);
     }
@@ -65,7 +66,7 @@ public sealed class ArticleStorageOptionsTests
     public void Runtime_resolves_ControlDir_and_keeps_CacheDir_as_SegmentDir()
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.CacheDir = "spool/cache";
+        options.Storage.SegmentPools.Directories[0].CacheDir = "spool/cache";
         options.Storage.ControlDir = "spool/";
         var runtime = StorageServerRuntimeOptionsFactory.Create(options, AppContext.BaseDirectory);
         Assert.Equal(
@@ -130,7 +131,8 @@ public sealed class ArticleStorageOptionsTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["StorageServer:ServerId"] = "1",
-                ["StorageServer:Storage:CacheDir"] = "sata/cache",
+                ["StorageServer:Storage:SegmentPools:Directories:0:CacheDir"] = "sata/cache",
+                ["StorageServer:Storage:SegmentPools:Directories:0:MaxCapacity"] = "1048576",
                 ["StorageServer:Storage:ControlDir"] = "nvme/control",
                 ["StorageServer:Storage:JournalSoftLimitBytes"] = "10",
                 ["StorageServer:Storage:JournalHardLimitBytes"] = "20",
@@ -146,7 +148,8 @@ public sealed class ArticleStorageOptionsTests
             .Build();
         var bound = new StorageServerOptions();
         configuration.GetSection(StorageServerOptions.SectionName).Bind(bound);
-        Assert.Equal("sata/cache", bound.Storage.CacheDir);
+        Assert.Equal("sata/cache", bound.Storage.SegmentPools.Directories[0].CacheDir);
+        Assert.Equal(1_048_576, bound.Storage.SegmentPools.Directories[0].MaxCapacity);
         Assert.Equal("nvme/control", bound.Storage.ControlDir);
         Assert.Equal(10, bound.Storage.JournalSoftLimitBytes);
         Assert.Equal(20, bound.Storage.JournalHardLimitBytes);
@@ -283,7 +286,17 @@ public sealed class ArticleStorageOptionsTests
         using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
         var storage = doc.RootElement.GetProperty("StorageServer").GetProperty("Storage");
         Assert.False(doc.RootElement.GetProperty("StorageServer").TryGetProperty("CacheDir", out _));
-        Assert.Equal("spool/cache", storage.GetProperty("CacheDir").GetString());
+        Assert.False(storage.TryGetProperty("CacheDir", out _));
+        Assert.False(storage.TryGetProperty("BulkPressure", out _));
+        var pools = storage.GetProperty("SegmentPools");
+        Assert.Equal(75, pools.GetProperty("WarningPercent").GetInt32());
+        Assert.Equal(80, pools.GetProperty("PressurePercent").GetInt32());
+        Assert.Equal(85, pools.GetProperty("HighPercent").GetInt32());
+        Assert.Equal(90, pools.GetProperty("CriticalPercent").GetInt32());
+        Assert.Equal(95, pools.GetProperty("EmergencyPercent").GetInt32());
+        var spool = pools.GetProperty("Directories")[0];
+        Assert.Equal("spool/cache", spool.GetProperty("CacheDir").GetString());
+        Assert.Equal(53687091200, spool.GetProperty("MaxCapacity").GetInt64());
         Assert.Equal("spool/", storage.GetProperty("ControlDir").GetString());
         Assert.Equal(134217728, storage.GetProperty("IndexCheckpointThresholdBytes").GetInt64());
         Assert.Equal(33554432, storage.GetProperty("JournalCheckpointThresholdBytes").GetInt64());
@@ -309,6 +322,8 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(50, capacity.GetProperty("MaximumUsageCapacity").GetInt32());
         Assert.Equal(70, capacity.GetProperty("MaximumUtilization").GetInt32());
         AssertJsonPropertiesMatchOptions(storage, typeof(ArticleStorageOptions));
+        AssertJsonPropertiesMatchOptions(pools, typeof(SegmentPoolOptions));
+        AssertJsonPropertiesMatchOptions(spool, typeof(SegmentPoolDirectoryOptions));
         AssertJsonPropertiesMatchOptions(storage.GetProperty("ArticleCache"), typeof(ArticleMemoryCacheOptions));
         AssertJsonPropertiesMatchOptions(storage.GetProperty("EgressCache"), typeof(EgressCacheOptions));
         AssertJsonPropertiesMatchOptions(storage.GetProperty("Capacity"), typeof(ArticleCapacityOptions));

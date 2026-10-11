@@ -104,6 +104,20 @@ public sealed class FileSegmentCatalogue : ISegmentCatalogue
     }
 
     /// <summary>
+    /// Removes any catalogue entry for <paramref name="segmentId"/>.
+    /// Used when an empty active file is discarded before it accepts a record.
+    /// </summary>
+    /// <param name="segmentId">Segment to forget.</param>
+    /// <returns><see langword="true"/> when an entry was removed.</returns>
+    internal bool TryForget(SegmentId segmentId)
+    {
+        lock (_gate)
+        {
+            return _entries.Remove(segmentId.Value);
+        }
+    }
+
+    /// <summary>
     /// Removes a Closed catalogue entry after its physical <c>.closed</c> file has been deleted.
     /// </summary>
     /// <returns>

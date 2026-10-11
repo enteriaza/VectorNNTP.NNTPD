@@ -92,4 +92,13 @@ internal static partial class FileSegmentStoreLogMessages
         Level = LogLevel.Information,
         Message = "Segment store closed (root={Root})")]
     public static partial void StoreClosed(ILogger logger, string Root);
+
+    /// <summary>Logs one resolved segment spool directory at store open.</summary>
+    /// <param name="logger">Store logger.</param>
+    /// <param name="Directory">Resolved spool directory.</param>
+    [LoggerMessage(
+        EventId = 3214,
+        Level = LogLevel.Information,
+        Message = "Segment pool directory ready (directory={Directory})")]
+    public static partial void PoolReady(ILogger logger, string Directory);
 }

@@ -47,15 +47,9 @@ public sealed partial class FileArticleStorageEngine
                 Reason: fenceReason ?? "present-remain-on-source"));
         }
 
-        var retiredPath = Path.Combine(
-            _segments.RootPath,
-            SegmentFileNames.Format(segmentId, SegmentFileKind.Retired));
-        var activePath = Path.Combine(
-            _segments.RootPath,
-            SegmentFileNames.Format(segmentId, SegmentFileKind.Active));
-        var closedPath = Path.Combine(
-            _segments.RootPath,
-            SegmentFileNames.Format(segmentId, SegmentFileKind.Closed));
+        var retiredPath = _segments.PathFor(segmentId, SegmentFileKind.Retired);
+        var activePath = _segments.PathFor(segmentId, SegmentFileKind.Active);
+        var closedPath = _segments.PathFor(segmentId, SegmentFileKind.Closed);
 
         if (!Catalogue.TryGet(segmentId, out var info))
         {
@@ -120,6 +114,9 @@ public sealed partial class FileArticleStorageEngine
                 throw new IOException("Injected reclamation fault at AfterDeleteBeforeCatalogueRemove.");
         }
 
+        var retiredPool = _segments.PoolIndexOf(segmentId);
+        var retiredBytes = info.SizeBytes;
+        var retiredUsedBefore = ReadPoolUsedBytes(retiredPool);
         try
         {
             if (!_segments.TryReclaimRetired(segmentId, out var failureReason, afterDeleteHook))
@@ -149,6 +146,7 @@ public sealed partial class FileArticleStorageEngine
                 });
             }
 
+            NoteSegmentPoolFileDeleted(retiredPool, retiredBytes, retiredUsedBefore);
             _ = _index.ForgetReclaimedSegment(segmentId);
             return Task.FromResult(new ArticleSegmentReclamationResult(
                 ArticleSegmentReclamationOutcome.Reclaimed,
@@ -194,15 +192,9 @@ public sealed partial class FileArticleStorageEngine
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var closedPath = Path.Combine(
-            _segments.RootPath,
-            SegmentFileNames.Format(segmentId, SegmentFileKind.Closed));
-        var activePath = Path.Combine(
-            _segments.RootPath,
-            SegmentFileNames.Format(segmentId, SegmentFileKind.Active));
-        var retiredPath = Path.Combine(
-            _segments.RootPath,
-            SegmentFileNames.Format(segmentId, SegmentFileKind.Retired));
+        var closedPath = _segments.PathFor(segmentId, SegmentFileKind.Closed);
+        var activePath = _segments.PathFor(segmentId, SegmentFileKind.Active);
+        var retiredPath = _segments.PathFor(segmentId, SegmentFileKind.Retired);
 
         if (!Catalogue.TryGet(segmentId, out var info))
         {
@@ -297,6 +289,8 @@ public sealed partial class FileArticleStorageEngine
                 throw new IOException("Injected reclamation fault at AfterDeleteBeforeCatalogueRemove.");
         }
 
+        var closedPool = _segments.PoolIndexOf(segmentId);
+        var closedUsedBefore = ReadPoolUsedBytes(closedPool);
         try
         {
             if (!_segments.TryReclaimFullyDeadClosed(
@@ -334,6 +328,7 @@ public sealed partial class FileArticleStorageEngine
                 });
             }
 
+            NoteSegmentPoolFileDeleted(closedPool, reclaimedBytes, closedUsedBefore);
             _ = _index.ForgetReclaimedSegment(segmentId);
             FileArticleStorageEngineLogMessages.FullyDeadSegmentReclaimed(
                 _logger,

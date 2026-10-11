@@ -373,7 +373,7 @@ public sealed class ImmutableSegmentStartupTests
     private static StorageEngineApplicationService CreateService(TempStorageDir dir)
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.CacheDir = dir.Options.SegmentDir;
+        options.Storage.SegmentPools.Directories[0].CacheDir = dir.Options.SegmentDir;
         options.Storage.ControlDir = dir.Options.ControlDir;
         var runtime = StorageServerRuntimeOptionsFactory.Create(
             options,

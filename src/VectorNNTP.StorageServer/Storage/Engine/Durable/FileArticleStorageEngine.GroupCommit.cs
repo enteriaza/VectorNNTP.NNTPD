@@ -26,6 +26,7 @@ public sealed partial class FileArticleStorageEngine
         var segmentBytes = 0L;
         var journalBytes = 0L;
         var indexBytes = 0L;
+        var poolReservation = SegmentPoolReservation.None;
         Task<GroupedJournalAccept>? durability = null;
         _journal.EnterGroupedAccept();
         try
@@ -50,7 +51,7 @@ public sealed partial class FileArticleStorageEngine
                     segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
                     journalBytes = ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize);
                     indexBytes = ArticleIndexRecordCodec.RecordLength;
-                    if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
+                    if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes, out poolReservation))
                     {
                         if (TryResolveOutstandingAccept(record, out var outstandingGrouped))
                         {
@@ -73,7 +74,8 @@ public sealed partial class FileArticleStorageEngine
                         reservedIndex,
                         segmentBytes,
                         journalBytes,
-                        indexBytes);
+                        indexBytes,
+                        poolReservation);
                     throw new OperationCanceledException(cancellationToken);
                 }
 
@@ -94,7 +96,8 @@ public sealed partial class FileArticleStorageEngine
                         reservedIndex,
                         segmentBytes,
                         journalBytes,
-                        indexBytes);
+                        indexBytes,
+                        poolReservation);
                     throw;
                 }
             }
@@ -119,7 +122,8 @@ public sealed partial class FileArticleStorageEngine
                     reservedIndex,
                     segmentBytes,
                     journalBytes,
-                    indexBytes);
+                    indexBytes,
+                        poolReservation);
             }
 
             throw;
@@ -137,7 +141,8 @@ public sealed partial class FileArticleStorageEngine
                     reservedIndex,
                     segmentBytes,
                     journalBytes,
-                    indexBytes);
+                    indexBytes,
+                        poolReservation);
             }
 
             return grouped.RejectOutcome switch
@@ -158,9 +163,13 @@ public sealed partial class FileArticleStorageEngine
             {
                 RequireSegmentVolume().WithLedger(ledger =>
                 {
-                    ledger.BindSequence(journalRecord.Sequence, segmentBytes);
+                    ledger.BindSequence(
+                        journalRecord.Sequence,
+                        segmentBytes,
+                        chargesAdmission: !_segmentPools.TracksReservations);
                     return 0;
                 });
+                _segmentPools.Bind(poolReservation, journalRecord.Sequence);
             }
 
             if (reservedJournal)
@@ -258,6 +267,7 @@ public sealed partial class FileArticleStorageEngine
         var segmentBytes = 0L;
         var journalBytes = 0L;
         var indexBytes = 0L;
+        var poolReservation = SegmentPoolReservation.None;
         PreparedAcceptReservation ticket;
         lock (_gate)
         {
@@ -278,7 +288,7 @@ public sealed partial class FileArticleStorageEngine
                 segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
                 journalBytes = ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize);
                 indexBytes = ArticleIndexRecordCodec.RecordLength;
-                if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
+                if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes, out poolReservation))
                 {
                     if (TryResolveOutstandingAccept(record, out var outstandingPrepared))
                     {
@@ -310,7 +320,8 @@ public sealed partial class FileArticleStorageEngine
                     reservedIndex,
                     segmentBytes,
                     journalBytes,
-                    indexBytes);
+                    indexBytes,
+                        poolReservation);
                 throw;
             }
 
@@ -322,7 +333,8 @@ public sealed partial class FileArticleStorageEngine
                     reservedIndex,
                     segmentBytes,
                     journalBytes,
-                    indexBytes);
+                    indexBytes,
+                        poolReservation);
                 return RejectPrepared(record, ticket.RejectOutcome);
             }
         }
@@ -337,7 +349,8 @@ public sealed partial class FileArticleStorageEngine
                 reservedIndex,
                 segmentBytes,
                 journalBytes,
-                indexBytes);
+                indexBytes,
+                poolReservation);
         }
 
         try
@@ -366,7 +379,8 @@ public sealed partial class FileArticleStorageEngine
                     reservedIndex,
                     segmentBytes,
                     journalBytes,
-                    indexBytes);
+                    indexBytes,
+                        poolReservation);
             }
 
             throw;
@@ -387,7 +401,8 @@ public sealed partial class FileArticleStorageEngine
                     reservedIndex,
                     segmentBytes,
                     journalBytes,
-                    indexBytes);
+                    indexBytes,
+                        poolReservation);
             }
 
             throw;
@@ -404,7 +419,8 @@ public sealed partial class FileArticleStorageEngine
                 reservedIndex,
                 segmentBytes,
                 journalBytes,
-                indexBytes);
+                indexBytes,
+                poolReservation);
             throw new OperationCanceledException(cancellationToken);
         }
 
@@ -418,7 +434,8 @@ public sealed partial class FileArticleStorageEngine
                     reservedIndex,
                     segmentBytes,
                     journalBytes,
-                    indexBytes);
+                    indexBytes,
+                        poolReservation);
             }
 
             return RejectPrepared(record, grouped.RejectOutcome);
@@ -432,7 +449,8 @@ public sealed partial class FileArticleStorageEngine
             reservedIndex,
             segmentBytes,
             journalBytes,
-            indexBytes);
+            indexBytes,
+            poolReservation);
     }
 
     private ArticleAcceptResult CompletePreparedAccept(
@@ -443,7 +461,8 @@ public sealed partial class FileArticleStorageEngine
         bool reservedIndex,
         long segmentBytes,
         long journalBytes,
-        long indexBytes)
+        long indexBytes,
+        SegmentPoolReservation poolReservation)
     {
         var enqueue = false;
         lock (_gate)
@@ -456,7 +475,8 @@ public sealed partial class FileArticleStorageEngine
                 reservedIndex,
                 segmentBytes,
                 journalBytes,
-                indexBytes);
+                indexBytes,
+                poolReservation);
         }
 
         if (enqueue)
@@ -480,15 +500,20 @@ public sealed partial class FileArticleStorageEngine
         bool reservedIndex,
         long segmentBytes,
         long journalBytes,
-        long indexBytes)
+        long indexBytes,
+        SegmentPoolReservation poolReservation)
     {
         if (reservedSegment)
         {
             RequireSegmentVolume().WithLedger(ledger =>
             {
-                ledger.BindSequence(journalRecord.Sequence, segmentBytes);
+                ledger.BindSequence(
+                    journalRecord.Sequence,
+                    segmentBytes,
+                    chargesAdmission: !_segmentPools.TracksReservations);
                 return 0;
             });
+            _segmentPools.Bind(poolReservation, journalRecord.Sequence);
         }
 
         if (reservedJournal)

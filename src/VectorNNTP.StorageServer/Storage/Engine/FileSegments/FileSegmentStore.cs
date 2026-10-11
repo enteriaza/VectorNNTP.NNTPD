@@ -54,7 +54,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     private readonly object _writeGate = new();
     private readonly Dictionary<ulong, SegmentRuntime> _segments = new();
     private readonly FileSegmentCatalogue _catalogue = new();
-    private readonly string _root;
+    private readonly string[] _roots;
+    private readonly Dictionary<ulong, int> _poolBySegment = new();
     private readonly int _activeSegmentCount;
     private readonly List<ulong> _activeWriterIds = new();
     private readonly Dictionary<ulong, CancellationTokenSource> _ageSealSources = new();
@@ -301,7 +302,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal int TestSegmentRuntimeCount => _segments.Count;
 
     private FileSegmentStore(
-        string root,
+        string[] roots,
         long targetSegmentBytes,
         ILogger logger,
         TimeProvider time,
@@ -322,7 +323,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 "Active segment count must be 1, 2, or 4.");
         }
 
-        _root = root;
+        _roots = roots;
         _targetSegmentBytes = targetSegmentBytes;
         _logger = logger;
         _time = time;
@@ -330,8 +331,42 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         _activeSegmentCount = activeSegmentCount;
     }
 
-    /// <summary>Gets the segment root directory (CacheDir / SegmentDir).</summary>
-    public string SegmentRoot => _root;
+    /// <summary>Gets the first segment spool directory.</summary>
+    public string SegmentRoot => _roots[0];
+
+    /// <summary>Segment spool directories, in configuration order.</summary>
+    public IReadOnlyList<string> SegmentRoots => _roots;
+
+    /// <summary>
+    /// Spool index for the next append. Null keeps the current active spool.
+    /// Set under <see cref="_writeGate"/> or immediately before an append that takes that gate.
+    /// </summary>
+    internal int? RequestedAppendPool { get; set; }
+
+    /// <summary>Spool that owns <paramref name="segmentId"/>.</summary>
+    /// <param name="segmentId">Segment discovered or created by this store.</param>
+    /// <returns>The spool index, or 0 when the segment is not mapped.</returns>
+    internal int PoolIndexOf(SegmentId segmentId)
+    {
+        lock (_writeGate)
+        {
+            return _poolBySegment.TryGetValue(segmentId.Value, out var pool) ? pool : 0;
+        }
+    }
+
+    /// <summary>Spool of the current active segment, or null when none is open.</summary>
+    internal int? ActivePoolIndex
+    {
+        get
+        {
+            lock (_writeGate)
+            {
+                return _activeSegmentId is ulong id && _poolBySegment.TryGetValue(id, out var pool)
+                    ? pool
+                    : null;
+            }
+        }
+    }
 
     /// <summary>Gets the in-memory catalogue reconstructed from segment files.</summary>
     public FileSegmentCatalogue Catalogue => _catalogue;
@@ -411,12 +446,16 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.SegmentDir);
-
+        var roots = SegmentRootsFrom(options);
         var log = logger ?? NullLogger.Instance;
-        Directory.CreateDirectory(options.SegmentDir);
+        foreach (var root in roots)
+        {
+            Directory.CreateDirectory(root);
+            FileSegmentStoreLogMessages.PoolReady(log, root);
+        }
+
         var store = new FileSegmentStore(
-            options.SegmentDir,
+            roots,
             options.SegmentTargetSizeBytes,
             log,
             timeProvider ?? TimeProvider.System,
@@ -621,7 +660,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     }
 
     /// <summary>Gets the segment directory root.</summary>
-    public string RootPath => _root;
+    public string RootPath => _roots[0];
 
     /// <summary>Gets catalogue info for tests.</summary>
     public bool TryGetSegmentInfo(SegmentId segmentId, out SegmentInfo info) =>
@@ -645,9 +684,9 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
-            var retiredPath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Retired));
-            var activePath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Active));
-            var closedPath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Closed));
+            var retiredPath = SegmentFile(segmentId, SegmentFileKind.Retired);
+            var activePath = SegmentFile(segmentId, SegmentFileKind.Active);
+            var closedPath = SegmentFile(segmentId, SegmentFileKind.Closed);
 
             if (File.Exists(activePath) || File.Exists(closedPath))
             {
@@ -762,9 +801,9 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
-            var retiredPath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Retired));
-            var activePath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Active));
-            var closedPath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Closed));
+            var retiredPath = SegmentFile(segmentId, SegmentFileKind.Retired);
+            var activePath = SegmentFile(segmentId, SegmentFileKind.Active);
+            var closedPath = SegmentFile(segmentId, SegmentFileKind.Closed);
 
             if (File.Exists(activePath) || File.Exists(retiredPath))
             {
@@ -876,7 +915,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 runtime.DisposeStream();
             }
 
-            FileSegmentStoreLogMessages.StoreClosed(_logger, _root);
+            FileSegmentStoreLogMessages.StoreClosed(_logger, _roots[0]);
         }
 
         GC.SuppressFinalize(this);
@@ -941,12 +980,14 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal ValueTask<ActiveSegmentAppend> AppendToActiveReportingAsync(
         ReadOnlyMemory<byte> artData,
         DateTimeOffset acceptedUtc,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? appendPool = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_writeGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            RequestedAppendPool = appendPool;
             return ValueTask.FromResult(AppendPreparedUnlocked(
                 AuthoritativeArticleAppend.Derive(artData, acceptedUtc)));
         }
@@ -958,15 +999,18 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     /// <param name="article">Accept payload and its authoritative ArtHash.</param>
     /// <param name="cancellationToken">Cancels before the append lock is taken.</param>
+    /// <param name="appendPool">Spool index for this record. Null keeps the current active spool.</param>
     /// <returns>The flushed location. The header stores <paramref name="article"/>'s ArtHash.</returns>
     internal ValueTask<StoredArticleLocation> AppendAuthoritativeAsync(
         AuthoritativeArticleAppend article,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? appendPool = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_writeGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            RequestedAppendPool = appendPool;
             return ValueTask.FromResult(AppendPreparedUnlocked(article).Location);
         }
     }
@@ -1049,6 +1093,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     private ActiveSegmentAppend AppendToActiveUnlockedCore(AuthoritativeArticleAppend article)
     {
+        EnsureRequestedPoolUnlocked();
         var artData = article.ArtData;
         var artId = RequireMatchingArticleId(article);
         var artHash = article.ArtHash;
@@ -1379,7 +1424,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// <returns>One receipt per article, in the same order.</returns>
     /// <remarks>
     /// Each payload is hashed once via <see cref="AuthoritativeArticleAppend.Derive"/>.
-    /// Accept persistence uses <see cref="AppendActiveBatch(IReadOnlyList{AuthoritativeArticleAppend})"/>
+    /// Accept persistence uses <see cref="AppendActiveBatch(IReadOnlyList{AuthoritativeArticleAppend}, IReadOnlyList{int?}?)"/>
     /// so that hash is not repeated. The journal is not touched.
     /// </remarks>
     internal FlushedSegmentAppend[] AppendActiveBatch(IReadOnlyList<ReadOnlyMemory<byte>> articles)
@@ -1404,6 +1449,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// Does not hash the payloads. The frame CRC is still written.
     /// </summary>
     /// <param name="articles">Accept articles, or other articles whose hash was proved by <see cref="AuthoritativeArticleAppend.TryMatch"/>.</param>
+    /// <param name="appendPools">Spool index for each article. Null keeps the current active spool.</param>
     /// <returns>One receipt per article. Each receipt ArtHash is the supplied hash.</returns>
     /// <remarks>
     /// One configured writer runs the append on the single active segment.
@@ -1411,9 +1457,16 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// segment. Each group holds only that segment's writer lock. The journal is not touched.
     /// Header confirm checks the durable header against the supplied hash and does not read the payload.
     /// </remarks>
-    internal FlushedSegmentAppend[] AppendActiveBatch(IReadOnlyList<AuthoritativeArticleAppend> articles)
+    internal FlushedSegmentAppend[] AppendActiveBatch(
+        IReadOnlyList<AuthoritativeArticleAppend> articles,
+        IReadOnlyList<int?>? appendPools = null)
     {
         ArgumentNullException.ThrowIfNull(articles);
+        if (appendPools is not null && appendPools.Count != articles.Count)
+        {
+            throw new ArgumentException("A spool index is required for every article.", nameof(appendPools));
+        }
+
         if (articles.Count == 0)
         {
             return [];
@@ -1424,13 +1477,15 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             return AppendAcrossActiveSegments(articles);
         }
 
-        return AppendActiveBatchSingle(articles);
+        return AppendActiveBatchSingle(articles, appendPools);
     }
 
     /// <summary>
     /// Appends the batch to the one active segment. Caller does not hold <see cref="_writeGate"/>.
     /// </summary>
-    private FlushedSegmentAppend[] AppendActiveBatchSingle(IReadOnlyList<AuthoritativeArticleAppend> articles)
+    private FlushedSegmentAppend[] AppendActiveBatchSingle(
+        IReadOnlyList<AuthoritativeArticleAppend> articles,
+        IReadOnlyList<int?>? appendPools)
     {
 
         lock (_writeGate)
@@ -1443,6 +1498,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 TestBeforeBatchAppend?.Invoke();
                 for (var i = 0; i < articles.Count; i++)
                 {
+                    RequestedAppendPool = appendPools?[i];
                     appended[i] = AppendPreparedUnlocked(articles[i]);
                 }
 
@@ -2720,7 +2776,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         BinaryPrimitives.WriteUInt64LittleEndian(buffer, segmentId);
         BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(8), activated.UtcTicks);
         var path = _activeSegmentCount <= 1
-            ? Path.Combine(_root, ActivationFileName)
+            ? Path.Combine(RootFor(segmentId), ActivationFileName)
             : ActivationPath(segmentId);
         WriteActivationFile(path, buffer);
     }
@@ -2739,7 +2795,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
     private string ActivationPath(ulong segmentId) =>
         Path.Combine(
-            _root,
+            RootFor(segmentId),
             "segment-activation-" + segmentId.ToString("D20", System.Globalization.CultureInfo.InvariantCulture));
 
     /// <summary>Reads the activation instant when the file names <paramref name="segmentId"/>.</summary>
@@ -2747,7 +2803,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     {
         activated = default;
         var perWriter = ActivationPath(segmentId);
-        var path = File.Exists(perWriter) ? perWriter : Path.Combine(_root, ActivationFileName);
+        var path = File.Exists(perWriter) ? perWriter : LegacyActivationPath(segmentId);
         if (!File.Exists(path))
         {
             return false;
@@ -2801,7 +2857,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
             if (TryReadLegacyActivation(segmentId))
             {
-                File.Delete(Path.Combine(_root, ActivationFileName));
+                File.Delete(LegacyActivationPath(segmentId));
             }
         }
         catch (IOException)
@@ -2812,7 +2868,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// <summary>True when the single-writer activation file still names <paramref name="segmentId"/>.</summary>
     private bool TryReadLegacyActivation(ulong segmentId)
     {
-        var path = Path.Combine(_root, ActivationFileName);
+        var path = LegacyActivationPath(segmentId);
         if (!File.Exists(path))
         {
             return false;
@@ -2898,6 +2954,77 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         Age = 2,
     }
 
+    /// <summary>
+    /// Moves the active segment onto <see cref="RequestedAppendPool"/> before an append.
+    /// An empty active file is deleted. A non-empty active file is sealed first.
+    /// Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private void EnsureRequestedPoolUnlocked()
+    {
+        if (RequestedAppendPool is not int pool || (uint)pool >= (uint)_roots.Length)
+        {
+            return;
+        }
+
+        if (_activeSegmentId is ulong active
+            && _segments.TryGetValue(active, out var runtime)
+            && runtime.State == SegmentState.Active
+            && _poolBySegment.TryGetValue(active, out var current)
+            && current == pool)
+        {
+            return;
+        }
+
+        if (_activeSegmentId is ulong open
+            && _segments.TryGetValue(open, out var activeRuntime)
+            && activeRuntime.State == SegmentState.Active)
+        {
+            if (activeRuntime.SizeBytes == 0
+                && activeRuntime.PendingRecord is null
+                && !activeRuntime.TailUnreconciled)
+            {
+                DiscardEmptyActiveUnlocked(open);
+            }
+            else
+            {
+                CloseActiveUnlocked(open, _time.GetUtcNow(), SegmentSealCause.Explicit, ignoreHold: true);
+            }
+        }
+
+        var id = _nextSegmentId;
+        ReserveSegmentId?.Invoke(id);
+        TestHookAfterSegmentIdReserved?.Invoke(id);
+        _nextSegmentId = id + 1;
+        CreateActiveUnlocked(id, _time.GetUtcNow());
+    }
+
+    /// <summary>
+    /// Deletes an empty active segment that was opened on the wrong spool.
+    /// Caller holds <see cref="_writeGate"/>.
+    /// </summary>
+    private void DiscardEmptyActiveUnlocked(ulong id)
+    {
+        if (!_segments.TryGetValue(id, out var runtime))
+        {
+            return;
+        }
+
+        runtime.DisposeStream();
+        if (File.Exists(runtime.Path))
+        {
+            File.Delete(runtime.Path);
+        }
+
+        _segments.Remove(id);
+        _poolBySegment.Remove(id);
+        _catalogue.TryForget(new SegmentId(id));
+        UntrackActiveWriterUnlocked(id);
+        if (_activeSegmentId == id)
+        {
+            _activeSegmentId = null;
+        }
+    }
+
     private void EnsureActiveUnlocked()
     {
         if (_activeSegmentId is { } existing && _segments.TryGetValue(existing, out var runtime)
@@ -2916,7 +3043,14 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     private void CreateActiveUnlocked(ulong id, DateTimeOffset utcNow)
     {
         var segmentId = new SegmentId(id);
-        var path = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Active));
+        var chosen = RequestedAppendPool ?? 0;
+        if ((uint)chosen >= (uint)_roots.Length)
+        {
+            chosen = 0;
+        }
+
+        _poolBySegment[id] = chosen;
+        var path = Path.Combine(_roots[chosen], SegmentFileNames.Format(segmentId, SegmentFileKind.Active));
         var stream = new FileStream(
             path,
             FileMode.CreateNew,
@@ -2988,7 +3122,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         runtime.Stream.Flush(flushToDisk: true);
         _unflushedCommittedAppend = false;
         runtime.DisposeStream();
-        var closedPath = Path.Combine(_root, SegmentFileNames.Format(runtime.SegmentId, SegmentFileKind.Closed));
+        var closedPath = SegmentFile(runtime.SegmentId, SegmentFileKind.Closed);
         File.Move(runtime.Path, closedPath, overwrite: false);
         runtime.Path = closedPath;
         runtime.State = SegmentState.Closed;
@@ -3045,7 +3179,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             }
 
             runtime.DisposeStream();
-            var retiredPath = Path.Combine(_root, SegmentFileNames.Format(segmentId, SegmentFileKind.Retired));
+            var retiredPath = SegmentFile(segmentId, SegmentFileKind.Retired);
             File.Move(runtime.Path, retiredPath, overwrite: false);
             runtime.Path = retiredPath;
             runtime.State = SegmentState.Retired;
@@ -3055,30 +3189,139 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 
+    private static string[] SegmentRootsFrom(ArticleStorageRuntimeOptions options)
+    {
+        if (options.SegmentPools is { Count: > 0 })
+        {
+            var roots = new string[options.SegmentPools.Count];
+            for (var i = 0; i < roots.Length; i++)
+            {
+                var directory = options.SegmentPools[i].Directory;
+                ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+                roots[i] = directory;
+            }
+
+            return roots;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.SegmentDir);
+        return [options.SegmentDir];
+    }
+
+    private string RootFor(ulong segmentId) =>
+        _poolBySegment.TryGetValue(segmentId, out var pool) && (uint)pool < (uint)_roots.Length
+            ? _roots[pool]
+            : _roots[0];
+
+    /// <summary>
+    /// Bytes currently in segment files on <paramref name="poolIndex"/>.
+    /// This is the physical length, including an active file whose catalogue size is still the open size.
+    /// </summary>
+    /// <param name="poolIndex">Spool index.</param>
+    /// <returns>The sum of <c>seg-*</c> file lengths. Zero when the index is not a spool.</returns>
+    internal long PoolFileBytes(int poolIndex)
+    {
+        if ((uint)poolIndex >= (uint)_roots.Length || !Directory.Exists(_roots[poolIndex]))
+        {
+            return 0;
+        }
+
+        long sum = 0;
+        foreach (var file in Directory.EnumerateFiles(_roots[poolIndex], "seg-*"))
+        {
+            sum += new FileInfo(file).Length;
+        }
+
+        return sum;
+    }
+
+    /// <summary>
+    /// Path of <paramref name="kind"/> on the spool that owns <paramref name="segmentId"/>.
+    /// An unmapped id uses an existing file of that kind, or the first spool when none exists.
+    /// </summary>
+    /// <param name="segmentId">Segment discovered or created by this store.</param>
+    /// <param name="kind">Active, closed, or retired file kind.</param>
+    /// <returns>The segment file path.</returns>
+    internal string PathFor(SegmentId segmentId, SegmentFileKind kind)
+    {
+        lock (_writeGate)
+        {
+            return SegmentFile(segmentId, kind);
+        }
+    }
+
+    private string SegmentFile(SegmentId segmentId, SegmentFileKind kind)
+    {
+        if (_poolBySegment.TryGetValue(segmentId.Value, out var pool) && (uint)pool < (uint)_roots.Length)
+        {
+            return Path.Combine(_roots[pool], SegmentFileNames.Format(segmentId, kind));
+        }
+
+        foreach (var root in _roots)
+        {
+            var candidate = Path.Combine(root, SegmentFileNames.Format(segmentId, kind));
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return Path.Combine(_roots[0], SegmentFileNames.Format(segmentId, kind));
+    }
+
+    private string LegacyActivationPath(ulong segmentId)
+    {
+        foreach (var root in _roots)
+        {
+            var candidate = Path.Combine(root, ActivationFileName);
+            if (!File.Exists(candidate))
+            {
+                continue;
+            }
+
+            try
+            {
+                var bytes = File.ReadAllBytes(candidate);
+                if (bytes.Length == 16 && BinaryPrimitives.ReadUInt64LittleEndian(bytes) == segmentId)
+                {
+                    return candidate;
+                }
+            }
+            catch (IOException)
+            {
+            }
+        }
+
+        return Path.Combine(RootFor(segmentId), ActivationFileName);
+    }
+
     private void DiscoverAndRecoverUnlocked()
     {
-        var discovered = new List<(SegmentId Id, SegmentFileKind Kind, string Path, long Length)>();
+        var discovered = new List<(SegmentId Id, SegmentFileKind Kind, string Path, long Length, int Pool)>();
         var seenIds = new HashSet<ulong>();
-        foreach (var path in Directory.EnumerateFiles(_root, "seg-*"))
+        for (var pool = 0; pool < _roots.Length; pool++)
         {
-            var name = Path.GetFileName(path);
-            if (!SegmentFileNames.TryParse(name, out var segmentId, out var kind))
+            foreach (var path in Directory.EnumerateFiles(_roots[pool], "seg-*"))
             {
-                throw new SegmentStoreCorruptException(
-                    $"Malformed segment filename '{name}'.",
-                    path);
-            }
+                var name = Path.GetFileName(path);
+                if (!SegmentFileNames.TryParse(name, out var segmentId, out var kind))
+                {
+                    throw new SegmentStoreCorruptException(
+                        $"Malformed segment filename '{name}'.",
+                        path);
+                }
 
-            if (!seenIds.Add(segmentId.Value))
-            {
-                throw new SegmentStoreCorruptException(
-                    $"Duplicate segment id {segmentId.Value} under '{_root}'.",
-                    path);
-            }
+                if (!seenIds.Add(segmentId.Value))
+                {
+                    throw new SegmentStoreCorruptException(
+                        $"Duplicate segment id {segmentId.Value} across segment pools.",
+                        path);
+                }
 
-            var length = new FileInfo(path).Length;
-            discovered.Add((segmentId, kind, path, length));
-            FileSegmentStoreLogMessages.Discovered(_logger, segmentId.Value, kind.ToString(), length);
+                var length = new FileInfo(path).Length;
+                discovered.Add((segmentId, kind, path, length, pool));
+                FileSegmentStoreLogMessages.Discovered(_logger, segmentId.Value, kind.ToString(), length);
+            }
         }
 
         if (discovered.Count == 0)
@@ -3091,6 +3334,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         foreach (var item in discovered.OrderBy(static d => d.Id.Value))
         {
             maxId = Math.Max(maxId, item.Id.Value);
+            _poolBySegment[item.Id.Value] = item.Pool;
             var state = item.Kind switch
             {
                 SegmentFileKind.Active => SegmentState.Active,

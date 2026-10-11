@@ -160,13 +160,10 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         }
 
         ValidateFilesystemPath(
-            options.Storage.CacheDir,
-            "StorageServer:Storage:CacheDir",
-            failures);
-        ValidateFilesystemPath(
             options.Storage.ControlDir,
             "StorageServer:Storage:ControlDir",
             failures);
+        ValidateSegmentPools(options, failures);
 
         if (options.Storage.JournalSoftLimitBytes < 1)
         {
@@ -227,7 +224,7 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         ValidateEgressCache(options.Storage.EgressCache, failures);
         ValidateCompactionPolicy(options.Storage.Compaction, failures);
         ValidateCapacityPolicy(options.Storage.Capacity, failures);
-        ValidateBulkPressure(options.Storage.BulkPressure, failures);
+        ValidateSegmentPoolWatermarks(options.Storage.SegmentPools, failures);
     }
 
     private static void ValidateEgressCache(EgressCacheOptions? egress, List<string> failures)
@@ -310,70 +307,153 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         }
     }
 
-    private static void ValidateBulkPressure(
-        BulkStoragePressureOptions? bulkPressure,
-        List<string> failures)
+    private static void ValidateSegmentPools(StorageServerOptions options, List<string> failures)
     {
-        bulkPressure ??= new BulkStoragePressureOptions();
-        ValidatePercent(
-            bulkPressure.WarningPercent,
-            "StorageServer:Storage:BulkPressure:WarningPercent",
-            failures);
-        ValidatePercent(
-            bulkPressure.PressurePercent,
-            "StorageServer:Storage:BulkPressure:PressurePercent",
-            failures);
-        ValidatePercent(
-            bulkPressure.HighPercent,
-            "StorageServer:Storage:BulkPressure:HighPercent",
-            failures);
-        ValidatePercent(
-            bulkPressure.CriticalPercent,
-            "StorageServer:Storage:BulkPressure:CriticalPercent",
-            failures);
-        ValidatePercent(
-            bulkPressure.EmergencyPercent,
-            "StorageServer:Storage:BulkPressure:EmergencyPercent",
-            failures);
-        ValidatePercent(
-            bulkPressure.OperationalReservePercent,
-            "StorageServer:Storage:BulkPressure:OperationalReservePercent",
-            failures);
-        ValidatePercent(
-            bulkPressure.RecoveryReservePercent,
-            "StorageServer:Storage:BulkPressure:RecoveryReservePercent",
-            failures);
-        ValidatePercent(
-            bulkPressure.RewriteReservePercent,
-            "StorageServer:Storage:BulkPressure:RewriteReservePercent",
-            failures);
-
-        ValidatePercent(
-            bulkPressure.PressureRecoveryMarginPercent,
-            "StorageServer:Storage:BulkPressure:PressureRecoveryMarginPercent",
-            failures);
-        if (bulkPressure.PressurePercent is >= 0 and <= 100
-            && bulkPressure.PressureRecoveryMarginPercent is >= 0 and <= 100
-            && bulkPressure.PressureRecoveryMarginPercent > bulkPressure.PressurePercent)
+        var pools = options.Storage?.SegmentPools;
+        if (pools?.Directories is not { Count: > 0 })
         {
             failures.Add(
-                "StorageServer:Storage:BulkPressure:PressureRecoveryMarginPercent must be less than or equal to PressurePercent.");
+                "StorageServer:Storage:SegmentPools:Directories must contain at least one spool.");
+            return;
         }
 
-        if (bulkPressure.WarningPercent is >= 0 and <= 100
-            && bulkPressure.PressurePercent is >= 0 and <= 100
-            && bulkPressure.HighPercent is >= 0 and <= 100
-            && bulkPressure.CriticalPercent is >= 0 and <= 100
-            && bulkPressure.EmergencyPercent is >= 0 and <= 100
-            && (bulkPressure.WarningPercent >= bulkPressure.PressurePercent
-                || bulkPressure.PressurePercent >= bulkPressure.HighPercent
-                || bulkPressure.HighPercent >= bulkPressure.CriticalPercent
-                || bulkPressure.CriticalPercent >= bulkPressure.EmergencyPercent))
+        var normalized = new List<string>(pools.Directories.Count);
+        for (var i = 0; i < pools.Directories.Count; i++)
         {
-            failures.Add(
-                "StorageServer:Storage:BulkPressure watermarks must be strictly increasing: WarningPercent < PressurePercent < HighPercent < CriticalPercent < EmergencyPercent.");
+            var entry = pools.Directories[i];
+            var key = $"StorageServer:Storage:SegmentPools:Directories:{i}:CacheDir";
+            if (entry is null)
+            {
+                failures.Add($"{key} is required.");
+                normalized.Add("");
+                continue;
+            }
+
+            ValidateFilesystemPath(entry.CacheDir, key, failures);
+            if (entry.MaxCapacity <= 0)
+            {
+                failures.Add(
+                    $"StorageServer:Storage:SegmentPools:Directories:{i}:MaxCapacity must be a positive number of bytes.");
+            }
+
+            normalized.Add(NormalizeDirectory(entry.CacheDir));
+        }
+
+        for (var i = 0; i < normalized.Count; i++)
+        {
+            if (normalized[i].Length == 0)
+            {
+                continue;
+            }
+
+            for (var j = i + 1; j < normalized.Count; j++)
+            {
+                if (normalized[j].Length == 0 || !SpoolPathsConflict(normalized[i], normalized[j]))
+                {
+                    continue;
+                }
+
+                failures.Add(
+                    "StorageServer:Storage:SegmentPools:Directories contains duplicate or nested paths. Each spool directory must have unambiguous ownership.");
+                return;
+            }
         }
     }
+
+    private static void ValidateSegmentPoolWatermarks(SegmentPoolOptions? pools, List<string> failures)
+    {
+        pools ??= new SegmentPoolOptions();
+        ValidatePercent(
+            pools.WarningPercent,
+            "StorageServer:Storage:SegmentPools:WarningPercent",
+            failures);
+        ValidatePercent(
+            pools.PressurePercent,
+            "StorageServer:Storage:SegmentPools:PressurePercent",
+            failures);
+        ValidatePercent(
+            pools.HighPercent,
+            "StorageServer:Storage:SegmentPools:HighPercent",
+            failures);
+        ValidatePercent(
+            pools.CriticalPercent,
+            "StorageServer:Storage:SegmentPools:CriticalPercent",
+            failures);
+        ValidatePercent(
+            pools.EmergencyPercent,
+            "StorageServer:Storage:SegmentPools:EmergencyPercent",
+            failures);
+        ValidatePercent(
+            pools.OperationalReservePercent,
+            "StorageServer:Storage:SegmentPools:OperationalReservePercent",
+            failures);
+        ValidatePercent(
+            pools.RecoveryReservePercent,
+            "StorageServer:Storage:SegmentPools:RecoveryReservePercent",
+            failures);
+        ValidatePercent(
+            pools.RewriteReservePercent,
+            "StorageServer:Storage:SegmentPools:RewriteReservePercent",
+            failures);
+        ValidatePercent(
+            pools.PressureRecoveryMarginPercent,
+            "StorageServer:Storage:SegmentPools:PressureRecoveryMarginPercent",
+            failures);
+        if (pools.PressurePercent is >= 0 and <= 100
+            && pools.PressureRecoveryMarginPercent is >= 0 and <= 100
+            && pools.PressureRecoveryMarginPercent > pools.PressurePercent)
+        {
+            failures.Add(
+                "StorageServer:Storage:SegmentPools:PressureRecoveryMarginPercent must be less than or equal to PressurePercent.");
+        }
+
+        if (pools.WarningPercent is >= 0 and <= 100
+            && pools.PressurePercent is >= 0 and <= 100
+            && pools.HighPercent is >= 0 and <= 100
+            && pools.CriticalPercent is >= 0 and <= 100
+            && pools.EmergencyPercent is >= 0 and <= 100
+            && (pools.WarningPercent >= pools.PressurePercent
+                || pools.PressurePercent >= pools.HighPercent
+                || pools.HighPercent >= pools.CriticalPercent
+                || pools.CriticalPercent >= pools.EmergencyPercent))
+        {
+            failures.Add(
+                "StorageServer:Storage:SegmentPools watermarks must be strictly increasing: WarningPercent < PressurePercent < HighPercent < CriticalPercent < EmergencyPercent.");
+        }
+    }
+
+    private static string NormalizeDirectory(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return "";
+        }
+
+        try
+        {
+            var full = Path.GetFullPath(path.Trim());
+            return full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return "";
+        }
+    }
+
+    private static bool SpoolPathsConflict(string left, string right)
+    {
+        if (string.Equals(left, right, PathComparison))
+        {
+            return true;
+        }
+
+        var prefix = left.Length < right.Length ? left : right;
+        var longer = left.Length < right.Length ? right : left;
+        return longer.StartsWith(prefix + Path.DirectorySeparatorChar, PathComparison);
+    }
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private static void ValidatePercent(int percent, string key, List<string> failures)
     {

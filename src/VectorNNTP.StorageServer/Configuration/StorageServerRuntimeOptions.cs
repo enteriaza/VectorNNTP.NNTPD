@@ -32,7 +32,7 @@ public sealed record StorageServerRuntimeOptions(
 
 /// <summary>Validated article-storage engine runtime bounds.</summary>
 /// <param name="ControlDir">Resolved NVMe control-tier root.</param>
-/// <param name="SegmentDir">Resolved SATA segment root (same path as <c>Storage:CacheDir</c>).</param>
+/// <param name="SegmentDir">Resolved directory of the first segment spool.</param>
 /// <param name="JournalSoftLimitBytes">Journal soft pressure threshold.</param>
 /// <param name="JournalHardLimitBytes">Journal hard reject threshold.</param>
 /// <param name="SegmentTargetSizeBytes">Target closed-segment size.</param>
@@ -59,7 +59,10 @@ public sealed record StorageServerRuntimeOptions(
 /// <c>1</c> is a single active writer.
 /// </param>
 /// <param name="BulkPressure">
-/// Cache-volume watermarks and reserves. Null uses the documented defaults.
+/// Watermarks copied from <c>Storage:SegmentPools</c>. Null uses the documented defaults.
+/// </param>
+/// <param name="SegmentPools">
+/// Resolved segment spools. Null means one uncapped spool at <paramref name="SegmentDir"/>.
 /// </param>
 public sealed record ArticleStorageRuntimeOptions(
     string ControlDir,
@@ -73,7 +76,14 @@ public sealed record ArticleStorageRuntimeOptions(
     int CapacityFreeCapacity = ArticleCapacityOptions.DefaultFreeCapacity,
     TimeSpan MaxSegmentSealDelay = default,
     int ActiveSegmentCount = ArticleStorageOptions.DefaultActiveSegmentCount,
-    BulkStoragePressureOptions? BulkPressure = null);
+    BulkStoragePressureOptions? BulkPressure = null,
+    IReadOnlyList<SegmentPoolRuntime>? SegmentPools = null);
+
+/// <summary>One resolved segment spool.</summary>
+/// <param name="Index">Configuration index.</param>
+/// <param name="Directory">Absolute or resolved directory.</param>
+/// <param name="MaxCapacity">Hard byte ceiling.</param>
+public sealed record SegmentPoolRuntime(int Index, string Directory, long MaxCapacity);
 
 /// <summary>Validated listener bounds.</summary>
 public sealed record StorageServerListenerRuntimeOptions(

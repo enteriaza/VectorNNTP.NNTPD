@@ -43,6 +43,11 @@ internal readonly record struct CompactionJournalFrameKey(
 /// whose durable flush has not yet returned. Written segment copies and bound compaction destinations
 /// stay tracked until reclaim and contribute zero. The ledger itself starts empty; the engine
 /// reconstructs journal and index reservations from durable files after open.
+/// When segment pools track reservations, segment-copy and compaction-destination bytes are owned by
+/// <see cref="SegmentPoolCapacity"/> and are recorded here only so an unwritten copy can be found.
+/// Those rows do not change <see cref="ArticleReservedBytes"/> or <see cref="CompactionReservedBytes"/>.
+/// Journal, index, compaction-journal, and checkpoint bytes stay on this ledger because they live
+/// on the control filesystem, not on a segment spool.
 /// </remarks>
 internal sealed class ProcessLocalCapacityLedger
 {
@@ -399,18 +404,31 @@ internal sealed class ProcessLocalCapacityLedger
     /// Associates a tentative article reservation with the allocated journal sequence.
     /// This is the first segment-copy reservation for that sequence.
     /// </summary>
-    public void BindArticleSequence(ulong sequence, long requiredBytes)
+    /// <param name="sequence">Journal sequence.</param>
+    /// <param name="requiredBytes">Segment-copy bytes.</param>
+    /// <param name="chargesAdmission">
+    /// False when a segment spool already holds <paramref name="requiredBytes"/>.
+    /// </param>
+    public void BindArticleSequence(ulong sequence, long requiredBytes, bool chargesAdmission = true)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(requiredBytes);
-        if (!_articleBySequence.TryAdd(sequence, new ArticleSegmentReservation(1, 0, requiredBytes, [])))
+        if (!_articleBySequence.TryAdd(
+                sequence,
+                new ArticleSegmentReservation(1, 0, requiredBytes, [], chargesAdmission)))
         {
             throw new InvalidOperationException($"Article capacity reservation already exists for sequence {sequence}.");
         }
     }
 
     /// <summary>Alias for <see cref="BindArticleSequence"/>.</summary>
-    public void BindSequence(ulong sequence, long requiredBytes) =>
-        BindArticleSequence(sequence, requiredBytes);
+    /// <param name="sequence">Journal sequence.</param>
+    /// <param name="requiredBytes">Segment-copy bytes.</param>
+    /// <param name="chargesAdmission">
+    /// False when <see cref="SegmentPoolCapacity"/> already holds the segment bytes.
+    /// The sequence is still tracked so a later append can see the unwritten copy.
+    /// </param>
+    public void BindSequence(ulong sequence, long requiredBytes, bool chargesAdmission = true) =>
+        BindArticleSequence(sequence, requiredBytes, chargesAdmission);
 
     /// <summary>Removes a tentative article reservation when durable Accept did not succeed.</summary>
     public void RollbackUnboundArticle(long requiredBytes)
@@ -454,8 +472,12 @@ internal sealed class ProcessLocalCapacityLedger
             current.ReservedCopies + 1,
             current.WrittenCopies,
             current.BytesPerCopy,
-            current.WrittenSegments);
-        _articleReservedBytes = checked(_articleReservedBytes + bytesPerCopy);
+            current.WrittenSegments,
+            current.ChargesAdmission);
+        if (current.ChargesAdmission)
+        {
+            _articleReservedBytes = checked(_articleReservedBytes + bytesPerCopy);
+        }
     }
 
     /// <summary>
@@ -484,8 +506,12 @@ internal sealed class ProcessLocalCapacityLedger
             current.ReservedCopies,
             current.WrittenCopies + 1,
             current.BytesPerCopy,
-            written);
-        SubtractArticleAdmission(current.BytesPerCopy);
+            written,
+            current.ChargesAdmission);
+        if (current.ChargesAdmission)
+        {
+            SubtractArticleAdmission(current.BytesPerCopy);
+        }
     }
 
     /// <summary>
@@ -501,10 +527,13 @@ internal sealed class ProcessLocalCapacityLedger
         }
 
         var remaining = current.ReservedCopies - 1;
-        _articleReservedBytes -= current.BytesPerCopy;
-        if (_articleReservedBytes < 0)
+        if (current.ChargesAdmission)
         {
-            _articleReservedBytes = 0;
+            _articleReservedBytes -= current.BytesPerCopy;
+            if (_articleReservedBytes < 0)
+            {
+                _articleReservedBytes = 0;
+            }
         }
 
         if (remaining == 0)
@@ -517,7 +546,8 @@ internal sealed class ProcessLocalCapacityLedger
                 remaining,
                 current.WrittenCopies,
                 current.BytesPerCopy,
-                current.WrittenSegments);
+                current.WrittenSegments,
+                current.ChargesAdmission);
         }
 
         return true;
@@ -535,7 +565,7 @@ internal sealed class ProcessLocalCapacityLedger
         }
 
         var unwrittenCopies = reservation.ReservedCopies - reservation.WrittenCopies;
-        if (unwrittenCopies > 0)
+        if (unwrittenCopies > 0 && reservation.ChargesAdmission)
         {
             SubtractArticleAdmission(checked((long)unwrittenCopies * reservation.BytesPerCopy));
         }
@@ -931,7 +961,8 @@ internal sealed class ProcessLocalCapacityLedger
                     reservedCopies,
                     current.WrittenCopies - removed,
                     current.BytesPerCopy,
-                    kept)));
+                    kept,
+                    current.ChargesAdmission)));
         }
 
         if (remove is not null)
@@ -1044,17 +1075,26 @@ internal sealed class ProcessLocalCapacityLedger
     public bool HoldsCompactionDestination(ulong compactionId, ulong relocationId) =>
         _compactionByKey.ContainsKey((compactionId, relocationId));
 
-    public void ReserveCompaction(ulong compactionId, ulong relocationId, long requiredBytes)
+    public void ReserveCompaction(
+        ulong compactionId,
+        ulong relocationId,
+        long requiredBytes,
+        bool chargesAdmission = true)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(requiredBytes);
         var key = (compactionId, relocationId);
-        if (!_compactionByKey.TryAdd(key, new CompactionDestinationHold(requiredBytes, Location: null)))
+        if (!_compactionByKey.TryAdd(
+                key,
+                new CompactionDestinationHold(requiredBytes, Location: null, chargesAdmission)))
         {
             throw new InvalidOperationException(
                 $"Compaction capacity reservation already exists for compaction {compactionId} relocation {relocationId}.");
         }
 
-        _compactionReservedBytes = checked(_compactionReservedBytes + requiredBytes);
+        if (chargesAdmission)
+        {
+            _compactionReservedBytes = checked(_compactionReservedBytes + requiredBytes);
+        }
     }
 
     /// <summary>
@@ -1073,7 +1113,7 @@ internal sealed class ProcessLocalCapacityLedger
                 $"Compaction capacity reservation does not exist for compaction {compactionId} relocation {relocationId}.");
         }
 
-        if (hold.Location is null)
+        if (hold.Location is null && hold.ChargesAdmission)
         {
             _compactionReservedBytes -= hold.Bytes;
             if (_compactionReservedBytes < 0)
@@ -1145,7 +1185,7 @@ internal sealed class ProcessLocalCapacityLedger
             return false;
         }
 
-        if (hold.Location is null)
+        if (hold.Location is null && hold.ChargesAdmission)
         {
             _compactionReservedBytes -= hold.Bytes;
             if (_compactionReservedBytes < 0)
@@ -1216,7 +1256,8 @@ internal sealed class ProcessLocalCapacityLedger
             int reservedCopies,
             int writtenCopies,
             long bytesPerCopy,
-            SegmentId[] writtenSegments)
+            SegmentId[] writtenSegments,
+            bool chargesAdmission = true)
         {
             if (writtenSegments.Length != writtenCopies)
             {
@@ -1229,6 +1270,7 @@ internal sealed class ProcessLocalCapacityLedger
             WrittenCopies = writtenCopies;
             BytesPerCopy = bytesPerCopy;
             WrittenSegments = writtenSegments;
+            ChargesAdmission = chargesAdmission;
         }
 
         public int ReservedCopies { get; }
@@ -1241,9 +1283,18 @@ internal sealed class ProcessLocalCapacityLedger
         public SegmentId[] WrittenSegments { get; }
 
         public long TotalBytes => (long)ReservedCopies * BytesPerCopy;
+
+        /// <summary>
+        /// False when the segment spool already reserved these bytes.
+        /// The row still tracks which copies are unwritten.
+        /// </summary>
+        public bool ChargesAdmission { get; }
     }
 
-    private readonly record struct CompactionDestinationHold(long Bytes, StoredArticleLocation? Location);
+    private readonly record struct CompactionDestinationHold(
+        long Bytes,
+        StoredArticleLocation? Location,
+        bool ChargesAdmission = true);
 
     private readonly record struct IndexPresentReservation(
         ArticleId ArtId,

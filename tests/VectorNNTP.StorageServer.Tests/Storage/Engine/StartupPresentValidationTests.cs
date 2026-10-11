@@ -510,7 +510,7 @@ public sealed class StartupPresentValidationTests
     private static StorageEngineApplicationService CreateService(TempStorageDir dir, CollectingSink? sink = null)
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.CacheDir = dir.Options.SegmentDir;
+        options.Storage.SegmentPools.Directories[0].CacheDir = dir.Options.SegmentDir;
         options.Storage.ControlDir = dir.Options.ControlDir;
         var runtime = StorageServerRuntimeOptionsFactory.Create(
             options,

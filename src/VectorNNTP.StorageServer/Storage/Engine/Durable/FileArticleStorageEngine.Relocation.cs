@@ -322,6 +322,7 @@ public sealed partial class FileArticleStorageEngine
 
         var reservedCompaction = false;
         var reservedIndex = false;
+        var compactionPool = SegmentPoolReservation.None;
         if (_capacityAdmissionEnabled)
         {
             var volume = RequireSegmentVolume();
@@ -329,15 +330,40 @@ public sealed partial class FileArticleStorageEngine
             lock (_gate)
             {
                 var ceiling = _capacityMaximumUtilization + _capacityCompactionHeadroom;
+                var poolRejected = false;
                 var decision = Admit(
                     volume,
                     requiredBytes,
                     ceiling,
                     ledger => ledger.HoldsCompactionDestination(intent.CompactionId, intent.RelocationId),
-                    ledger => ledger.ReserveCompaction(
-                        intent.CompactionId,
-                        intent.RelocationId,
-                        requiredBytes));
+                    ledger =>
+                    {
+                        if (!TryReserveSegmentPool(requiredBytes, out compactionPool, out _))
+                        {
+                            poolRejected = true;
+                            return;
+                        }
+
+                        ledger.ReserveCompaction(
+                            intent.CompactionId,
+                            intent.RelocationId,
+                            requiredBytes,
+                            chargesAdmission: !_segmentPools.TracksReservations);
+                    },
+                    enforceCeiling: !_segmentPools.TracksReservations);
+                if (poolRejected)
+                {
+                    if (!compactionPool.IsNone)
+                    {
+                        _segmentPools.Rollback(compactionPool);
+                        compactionPool = SegmentPoolReservation.None;
+                    }
+
+                    return new ArticleRelocationResult(
+                        ArticleRelocationOutcome.RejectedCapacity,
+                        intent.ArtId,
+                        Reason: SegmentPoolCapacity.HardLimitReason);
+                }
                 if (!decision.Admitted)
                 {
                     FileArticleStorageEngineLogMessages.RejectedCompactionCapacity(
@@ -374,6 +400,8 @@ public sealed partial class FileArticleStorageEngine
                     if (reservedCompaction)
                     {
                         ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
+                        _segmentPools.Rollback(compactionPool);
+                        compactionPool = SegmentPoolReservation.None;
                         reservedCompaction = false;
                     }
 
@@ -399,6 +427,9 @@ public sealed partial class FileArticleStorageEngine
             if (TryGetBoundCompactionDestination(intent.CompactionId, intent.RelocationId, out var boundDestination))
             {
                 destination = boundDestination;
+                _segmentPools.NoteReservationPersisted(compactionPool, AllocatedBytesForPool);
+                compactionPool = SegmentPoolReservation.None;
+                reservedCompaction = false;
             }
             else
             {
@@ -411,13 +442,19 @@ public sealed partial class FileArticleStorageEngine
                 }
 
                 var reported = await _segments
-                    .AppendToActiveReportingAsync(artData, ArrivalForRelocation(intent.ArtId), cancellationToken)
+                    .AppendToActiveReportingAsync(
+                        artData,
+                        ArrivalForRelocation(intent.ArtId),
+                        cancellationToken,
+                        compactionPool.IsNone ? null : compactionPool.PoolIndex)
                     .ConfigureAwait(false);
                 destination = reported.Location;
                 _ = Interlocked.Increment(ref _physicalAppendCount);
                 BindCompactionDestination(intent.CompactionId, intent.RelocationId, destination);
                 // Flush(true) has returned. Admission no longer counts this destination.
                 // The tracking record stays until this segment is reclaimed.
+                _segmentPools.NoteReservationPersisted(compactionPool, AllocatedBytesForPool);
+                compactionPool = SegmentPoolReservation.None;
                 reservedCompaction = false;
             }
 
@@ -472,6 +509,8 @@ public sealed partial class FileArticleStorageEngine
             if (reservedCompaction && ex is not UnreconciledDurableTailException)
             {
                 ReleaseCompactionReservation(intent.CompactionId, intent.RelocationId);
+                _segmentPools.Rollback(compactionPool);
+                compactionPool = SegmentPoolReservation.None;
             }
 
             if (reservedIndex)

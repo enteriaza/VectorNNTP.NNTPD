@@ -140,12 +140,15 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         int ArtSize,
         long SegmentBytes,
         long JournalBytes,
-        long IndexBytes);
+        long IndexBytes,
+        SegmentPoolReservation PoolReservation = default);
     private readonly int _capacityMaximumUtilization;
     private readonly int _capacityCompactionHeadroom;
     private readonly int _capacityMaximumUsageCapacity;
     private readonly int _capacityFreeCapacity;
     private readonly BulkStoragePressurePolicy _bulkPressure;
+    private readonly SegmentPoolCapacity _segmentPools;
+    private readonly IStorageCapacityReader[] _segmentPoolReaders;
     private readonly object _bulkAdmissionLock = new();
     private BulkStoragePressureState? _lastBulkAdmissionState;
     private SegmentCopyAdmission _lastSegmentAdmission;
@@ -210,11 +213,15 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         int capacityMaximumUsageCapacity,
         int capacityFreeCapacity,
         BulkStoragePressurePolicy bulkPressure,
-        ArticleEgressCache egress)
+        ArticleEgressCache egress,
+        SegmentPoolCapacity segmentPools,
+        IStorageCapacityReader? segmentPoolReader,
+        IReadOnlyList<IStorageCapacityReader>? segmentPoolReaders = null)
     {
         ArgumentNullException.ThrowIfNull(capacity);
         ArgumentNullException.ThrowIfNull(bulkPressure);
         ArgumentNullException.ThrowIfNull(egress);
+        ArgumentNullException.ThrowIfNull(segmentPools);
         _journal = journal;
         _segments = segments;
         _index = index;
@@ -230,6 +237,32 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         _capacityMaximumUsageCapacity = capacityMaximumUsageCapacity;
         _capacityFreeCapacity = capacityFreeCapacity;
         _bulkPressure = bulkPressure;
+        _segmentPools = segmentPools;
+        _segmentPoolReaders = new IStorageCapacityReader[segmentPools.PoolCount];
+        if (segmentPoolReaders is not null && segmentPoolReaders.Count != _segmentPoolReaders.Length)
+        {
+            throw new ArgumentException(
+                "A capacity reader is required for every spool.",
+                nameof(segmentPoolReaders));
+        }
+
+        for (var i = 0; i < _segmentPoolReaders.Length; i++)
+        {
+            if (segmentPoolReaders is not null)
+            {
+                _segmentPoolReaders[i] = segmentPoolReaders[i]
+                    ?? throw new ArgumentException(
+                        "A capacity reader is required for every spool.",
+                        nameof(segmentPoolReaders));
+            }
+            else
+            {
+                _segmentPoolReaders[i] = i == 0 && segmentPoolReader is not null
+                    ? segmentPoolReader
+                    : new CacheDirectoryCapacityReader(segmentPools.Directory(i));
+            }
+        }
+
         segments.AdoptSegmentIdFloor(journal.NextSegmentId);
         segments.ReserveSegmentId = journal.ReserveSegmentId;
         journal.RetainRetiredCompaction = segmentId =>
@@ -530,6 +563,182 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
+    /// Worst configured-spool evaluation after refreshing file lengths.
+    /// Unmeasured when this process is not enforcing spool caps, so filesystem classification stays in force.
+    /// </summary>
+    internal BulkStoragePressureEvaluation ObserveSegmentPoolPressure()
+    {
+        if (!_segmentPools.TracksReservations)
+        {
+            return BulkStoragePressurePolicy.Unmeasured();
+        }
+
+        RefreshPoolAllocated();
+        return _segmentPools.WorstSpoolEvaluation();
+    }
+
+    private static SegmentPoolCapacity CreateSegmentPoolCapacity(
+        ArticleStorageRuntimeOptions options,
+        IStorageVolumeProbe volumeProbe,
+        ILogger log)
+    {
+        var pools = options.SegmentPools;
+        var definitions = new SegmentPoolDefinition[pools is { Count: > 0 } ? pools.Count : 1];
+        if (pools is { Count: > 0 })
+        {
+            for (var i = 0; i < pools.Count; i++)
+            {
+                definitions[i] = DefinePool(pools[i].Index, pools[i].Directory, pools[i].MaxCapacity, volumeProbe);
+            }
+        }
+        else
+        {
+            definitions[0] = DefinePool(0, options.SegmentDir, SegmentPoolCapacity.Uncapped, volumeProbe);
+        }
+
+        foreach (var definition in definitions)
+        {
+            FileArticleStorageEngineLogMessages.SegmentPoolReady(
+                log,
+                definition.Index,
+                definition.Directory,
+                definition.MaxCapacity,
+                definition.VolumeKey);
+        }
+
+        return SegmentPoolCapacity.Create(definitions, options.BulkPressure, options.CapacityMaximumUtilization);
+    }
+
+    private static SegmentPoolDefinition DefinePool(
+        int index,
+        string directory,
+        long maxCapacity,
+        IStorageVolumeProbe volumeProbe)
+    {
+        var key = volumeProbe.TryResolve(directory, out var identity) && !string.IsNullOrWhiteSpace(identity.Value)
+            ? identity.Value
+            : "unresolved:" + directory;
+        return new SegmentPoolDefinition(index, directory, maxCapacity, key);
+    }
+
+    private bool TryReserveSegmentPool(long bytes, out SegmentPoolReservation reservation, out string? reason)
+    {
+        if (!_segmentPools.TracksReservations)
+        {
+            reservation = SegmentPoolReservation.None;
+            reason = null;
+            return true;
+        }
+
+        RefreshPoolAllocated();
+        return _segmentPools.TryReserve(bytes, _segments.ActivePoolIndex, SamplePools(), out reservation, out reason);
+    }
+
+    private void RefreshPoolAllocated()
+    {
+        var totals = new long[_segmentPools.PoolCount];
+        for (var i = 0; i < totals.Length; i++)
+        {
+            totals[i] = _segments.PoolFileBytes(i);
+        }
+
+        _segmentPools.SetAllocated(totals);
+    }
+
+    private long AllocatedBytesForPool(int poolIndex) => _segments.PoolFileBytes(poolIndex);
+
+    private SegmentPoolVolumeSample[] SamplePools()
+    {
+        var samples = new SegmentPoolVolumeSample[_segmentPools.PoolCount];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var key = _segmentPools.VolumeKey(i);
+            if (key.StartsWith("unresolved:", StringComparison.Ordinal))
+            {
+                samples[i] = new SegmentPoolVolumeSample(key, 0, 0, Measured: false);
+                continue;
+            }
+
+            try
+            {
+                var snap = _segmentPoolReaders[i].Read();
+                var used = Math.Max(0L, snap.TotalBytes - snap.AvailableBytes);
+                _segmentPools.ObserveFilesystem(key, used);
+                var measured = snap.TotalBytes > 0 && snap.AvailableBytes >= 0;
+                samples[i] = new SegmentPoolVolumeSample(key, snap.TotalBytes, snap.AvailableBytes, measured);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                FileArticleStorageEngineLogMessages.BulkCapacityUnmeasured(_logger, ex);
+                samples[i] = new SegmentPoolVolumeSample(key, 0, 0, Measured: false);
+            }
+        }
+
+        return samples;
+    }
+
+    /// <summary>
+    /// Capacity triple published to the fleet. One uncapped spool reports its filesystem.
+    /// Configured spools report remaining admission room: each filesystem once, capped by
+    /// <c>MaxCapacity</c> minus accounted bytes. An unmeasured filesystem adds no free bytes.
+    /// </summary>
+    /// <returns>The advertisement snapshot.</returns>
+    /// <exception cref="InvalidOperationException">No spool could be measured.</exception>
+    internal StorageCapacitySnapshot ReadFleetAdvertisement()
+    {
+        if (!_segmentPools.TracksReservations)
+        {
+            return _segmentPoolReaders[0].Read();
+        }
+
+        RefreshPoolAllocated();
+        var samples = SamplePools();
+        var fleet = new SegmentPoolFleetCapacity.SpoolSample[samples.Length];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            fleet[i] = new SegmentPoolFleetCapacity.SpoolSample(
+                samples[i].VolumeKey,
+                _segmentPools.MaxCapacity(i),
+                _segmentPools.AccountedBytes(i),
+                _segmentPools.ReservedBytes(i),
+                samples[i].Measured,
+                samples[i].TotalBytes,
+                samples[i].AvailableBytes);
+        }
+
+        return SegmentPoolFleetCapacity.Combine(fleet, _capacityMaximumUtilization, _bulkPressure);
+    }
+
+    private long ReadPoolUsedBytes(int poolIndex)
+    {
+        if ((uint)poolIndex >= (uint)_segmentPoolReaders.Length)
+        {
+            return 0;
+        }
+
+        try
+        {
+            var snap = _segmentPoolReaders[poolIndex].Read();
+            return Math.Max(0L, snap.TotalBytes - snap.AvailableBytes);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return 0;
+        }
+    }
+
+    private void NoteSegmentPoolFileDeleted(int poolIndex, long fileBytes, long usedBefore)
+    {
+        if (!_segmentPools.TracksReservations || fileBytes <= 0)
+        {
+            return;
+        }
+
+        var usedAfter = ReadPoolUsedBytes(poolIndex);
+        _segmentPools.NoteFileDeleted(poolIndex, fileBytes, usedBefore, usedAfter);
+    }
+
+    /// <summary>
     /// Runs usage-pressure recovery before admission when the physical trigger is latched
     /// or the article would exceed <see cref="ArticleCapacityOptions.MaximumUtilization"/>.
     /// Null when no coordinator is attached (tests that only exercise the ceiling).
@@ -737,7 +946,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         StorageCapacitySnapshot Snapshot,
         long ArticleReservedBytes,
         long CompactionReservedBytes,
-        long UnwrittenSegmentBytes)
+        long UnwrittenSegmentBytes,
+        SegmentPoolReservation PoolReservation = default)
     {
         /// <summary>Utilization ceiling rejected the copy. Not a bulk-reserve decision.</summary>
         public static SegmentCopyAdmission CapacityCeiling(StorageCapacitySnapshot snapshot) =>
@@ -785,13 +995,43 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 unwritten = long.MaxValue;
             }
 
-            if (!_bulkPressure.AllowsNewAccept(in evaluation, segmentBytes, unwritten))
+            // A tracked spool set admits against the selected spool and its volume.
+            // The primary segment volume is the first spool; applying it to every copy
+            // would reject a write that fits on another volume.
+            if (!_segmentPools.TracksReservations)
+            {
+                if (!_bulkPressure.AllowsNewAccept(in evaluation, segmentBytes, unwritten))
+                {
+                    return new SegmentCopyAdmission(
+                        false,
+                        evaluation.Measured
+                            ? BulkStoragePressurePolicy.RecoveryReserveRejectionReason
+                            : BulkStoragePressurePolicy.UnmeasuredRejectionReason,
+                        evaluation,
+                        snap,
+                        ledger.ArticleReservedBytes,
+                        ledger.CompactionReservedBytes,
+                        unwritten);
+                }
+
+                if (!ledger.WouldFit(snap.UsedBytes, snap.TotalBytes, segmentBytes, _capacityMaximumUtilization))
+                {
+                    return new SegmentCopyAdmission(
+                        false,
+                        "storage-capacity",
+                        evaluation,
+                        snap,
+                        ledger.ArticleReservedBytes,
+                        ledger.CompactionReservedBytes,
+                        unwritten);
+                }
+            }
+
+            if (!TryReserveSegmentPool(segmentBytes, out var poolReservation, out var poolReason))
             {
                 return new SegmentCopyAdmission(
                     false,
-                    evaluation.Measured
-                        ? BulkStoragePressurePolicy.RecoveryReserveRejectionReason
-                        : BulkStoragePressurePolicy.UnmeasuredRejectionReason,
+                    poolReason,
                     evaluation,
                     snap,
                     ledger.ArticleReservedBytes,
@@ -799,19 +1039,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     unwritten);
             }
 
-            if (!ledger.WouldFit(snap.UsedBytes, snap.TotalBytes, segmentBytes, _capacityMaximumUtilization))
+            // The spool reservation is the segment-capacity charge. This ledger still
+            // tracks the unwritten copy, but it must not bill the primary volume for
+            // bytes that may land on another spool.
+            if (!_segmentPools.TracksReservations)
             {
-                return new SegmentCopyAdmission(
-                    false,
-                    "storage-capacity",
-                    evaluation,
-                    snap,
-                    ledger.ArticleReservedBytes,
-                    ledger.CompactionReservedBytes,
-                    unwritten);
+                ledger.TentativeAdd(segmentBytes);
             }
-
-            ledger.TentativeAdd(segmentBytes);
             return new SegmentCopyAdmission(
                 true,
                 null,
@@ -819,7 +1053,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 snap,
                 ledger.ArticleReservedBytes,
                 ledger.CompactionReservedBytes,
-                unwritten);
+                unwritten,
+                poolReservation);
         });
     }
 
@@ -959,8 +1194,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         return false;
     }
 
-    private bool TryReserveAcceptPair(ArticleRecord record, long segmentBytes, long journalBytes, long indexBytes)
+    private bool TryReserveAcceptPair(
+        ArticleRecord record,
+        long segmentBytes,
+        long journalBytes,
+        long indexBytes,
+        out SegmentPoolReservation poolReservation)
     {
+        poolReservation = SegmentPoolReservation.None;
         if (_pendingAcceptAdmission is { } pending
             && pending.ArtId == record.ArtId
             && pending.ArtHash == record.ArtHash
@@ -969,11 +1210,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             && pending.JournalBytes == journalBytes
             && pending.IndexBytes == indexBytes)
         {
+            poolReservation = pending.PoolReservation;
             return true;
         }
 
         var control = RequireControlVolume();
         var segmentGate = TryAdmitNewSegmentCopy(segmentBytes);
+        poolReservation = segmentGate.PoolReservation;
         if (!segmentGate.Admitted)
         {
             _lastSegmentAdmission = segmentGate;
@@ -1004,6 +1247,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             ledger => ledger.TentativeAddJournal(journalBytes));
         if (!journalDecision.Admitted)
         {
+            _segmentPools.Rollback(poolReservation);
+            poolReservation = SegmentPoolReservation.None;
             _lastSegmentAdmission = SegmentCopyAdmission.CapacityCeiling(journalDecision.Snapshot);
             RequireSegmentVolume().WithLedger(ledger =>
             {
@@ -1036,6 +1281,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             return true;
         }
 
+        _segmentPools.Rollback(poolReservation);
+        poolReservation = SegmentPoolReservation.None;
         _lastSegmentAdmission = SegmentCopyAdmission.CapacityCeiling(indexDecision.Snapshot);
         control.WithLedger(ledger =>
         {
@@ -1068,15 +1315,20 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         bool reservedIndex,
         long segmentBytes,
         long journalBytes,
-        long indexBytes)
+        long indexBytes,
+        SegmentPoolReservation poolReservation = default)
     {
         if (reservedSegment)
         {
-            RequireSegmentVolume().WithLedger(ledger =>
+            _segmentPools.Rollback(poolReservation);
+            if (!_segmentPools.TracksReservations)
             {
-                ledger.RollbackUnbound(segmentBytes);
-                return 0;
-            });
+                RequireSegmentVolume().WithLedger(ledger =>
+                {
+                    ledger.RollbackUnbound(segmentBytes);
+                    return 0;
+                });
+            }
         }
 
         if (reservedJournal)
@@ -1637,6 +1889,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// NVMe egress-cache limits. Null or a zero capacity leaves the cache off.
     /// A failure to replace <c>live/</c> disables the cache and still opens the engine.
     /// </param>
+    /// <param name="segmentPoolReaders">
+    /// One filesystem reader per spool, in configuration order. Null builds a reader for each
+    /// spool directory and uses <paramref name="capacityReader"/> for the first spool when set.
+    /// </param>
     internal static FileArticleStorageEngine Open(
         ArticleStorageRuntimeOptions options,
         IStorageVolumeProbe? volumeProbe,
@@ -1646,7 +1902,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         TimeProvider? timeProvider = null,
         IArticleMemoryCache? articleCache = null,
         int? maxConcurrentPhysicalReads = null,
-        EgressCacheStart? egressCache = null)
+        EgressCacheStart? egressCache = null,
+        IReadOnlyList<IStorageCapacityReader>? segmentPoolReaders = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.ControlDir);
@@ -1715,7 +1972,10 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 options.CapacityMaximumUsageCapacity,
                 options.CapacityFreeCapacity,
                 new BulkStoragePressurePolicy(options.BulkPressure),
-                openedEgress);
+                openedEgress,
+                CreateSegmentPoolCapacity(options, volumeProbe ?? OsStorageVolumeProbe.Shared, log),
+                capacityReader,
+                segmentPoolReaders);
             openedEgress = null;
             LogStartupStage(log, "EngineConstruct", stage, count: 0, bytes: 0, files: 0);
             var knownSegments = new HashSet<ulong>();
@@ -1995,6 +2255,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         var segmentBytes = 0L;
         var journalBytes = 0L;
         var indexBytes = 0L;
+        var poolReservation = SegmentPoolReservation.None;
         IndexCommittedProbe.BeginAccept();
         var acceptWait = IndexCommittedProbe.MarkAccept();
         lock (_gate)
@@ -2027,7 +2288,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     segmentBytes = SegmentRecordCodec.RecordLengthForArtSize(record.ArtSize);
                     journalBytes = ArticleJournalFrameCodec.SequenceReservationBytes(record.ArtSize);
                     indexBytes = ArticleIndexRecordCodec.RecordLength;
-                    if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes))
+                    if (!TryReserveAcceptPair(record, segmentBytes, journalBytes, indexBytes, out poolReservation))
                     {
                         if (TryResolveOutstandingAccept(record, out var outstandingResult))
                         {
@@ -2078,7 +2339,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                             reservedIndex,
                             segmentBytes,
                             journalBytes,
-                            indexBytes);
+                            indexBytes,
+                            poolReservation);
                         reservedSegment = false;
                         reservedJournal = false;
                         reservedIndex = false;
@@ -2097,9 +2359,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     {
                         RequireSegmentVolume().WithLedger(ledger =>
                         {
-                            ledger.BindSequence(journalRecord.Sequence, segmentBytes);
+                            ledger.BindSequence(
+                                journalRecord.Sequence,
+                                segmentBytes,
+                                chargesAdmission: !_segmentPools.TracksReservations);
                             return 0;
                         });
+                        _segmentPools.Bind(poolReservation, journalRecord.Sequence);
                         reservedSegment = false;
                     }
 
@@ -2149,7 +2415,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                                     record.ArtSize,
                                     segmentBytes,
                                     journalBytes,
-                                    indexBytes);
+                                    indexBytes,
+                                    poolReservation);
                             }
                         }
                         else if (_capacityAdmissionEnabled && !samePending)
@@ -2160,7 +2427,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                                 reservedIndex,
                                 segmentBytes,
                                 journalBytes,
-                                indexBytes);
+                                indexBytes,
+                            poolReservation);
                         }
 
                         throw;
@@ -2172,7 +2440,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         reservedIndex,
                         segmentBytes,
                         journalBytes,
-                        indexBytes);
+                        indexBytes,
+                            poolReservation);
                     if (samePending)
                     {
                         _pendingAcceptAdmission = null;
@@ -3948,18 +4217,30 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 ledger => ledger.HasUnwrittenSegmentCopy(accept.Sequence),
                 ledger =>
                 {
+                    if (!TryReserveSegmentPool(requiredBytes, out var poolReservation, out _))
+                    {
+                        throw new PersistCompletionDeferredException(
+                            $"Accept sequence {accept.Sequence} cannot reserve {requiredBytes} bytes on a segment pool.");
+                    }
+
                     if (ledger.HoldsArticle(accept.Sequence))
                     {
                         ledger.AddSegmentCopy(accept.Sequence, requiredBytes);
                     }
-                    else
+                    else if (!_segmentPools.TracksReservations)
                     {
                         ledger.TentativeAdd(requiredBytes);
                         ledger.BindSequence(accept.Sequence, requiredBytes);
                     }
+                    else
+                    {
+                        ledger.BindSequence(accept.Sequence, requiredBytes, chargesAdmission: false);
+                    }
 
+                    _segmentPools.Bind(poolReservation, accept.Sequence);
                     added = true;
-                });
+                },
+                enforceCeiling: !_segmentPools.TracksReservations);
             if (decision.AlreadySatisfied)
             {
                 return false;
@@ -3990,6 +4271,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 ledger.NoteSegmentCopyWritten(sequence, segmentId);
                 return true;
             });
+            _segmentPools.NotePersisted(sequence, AllocatedBytesForPool);
         }
     }
 
@@ -4019,6 +4301,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 ledger.NoteSegmentCopyWritten(sequence, segmentId);
                 return true;
             });
+            _segmentPools.NotePersisted(sequence, AllocatedBytesForPool);
         }
     }
 
@@ -4032,6 +4315,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         lock (_gate)
         {
             _ = RequireSegmentVolume().WithLedger(ledger => ledger.ReleaseUnwrittenSegmentCopy(sequence));
+            _segmentPools.RollbackSequence(sequence);
         }
     }
 
@@ -4053,6 +4337,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
                 return true;
             });
+            _segmentPools.RollbackSequence(sequence);
         }
     }
 
@@ -4466,8 +4751,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         CancellationToken cancellationToken)
     {
         ThrowIfTestFault(PersistFaultPoint.BeforeSataAppend, 0);
+        int? appendPool = _segmentPools.TryGetPool(accept.Sequence, out var pool) ? pool : null;
         var location = await _segments
-            .AppendAuthoritativeAsync(AuthoritativeArticleAppend.FromAccept(accept), cancellationToken)
+            .AppendAuthoritativeAsync(
+                AuthoritativeArticleAppend.FromAccept(accept),
+                cancellationToken,
+                appendPool)
             .ConfigureAwait(false);
         _ = Interlocked.Increment(ref _physicalAppendCount);
         return location;

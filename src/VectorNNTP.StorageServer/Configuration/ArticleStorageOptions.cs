@@ -7,16 +7,13 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Separates the NVMe control/durability tier (<see cref="ControlDir"/>) from the SATA
-/// segment tier (<see cref="CacheDir"/>). Phase 1 validates and
-/// resolves these paths; it does not create on-disk trees or select a database engine.
+/// Separates the NVMe control/durability tier (<see cref="ControlDir"/>) from the segment
+/// spools in <see cref="SegmentPools"/>. Validation resolves these paths. It does not create
+/// on-disk trees or select a database engine.
 /// </para>
 /// </remarks>
 public sealed class ArticleStorageOptions
 {
-    /// <summary>Default relative SATA segment/cache directory.</summary>
-    public const string DefaultCacheDir = "spool/cache";
-
     /// <summary>Default relative NVMe control directory.</summary>
     public const string DefaultControlDir = "spool/";
 
@@ -55,26 +52,13 @@ public sealed class ArticleStorageOptions
     public const int DefaultActiveSegmentCount = 1;
 
     /// <summary>
-    /// Gets or sets the SATA segment/cache root for append-oriented immutable article segments.
-    /// </summary>
-    /// <remarks>
-    /// Relative paths resolve through
-    /// <see cref="VectorNNTP.Common.Configuration.ApplicationLocalPath.ResolveApplicationLocalPath"/>
-    /// against <see cref="AppContext.BaseDirectory"/>. Absolute paths stay absolute.
-    /// Distinct from <see cref="ControlDir"/> and <see cref="StorageServerOptions.LogDir"/>.
-    /// Need not exist at validation time; validation must not create contents.
-    /// </remarks>
-    [Required(AllowEmptyStrings = false)]
-    public string CacheDir { get; set; } = DefaultCacheDir;
-
-    /// <summary>
     /// Gets or sets the NVMe control-tier root (journal, index, segment catalogue, telemetry).
     /// </summary>
     /// <remarks>
     /// Relative paths resolve through
     /// <see cref="VectorNNTP.Common.Configuration.ApplicationLocalPath.ResolveApplicationLocalPath"/>
-    /// against <see cref="AppContext.BaseDirectory"/>. Distinct from
-    /// <see cref="CacheDir"/> and <see cref="StorageServerOptions.LogDir"/>.
+    /// against <see cref="AppContext.BaseDirectory"/>. Distinct from segment spool directories
+    /// and <see cref="StorageServerOptions.LogDir"/>.
     /// Need not exist at validation time; validation must not create contents.
     /// </remarks>
     [Required(AllowEmptyStrings = false)]
@@ -180,7 +164,8 @@ public sealed class ArticleStorageOptions
     /// its own file, segment id, and writer. Writers append only to the segment they own.
     /// </para>
     /// <para>
-    /// This does not add disks or segment roots. Every file stays under <see cref="CacheDir"/>.
+    /// This does not add segment roots. New segment files are placed on a directory in
+    /// <see cref="SegmentPools"/>.
     /// Values outside 1, 2, and 4 are rejected.
     /// </para>
     /// </remarks>
@@ -218,19 +203,19 @@ public sealed class ArticleStorageOptions
     /// </summary>
     /// <remarks>
     /// Capacity admission is always on. Percentages are integers from 0 to 100.
-    /// Reservations are process-local only. These ceilings are not the bulk retention
-    /// watermarks in <see cref="BulkPressure"/>.
+    /// Reservations are process-local only. These ceilings are not the spool watermarks in
+    /// <see cref="SegmentPools"/>.
     /// </remarks>
     public ArticleCapacityOptions Capacity { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets cache-volume retention watermarks under
-    /// <c>StorageServer:Storage:BulkPressure</c>.
+    /// Gets or sets the segment spools and their watermarks under
+    /// <c>StorageServer:Storage:SegmentPools</c>.
     /// </summary>
     /// <remarks>
-    /// Classifies physical used space on <see cref="CacheDir"/>. It does not classify
-    /// journal <c>OutstandingRecoverableBytes</c> and it does not change
-    /// <see cref="Capacity"/>.
+    /// Each directory is an independent spool with a hard capacity. Watermarks apply to that
+    /// capacity and, separately, to the filesystem that contains the directory. This does not
+    /// change <see cref="Capacity"/> and it does not classify journal outstanding bytes.
     /// </remarks>
-    public BulkStoragePressureOptions BulkPressure { get; set; } = new();
+    public SegmentPoolOptions SegmentPools { get; set; } = new();
 }

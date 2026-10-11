@@ -368,8 +368,16 @@ public sealed class StorageMaintenanceCoordinator
         // segments that still owe a physical retirement stay on the compaction path above.
         if (TrySelectFullyDeadClosed(out var deadClosed))
         {
+            var beforeDelete = _engine.ObserveCapacityAdmissionPressure();
             var reclaimed = await TryReclaimFullyDeadClosedAsync(deadClosed, cancellationToken)
                 .ConfigureAwait(false);
+            if (reclaimed.PhysicalFileDeleted)
+            {
+                NoteUncreditedDelete(
+                    deadClosed.SizeBytes,
+                    beforeDelete.UsedBytes,
+                    _engine.ObserveCapacityAdmissionPressure().UsedBytes);
+            }
             if (firstDeferredOpenCapacitySkip is { } priorDead)
             {
                 return AttachPressure(
@@ -1298,15 +1306,9 @@ public sealed class StorageMaintenanceCoordinator
             return false;
         }
 
-        var retiredPath = Path.Combine(
-            _engine.Segments.RootPath,
-            SegmentFileNames.Format(segmentId, SegmentFileKind.Retired));
-        var activePath = Path.Combine(
-            _engine.Segments.RootPath,
-            SegmentFileNames.Format(segmentId, SegmentFileKind.Active));
-        var closedPath = Path.Combine(
-            _engine.Segments.RootPath,
-            SegmentFileNames.Format(segmentId, SegmentFileKind.Closed));
+        var retiredPath = _engine.Segments.PathFor(segmentId, SegmentFileKind.Retired);
+        var activePath = _engine.Segments.PathFor(segmentId, SegmentFileKind.Active);
+        var closedPath = _engine.Segments.PathFor(segmentId, SegmentFileKind.Closed);
 
         if (File.Exists(activePath) || File.Exists(closedPath))
         {
@@ -1521,7 +1523,11 @@ public sealed class StorageMaintenanceCoordinator
 
     private void ObserveBulk(in CapacityAdmissionPressureSnapshot pressure)
     {
-        var evaluation = _bulkPolicy.Evaluate(pressure.TotalBytes, pressure.UsedBytes, pressure.AvailableBytes);
+        var filesystem = _bulkPolicy.Evaluate(
+            pressure.TotalBytes,
+            CreditedFilesystemUsed(pressure.UsedBytes),
+            pressure.AvailableBytes);
+        var evaluation = SegmentPoolCapacity.MoreSevere(filesystem, _engine.ObserveSegmentPoolPressure());
         BulkStoragePressureState? previous;
         lock (_bulkObservationLock)
         {
@@ -1886,6 +1892,36 @@ public sealed class StorageMaintenanceCoordinator
 
     /// <summary>Used-byte sample taken before <see cref="_uncreditedDeletedBytes"/> was recorded.</summary>
     private long _usedBytesBeforeUncreditedDelete;
+
+    /// <summary>
+    /// Filesystem used bytes after deletes the sample has not released are subtracted.
+    /// The credit is not cleared here; <see cref="EffectiveUsageStillRequiresEviction"/> owns that.
+    /// </summary>
+    /// <param name="measuredUsed">Used bytes from the current capacity sample.</param>
+    /// <returns>Measured used bytes minus unseen deletes.</returns>
+    private long CreditedFilesystemUsed(long measuredUsed)
+    {
+        var credit = _uncreditedDeletedBytes;
+        if (credit <= 0)
+        {
+            return measuredUsed;
+        }
+
+        var observedDrop = _usedBytesBeforeUncreditedDelete - measuredUsed;
+        if (observedDrop < 0)
+        {
+            observedDrop = 0;
+        }
+
+        var remaining = credit - observedDrop;
+        if (remaining < 0)
+        {
+            remaining = 0;
+        }
+
+        var effective = measuredUsed - remaining;
+        return effective < 0 ? 0 : effective;
+    }
 
     /// <summary>
     /// Records a physical delete the capacity sample has not fully released.

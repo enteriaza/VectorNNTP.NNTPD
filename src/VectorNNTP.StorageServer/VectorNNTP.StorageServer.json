@@ -29,8 +29,7 @@
         "CapacityBytes": 0,
         "ReserveBytes": 0
       },
-      "CacheDir": "spool/cache",
-      "BulkPressure": {
+      "SegmentPools": {
         "CriticalPercent": 90,
         "EmergencyPercent": 95,
         "HighPercent": 85,
@@ -39,7 +38,13 @@
         "PressureRecoveryMarginPercent": 5,
         "RecoveryReservePercent": 5,
         "RewriteReservePercent": 10,
-        "WarningPercent": 75
+        "WarningPercent": 75,
+        "Directories": [
+          {
+            "CacheDir": "spool/cache",
+            "MaxCapacity": 53687091200
+          }
+        ]
       },
       "Capacity": {
         "CompactionHeadroom": 10,

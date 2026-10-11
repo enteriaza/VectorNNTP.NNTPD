@@ -54,7 +54,8 @@ public sealed partial class FileArticleStorageEngine
         long requiredBytes,
         int ceilingUtilization,
         Func<ProcessLocalCapacityLedger, bool> alreadySatisfied,
-        Action<ProcessLocalCapacityLedger> reserve)
+        Action<ProcessLocalCapacityLedger> reserve,
+        bool enforceCeiling = true)
     {
         NotifyCapacitySample(volume);
         return volume.WithLedger(ledger =>
@@ -72,7 +73,7 @@ public sealed partial class FileArticleStorageEngine
             }
 
             var snap = volume.Reader.Read();
-            if (!ledger.WouldFit(snap.UsedBytes, snap.TotalBytes, requiredBytes, ceilingUtilization))
+            if (enforceCeiling && !ledger.WouldFit(snap.UsedBytes, snap.TotalBytes, requiredBytes, ceilingUtilization))
             {
                 return new CapacityAdmitResult(
                     Admitted: false,

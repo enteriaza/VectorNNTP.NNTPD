@@ -219,7 +219,7 @@ public sealed class StorageEngineApplicationServiceTests
     private static StorageServerOptions CreateBindable(TempDirs dirs)
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.CacheDir = dirs.CacheDir;
+        options.Storage.SegmentPools.Directories[0].CacheDir = dirs.CacheDir;
         options.Storage.ControlDir = dirs.ControlDir;
         return options;
     }

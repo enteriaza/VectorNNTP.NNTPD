@@ -444,6 +444,18 @@ internal static partial class FileArticleStorageEngineLogMessages
         string Volume,
         Exception exception);
 
+    /// <summary>Information when one segment spool directory is ready at open.</summary>
+    [LoggerMessage(
+        EventId = 3450,
+        Level = LogLevel.Information,
+        Message = "Segment pool ready (index={Index}, directory={Directory}, maxCapacity={MaxCapacity}, volume={Volume})")]
+    public static partial void SegmentPoolReady(
+        ILogger logger,
+        int Index,
+        string Directory,
+        long MaxCapacity,
+        string Volume);
+
     /// <summary>Error when the cache volume cannot be measured. Admission fails closed.</summary>
     [LoggerMessage(
         EventId = 3434,

@@ -111,7 +111,7 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.AddRabbitMqInfrastructure();
 
         builder.Services.TryAddSingleton<IStorageCapacityReader>(static sp =>
-            new CacheDirectoryCapacityReader(sp.GetRequiredService<StorageServerRuntimeOptions>().CacheDir));
+            new EngineFleetCapacityReader(sp));
         builder.Services.TryAddSingleton<StorageServerAdvertisementPublisherService>();
         builder.Services.TryAddSingleton<IStorageArticlePresence, DurableIndexArticlePresence>();
         builder.Services.TryAddSingleton<StorageArticleLookupConsumerService>();
@@ -138,7 +138,7 @@ public static class StorageServerServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<StorageMaintenanceCoordinator>>(),
                 storage?.IndexCheckpointThresholdBytes ?? 0,
                 storage?.MaxRetentionAge ?? TimeSpan.Zero,
-                storage?.BulkPressure);
+                storage?.SegmentPools?.ToBulkPressure());
         }));
         builder.Services.AddSingleton<StorageMaintenanceService>();
 

@@ -31,7 +31,7 @@ public sealed class PressureRetentionExpirationTests
     public void Recovery_margin_above_the_pressure_watermark_is_rejected()
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.BulkPressure.PressureRecoveryMarginPercent = 81;
+        options.Storage.SegmentPools.PressureRecoveryMarginPercent = 81;
         var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
         Assert.True(result.Failed);
         Assert.Contains(

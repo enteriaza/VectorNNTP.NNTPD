@@ -76,17 +76,14 @@ public sealed class BulkStoragePressurePolicyTests
     public void Custom_increasing_thresholds_classify_with_that_ladder()
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.BulkPressure = new BulkStoragePressureOptions
-        {
-            WarningPercent = 10,
-            PressurePercent = 20,
-            HighPercent = 30,
-            CriticalPercent = 40,
-            EmergencyPercent = 50,
-        };
+        options.Storage.SegmentPools.WarningPercent = 10;
+        options.Storage.SegmentPools.PressurePercent = 20;
+        options.Storage.SegmentPools.HighPercent = 30;
+        options.Storage.SegmentPools.CriticalPercent = 40;
+        options.Storage.SegmentPools.EmergencyPercent = 50;
         Assert.False(new StorageServerOptionsValidator().Validate(Options.DefaultName, options).Failed);
 
-        var evaluation = new BulkStoragePressurePolicy(options.Storage.BulkPressure)
+        var evaluation = new BulkStoragePressurePolicy(options.Storage.SegmentPools.ToBulkPressure())
             .Evaluate(Total, 2_000, 8_000);
         Assert.Equal(BulkStoragePressureState.Pressure, evaluation.State);
     }
@@ -104,17 +101,17 @@ public sealed class BulkStoragePressurePolicyTests
         int emergency)
     {
         var options = StorageServerTestOptions.CreateValid();
-        options.Storage.BulkPressure.WarningPercent = warning;
-        options.Storage.BulkPressure.PressurePercent = pressure;
-        options.Storage.BulkPressure.HighPercent = high;
-        options.Storage.BulkPressure.CriticalPercent = critical;
-        options.Storage.BulkPressure.EmergencyPercent = emergency;
+        options.Storage.SegmentPools.WarningPercent = warning;
+        options.Storage.SegmentPools.PressurePercent = pressure;
+        options.Storage.SegmentPools.HighPercent = high;
+        options.Storage.SegmentPools.CriticalPercent = critical;
+        options.Storage.SegmentPools.EmergencyPercent = emergency;
 
         var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
         Assert.True(result.Failed);
         Assert.Contains(
             result.Failures!,
-            static failure => failure.Contains("BulkPressure", StringComparison.Ordinal));
+            static failure => failure.Contains("SegmentPools", StringComparison.Ordinal));
     }
 
     [Fact]

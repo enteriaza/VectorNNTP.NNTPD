@@ -1,8 +1,8 @@
 namespace VectorNNTP.StorageServer.Configuration;
 
 /// <summary>
-/// Bulk retention watermarks for the <c>CacheDir</c> volume, under
-/// <c>StorageServer:Storage:BulkPressure</c>.
+/// Bulk retention watermarks copied from <c>StorageServer:Storage:SegmentPools</c>.
+/// This type is not a configuration section.
 /// </summary>
 /// <remarks>
 /// <para>

@@ -208,12 +208,14 @@ public sealed partial class FileArticleStorageEngine
             try
             {
                 var articles = new AuthoritativeArticleAppend[appending.Count];
+                var pools = new int?[appending.Count];
                 for (var i = 0; i < appending.Count; i++)
                 {
                     articles[i] = AuthoritativeArticleAppend.FromAccept(appending[i].Accept);
+                    pools[i] = _segmentPools.TryGetPool(appending[i].Sequence, out var pool) ? pool : null;
                 }
 
-                flushed = _segments.AppendActiveBatch(articles);
+                flushed = _segments.AppendActiveBatch(articles, pools);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
