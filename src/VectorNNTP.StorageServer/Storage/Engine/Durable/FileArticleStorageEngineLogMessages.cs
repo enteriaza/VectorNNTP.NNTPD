@@ -145,6 +145,18 @@ internal static partial class FileArticleStorageEngineLogMessages
         double DurationMs);
 
     [LoggerMessage(
+        EventId = 3448,
+        Level = LogLevel.Information,
+        Message = "Storage engine startup stage completed (Stage={Stage}, ElapsedMs={ElapsedMs}, Count={Count}, Bytes={Bytes}, Files={Files})")]
+    public static partial void StartupStageCompleted(
+        ILogger logger,
+        string Stage,
+        double ElapsedMs,
+        long Count,
+        long Bytes,
+        int Files);
+
+    [LoggerMessage(
         EventId = 3406,
         Level = LogLevel.Warning,
         Message = "PhysicalWritten location failed integrity proof (sequence={Sequence}, segmentId={SegmentId}, offset={Offset}); journal forbids supersede — leaving outstanding")]

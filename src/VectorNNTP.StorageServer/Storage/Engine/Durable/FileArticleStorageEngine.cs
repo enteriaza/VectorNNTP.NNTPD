@@ -592,6 +592,111 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         return evicted;
     }
 
+    /// <summary>
+    /// Evicts every Present article in the oldest Closed segment whose articles are all at the
+    /// minimum use count, when another segment still holds Present articles and none of the
+    /// Present articles have reached <paramref name="minimumRetentionAge"/>. Capacity protection
+    /// does not delete the segment file. Articles old enough for pressure expiration stay on
+    /// that path. A segment that holds a hotter article, or the only Present articles, is left
+    /// for compaction.
+    /// </summary>
+    /// <param name="minimumRetentionAge">Pressure grace. Capacity protection runs only while every Present article is younger than this.</param>
+    /// <param name="segmentId">Closed segment whose Present rows were evicted.</param>
+    /// <param name="evictedArticles">Present rows transitioned to Evicted.</param>
+    /// <returns>True when at least one article in that segment was evicted.</returns>
+    internal bool TryEvictColdestUniformClosedSegment(
+        TimeSpan minimumRetentionAge,
+        out SegmentId segmentId,
+        out int evictedArticles)
+    {
+        segmentId = default;
+        evictedArticles = 0;
+        var rows = _index.Snapshot();
+        var now = _timeProvider.GetUtcNow();
+        long minimumUse = long.MaxValue;
+        var presentCount = new Dictionary<ulong, int>();
+        var maximumUse = new Dictionary<ulong, long>();
+        foreach (var row in rows)
+        {
+            if (row.State != ArticleStorageState.Present || row.Location.Length <= 0)
+            {
+                continue;
+            }
+
+            if (ArticlePressureRetentionPolicy.IsPressureExpirationEligible(
+                    bulkCommitted: true,
+                    row.AcceptedUtc,
+                    minimumRetentionAge,
+                    now))
+            {
+                return false;
+            }
+
+            var use = _index.UseCount(row.ArtId);
+            if (use < minimumUse)
+            {
+                minimumUse = use;
+            }
+
+            var id = row.Location.SegmentId.Value;
+            presentCount[id] = presentCount.GetValueOrDefault(id) + 1;
+            if (!maximumUse.TryGetValue(id, out var segmentUse) || use > segmentUse)
+            {
+                maximumUse[id] = use;
+            }
+        }
+
+        if (minimumUse == long.MaxValue || presentCount.Count < 2)
+        {
+            return false;
+        }
+
+        SegmentInfo? coldest = null;
+        foreach (var entry in Catalogue.Snapshot())
+        {
+            if (entry.State != SegmentState.Closed || entry.LiveBytes <= 0)
+            {
+                continue;
+            }
+
+            if (!presentCount.TryGetValue(entry.SegmentId.Value, out var count) || count == 0)
+            {
+                continue;
+            }
+
+            if (maximumUse[entry.SegmentId.Value] != minimumUse)
+            {
+                continue;
+            }
+
+            if (coldest is null || entry.SegmentId.Value < coldest.Value.SegmentId.Value)
+            {
+                coldest = entry;
+            }
+        }
+
+        if (coldest is null)
+        {
+            return false;
+        }
+
+        segmentId = coldest.Value.SegmentId;
+        foreach (var row in rows)
+        {
+            if (row.State != ArticleStorageState.Present || row.Location.SegmentId != segmentId)
+            {
+                continue;
+            }
+
+            if (TryEvict(row.ArtId))
+            {
+                evictedArticles++;
+            }
+        }
+
+        return evictedArticles > 0;
+    }
+
     private CapacityAdmissionPressureSnapshot ApplyUsagePressureLatch(
         CapacityAdmissionPressureSnapshot observed)
     {
@@ -1011,28 +1116,31 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     private void ReconstructJournalSequenceReservations()
     {
+        var started = Stopwatch.GetTimestamp();
         var retained = _journal.CopyRetainedJournalSequences();
-        if (retained.Length == 0)
+        long reservedBytes = 0;
+        if (retained.Length != 0)
         {
-            return;
-        }
-
-        RequireControlVolume().WithLedger(ledger =>
-        {
-            foreach (var (sequence, artSize) in retained)
+            RequireControlVolume().WithLedger(ledger =>
             {
-                if (ledger.HoldsJournal(sequence))
+                foreach (var (sequence, artSize) in retained)
                 {
-                    continue;
+                    if (ledger.HoldsJournal(sequence))
+                    {
+                        continue;
+                    }
+
+                    var bytes = ArticleJournalFrameCodec.SequenceReservationBytes(artSize);
+                    reservedBytes += bytes;
+                    ledger.TentativeAddJournal(bytes);
+                    ledger.BindJournalSequence(sequence, bytes);
                 }
 
-                var bytes = ArticleJournalFrameCodec.SequenceReservationBytes(artSize);
-                ledger.TentativeAddJournal(bytes);
-                ledger.BindJournalSequence(sequence, bytes);
-            }
+                return 0;
+            });
+        }
 
-            return 0;
-        });
+        LogStartupStage(_logger, "JournalSequenceReserve", started, retained.Length, reservedBytes, files: 0);
     }
 
     private void ReleaseRetiredJournalSequences(ulong[] omittedSequences)
@@ -1073,9 +1181,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     private void ReconstructCompactionJournalReservations()
     {
+        var started = Stopwatch.GetTimestamp();
         var compactions = _journal.EnumerateCompactions();
         if (compactions.Count == 0)
         {
+            LogStartupStage(_logger, "CompactionJournalReserve", started, count: 0, bytes: 0, files: 0);
             return;
         }
 
@@ -1131,6 +1241,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
             return 0;
         });
+        LogStartupStage(_logger, "CompactionJournalReserve", started, compactions.Count, bytes: 0, files: 0);
     }
 
     private static void AddRetainedCompactionJournalFrame(
@@ -1285,12 +1396,16 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     private void ReconstructIndexPresentReservations()
     {
+        var scanStarted = Stopwatch.GetTimestamp();
         var retained = _index.CopyRetainedIndexFrames();
+        var indexBytes = _index.DurableLength;
+        LogStartupStage(_logger, "IndexFrameScan", scanStarted, retained.Length, indexBytes, files: 1);
         if (retained.Length == 0)
         {
             return;
         }
 
+        var bindStarted = Stopwatch.GetTimestamp();
         var frameBytes = (long)ArticleIndexRecordCodec.RecordLength;
         RequireControlVolume().WithLedger(ledger =>
         {
@@ -1305,6 +1420,13 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
             return 0;
         });
+        LogStartupStage(
+            _logger,
+            "IndexFrameReserve",
+            bindStarted,
+            retained.Length,
+            frameBytes * retained.Length,
+            files: 0);
     }
 
     private void ApplyIndexPrefixRetirement(IndexPrefixRetirement retirement)
@@ -1553,19 +1675,48 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         ArticleEgressCache? openedEgress = null;
         try
         {
+            var stage = Stopwatch.GetTimestamp();
             journal = FileArticleJournal.Open(options, log);
+            LogStartupStage(log, "JournalOpen", stage, (long)journal.NextSequence, journal.JournalPhysicalBytes, files: 1);
+
+            stage = Stopwatch.GetTimestamp();
             segments = FileSegmentStore.Open(options, log, timeProvider ?? TimeProvider.System);
+            long segmentBytes = 0;
+            var segmentFiles = 0;
+            foreach (var info in segments.Catalogue.Snapshot())
+            {
+                segmentFiles++;
+                segmentBytes += info.SizeBytes;
+            }
+
+            LogStartupStage(log, "SegmentOpen", stage, segmentFiles, segmentBytes, segmentFiles);
+
+            stage = Stopwatch.GetTimestamp();
             index = FileArticleIndex.Open(options, log);
+            LogStartupStage(log, "IndexOpen", stage, count: 0, index.DurableLength, files: 1);
+
+            stage = Stopwatch.GetTimestamp();
             var capacity = CapacityVolumes.Resolve(
                 options.SegmentDir,
                 options.ControlDir,
                 capacityReader,
                 controlCapacityReader,
                 volumeProbe);
+            LogStartupStage(log, "CapacityResolve", stage, count: 0, bytes: 0, files: 0);
+
+            stage = Stopwatch.GetTimestamp();
             openedEgress = egressCache is null
                 ? ArticleEgressCache.Disabled
                 : ArticleEgressCache.Open(egressCache, log);
+            LogStartupStage(
+                log,
+                "EgressOpen",
+                stage,
+                openedEgress.IsEnabled ? openedEgress.EntryCount : 0,
+                openedEgress.CapacityBytes,
+                files: 0);
 
+            stage = Stopwatch.GetTimestamp();
             var engine = new FileArticleStorageEngine(
                 journal,
                 segments,
@@ -1582,13 +1733,16 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 new BulkStoragePressurePolicy(options.BulkPressure),
                 openedEgress);
             openedEgress = null;
+            LogStartupStage(log, "EngineConstruct", stage, count: 0, bytes: 0, files: 0);
             var knownSegments = new HashSet<ulong>();
             foreach (var info in segments.Catalogue.Snapshot())
             {
                 _ = knownSegments.Add(info.SegmentId.Value);
             }
 
-            _ = index.ForgetRowsForAbsentSegments(id => knownSegments.Contains(id.Value));
+            stage = Stopwatch.GetTimestamp();
+            var forgotten = index.ForgetRowsForAbsentSegments(id => knownSegments.Contains(id.Value));
+            LogStartupStage(log, "ForgetAbsentSegmentRows", stage, forgotten, bytes: 0, files: 0);
             journal = null;
             segments = null;
             index = null;
@@ -1616,6 +1770,32 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             journal?.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Logs one monotonic open or recovery stage.
+    /// </summary>
+    /// <param name="log">Engine logger.</param>
+    /// <param name="stage">Stable stage name.</param>
+    /// <param name="startedTimestamp"><see cref="Stopwatch.GetTimestamp"/> taken before the stage.</param>
+    /// <param name="count">Records or operations completed by the stage.</param>
+    /// <param name="bytes">Bytes read, reserved, or enumerated by the stage.</param>
+    /// <param name="files">Files opened or scanned by the stage.</param>
+    private static void LogStartupStage(
+        ILogger log,
+        string stage,
+        long startedTimestamp,
+        long count,
+        long bytes,
+        int files)
+    {
+        FileArticleStorageEngineLogMessages.StartupStageCompleted(
+            log,
+            stage,
+            Stopwatch.GetElapsedTime(startedTimestamp).TotalMilliseconds,
+            count,
+            bytes,
+            files);
     }
 
     /// <summary>
@@ -2048,6 +2228,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var incomplete = _journal.EnumerateIncomplete();
         FileArticleStorageEngineLogMessages.RecoveryStarted(_logger, incomplete.Count);
+        var replayStarted = Stopwatch.GetTimestamp();
         var acceptOnlyCandidates = CollectAcceptOnlyRecoveryCandidates(incomplete);
         foreach (var item in incomplete)
         {
@@ -2059,9 +2240,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                 .ConfigureAwait(false);
         }
 
+        LogStartupStage(_logger, "IncompleteReplay", replayStarted, incomplete.Count, bytes: 0, files: 0);
         FileArticleStorageEngineLogMessages.RecoveryCompleted(_logger);
+        var compactionStarted = Stopwatch.GetTimestamp();
         var abandonedDestinations = RecoverCompactions();
+        LogStartupStage(_logger, "CompactionRecovery", compactionStarted, abandonedDestinations.Count, bytes: 0, files: 0);
+        var retiredStarted = Stopwatch.GetTimestamp();
         ApplyRetiredCompactionsFromJournal();
+        LogStartupStage(_logger, "CompactionRetirement", retiredStarted, count: 0, bytes: 0, files: 0);
         ValidatePresentLocationsAtStartup();
         RebuildSegmentAccountingFromIndex();
         foreach (var dest in abandonedDestinations)
@@ -2460,8 +2646,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// </remarks>
     public void RebuildSegmentAccountingFromIndex()
     {
+        var started = Stopwatch.GetTimestamp();
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        _segments.Catalogue.RebuildLiveDeadFromIndex(_index.Snapshot());
+        var rows = _index.Snapshot();
+        _segments.Catalogue.RebuildLiveDeadFromIndex(rows);
+        LogStartupStage(_logger, "RebuildSegmentAccounting", started, rows.Count, bytes: 0, files: 0);
     }
 
     /// <summary>Waits until no incomplete journal sequences remain and the worker has finished the batch that committed them.</summary>

@@ -141,6 +141,145 @@ public sealed class CapacityUsagePressureTests
     }
 
     [Fact]
+    public async Task Usage_pressure_deletes_a_uniform_cold_segment_younger_than_seven_days()
+    {
+        using var dir = TempStorageDir.Create();
+        var reader = new DirectoryAwareCapacityReader(dir.Options.SegmentDir, total: 1_000_000, otherUsed: 0);
+        await using var engine = Open(dir, reader);
+        var older = CreateRecord(
+            "<cup-young-old@seg.test>",
+            body: string.Concat(Enumerable.Repeat(new string('c', 70) + "\r\n", 900)));
+        Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(older, CancellationToken.None)).Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        var newer = CreateRecord("<cup-young-new@seg.test>");
+        Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(newer, CancellationToken.None)).Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        Assert.True(engine.Index.TryGet(older.ArtId, out var olderRow));
+        var olderFile = Path.Combine(
+            dir.Options.SegmentDir,
+            "seg-" + olderRow.Location.SegmentId.Value.ToString("D20") + ".closed");
+        Assert.True(File.Exists(olderFile));
+
+        var grace = engine.ExpirePressureRetentionBatch(
+            TimeSpan.FromDays(7),
+            maxExpire: 32,
+            BulkStoragePressureState.Pressure,
+            CancellationToken.None);
+        Assert.Equal(0, grace.Expired);
+
+        var files = reader.Read().UsedBytes;
+        reader.OtherUsed = Math.Max(0, 800_000 - files);
+        var before = engine.ObserveCapacityAdmissionPressure();
+        Assert.True(before.IsUnderUsagePressure);
+        var coordinator = new StorageMaintenanceCoordinator(
+            engine,
+            new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue / 4, minimumDeadRatio: 100));
+        var recovered = await coordinator.RunUsagePressureRecoveryAsync(CancellationToken.None);
+        Assert.True(recovered.Reclaimed);
+        Assert.False(File.Exists(olderFile));
+        Assert.False(engine.Index.TryGet(older.ArtId, out _));
+        Assert.False(engine.TryRead(older.ArtId, out _));
+        Assert.Equal(ArticleStorageState.Present, State(engine, newer.ArtId));
+        var after = engine.ObserveCapacityAdmissionPressure();
+        Assert.True(after.UsedBytes < before.UsedBytes);
+        Assert.False(after.IsUnderUsagePressure);
+    }
+
+    [Fact]
+    public async Task Stale_free_space_after_segment_delete_does_not_evict_the_survivor()
+    {
+        using var dir = TempStorageDir.Create();
+        var reader = new HoldingCapacityReader(dir.Options.SegmentDir, total: 1_000_000);
+        ArticleId olderId;
+        ArticleId newerId;
+        await using (var engine = Open(dir, reader))
+        {
+            var older = CreateRecord(
+                "<cup-stale-old@seg.test>",
+                body: string.Concat(Enumerable.Repeat(new string('c', 70) + "\r\n", 900)));
+            var newer = CreateRecord("<cup-stale-new@seg.test>");
+            olderId = older.ArtId;
+            newerId = newer.ArtId;
+            Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(older, CancellationToken.None)).Outcome);
+            await engine.DrainPendingAsync(CancellationToken.None);
+            await engine.Segments.CloseActiveAsync(CancellationToken.None);
+            Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(newer, CancellationToken.None)).Outcome);
+            await engine.DrainPendingAsync(CancellationToken.None);
+            await engine.Segments.CloseActiveAsync(CancellationToken.None);
+            Assert.True(engine.Index.TryGet(older.ArtId, out var olderRow));
+            var olderFile = SegmentFile(dir, olderRow.Location.SegmentId);
+            Assert.True(engine.Index.TryGet(newer.ArtId, out var newerRow));
+            var newerFile = SegmentFile(dir, newerRow.Location.SegmentId);
+            Assert.True(File.Exists(olderFile));
+            Assert.True(File.Exists(newerFile));
+
+            var files = reader.Read().UsedBytes;
+            reader.OtherUsed = Math.Max(0, 800_000 - files);
+            reader.HoldFileBytes = files;
+            var before = engine.ObserveCapacityAdmissionPressure();
+            Assert.True(before.IsUnderUsagePressure);
+            var coordinator = new StorageMaintenanceCoordinator(
+                engine,
+                new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue / 4, minimumDeadRatio: 100));
+            var recovered = await coordinator.RunUsagePressureRecoveryAsync(CancellationToken.None);
+            Assert.True(recovered.Reclaimed);
+            Assert.False(File.Exists(olderFile));
+            Assert.True(File.Exists(newerFile));
+            Assert.False(engine.TryRead(older.ArtId, out _));
+            Assert.Equal(ArticleStorageState.Present, State(engine, newer.ArtId));
+            var after = engine.ObserveCapacityAdmissionPressure();
+            Assert.Equal(before.UsedBytes, after.UsedBytes);
+            Assert.True(after.IsUnderUsagePressure);
+        }
+
+        await using var restarted = Open(dir, reader);
+        Assert.False(restarted.TryRead(olderId, out _));
+        Assert.True(restarted.TryRead(newerId, out _));
+        Assert.Equal(0, restarted.Journal.OutstandingRecoverableBytes);
+    }
+
+    [Fact]
+    public async Task Partial_free_space_sample_after_delete_does_not_start_a_second_eviction()
+    {
+        using var dir = TempStorageDir.Create();
+        var reader = new HoldingCapacityReader(dir.Options.SegmentDir, total: 1_000_000);
+        await using var engine = Open(dir, reader);
+        var older = CreateRecord(
+            "<cup-partial-old@seg.test>",
+            body: string.Concat(Enumerable.Repeat(new string('c', 70) + "\r\n", 900)));
+        var newer = CreateRecord("<cup-partial-new@seg.test>");
+        Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(older, CancellationToken.None)).Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(newer, CancellationToken.None)).Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        Assert.True(engine.Index.TryGet(older.ArtId, out var olderRow));
+        Assert.True(engine.Index.TryGet(newer.ArtId, out var newerRow));
+        var olderFile = SegmentFile(dir, olderRow.Location.SegmentId);
+        var newerFile = SegmentFile(dir, newerRow.Location.SegmentId);
+        var liveFiles = reader.Read().UsedBytes;
+        reader.OtherUsed = Math.Max(0, 800_000 - liveFiles);
+        reader.HoldFileBytes = liveFiles;
+        reader.ReleaseBytes = 1;
+        var before = engine.ObserveCapacityAdmissionPressure();
+        var coordinator = new StorageMaintenanceCoordinator(
+            engine,
+            new ArticleSegmentPolicy(minimumDeadBytes: long.MaxValue / 4, minimumDeadRatio: 100));
+        var recovered = await coordinator.RunUsagePressureRecoveryAsync(CancellationToken.None);
+        Assert.True(recovered.Reclaimed);
+        Assert.False(File.Exists(olderFile));
+        Assert.True(File.Exists(newerFile));
+        Assert.Equal(ArticleStorageState.Present, State(engine, newer.ArtId));
+        Assert.False(engine.Index.TryGet(older.ArtId, out _));
+        var after = engine.ObserveCapacityAdmissionPressure();
+        Assert.Equal(before.UsedBytes - 1, after.UsedBytes);
+        Assert.True(after.UsedBytes > after.UsageRecoveryTargetBytes);
+    }
+
+    [Fact]
     public async Task Worker_RunOnce_recovers_pressure_with_ordinary_compaction_disabled()
     {
         Assert.Null(typeof(ArticleCompactionPolicyOptions).GetProperty("Maintenance" + "Enabled"));
@@ -305,6 +444,57 @@ public sealed class CapacityUsagePressureTests
         var created = ArticleRecordFactory.TryCreate(parser, Encoding.ASCII.GetBytes(builder.ToString()));
         Assert.True(created.IsAccepted, created.ParseFailure.ToString());
         return created.Record;
+    }
+
+    private static string SegmentFile(TempStorageDir dir, SegmentId segmentId) =>
+        Path.Combine(dir.Options.SegmentDir, "seg-" + segmentId.Value.ToString("D20") + ".closed");
+
+    private sealed class HoldingCapacityReader : IStorageCapacityReader
+    {
+        private readonly string _segmentDir;
+
+        public HoldingCapacityReader(string segmentDir, long total)
+        {
+            _segmentDir = segmentDir;
+            TotalBytes = total;
+        }
+
+        public long TotalBytes { get; }
+
+        public long OtherUsed { get; set; }
+
+        /// <summary>File-byte sample held after the caller freezes it. Negative reads the directory.</summary>
+        public long HoldFileBytes { get; set; } = -1;
+
+        /// <summary>Bytes of the held sample to release once the directory shrinks. Zero keeps the held sample.</summary>
+        public long ReleaseBytes { get; set; }
+
+        public StorageCapacitySnapshot Read()
+        {
+            long live = 0;
+            if (Directory.Exists(_segmentDir))
+            {
+                foreach (var path in Directory.EnumerateFiles(_segmentDir, "*", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        live = checked(live + new FileInfo(path).Length);
+                    }
+                    catch (IOException)
+                    {
+                    }
+                }
+            }
+
+            var fileBytes = HoldFileBytes < 0 ? live : HoldFileBytes;
+            if (HoldFileBytes >= 0 && ReleaseBytes > 0 && live < HoldFileBytes)
+            {
+                fileBytes = HoldFileBytes - ReleaseBytes;
+            }
+
+            var used = Math.Min(TotalBytes, checked(OtherUsed + fileBytes));
+            return new StorageCapacitySnapshot(TotalBytes, used, Math.Max(0L, TotalBytes - used));
+        }
     }
 
     private sealed class MutableCapacityReader(long total, long used) : IStorageCapacityReader

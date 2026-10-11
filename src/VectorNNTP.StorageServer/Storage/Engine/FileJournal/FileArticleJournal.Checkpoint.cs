@@ -46,7 +46,7 @@ public sealed partial class FileArticleJournal
             lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                ThrowIfPendingJournalAppendUnlocked();
+                QuiesceAppliedGroupsForCheckpointUnlocked();
                 if (!CompactionPlanMatchesUnlocked(attempt))
                 {
                     // Another caller can append compaction frames while the base image is
@@ -114,7 +114,7 @@ public sealed partial class FileArticleJournal
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            ThrowIfPendingJournalAppendUnlocked();
+            QuiesceAppliedGroupsForCheckpointUnlocked();
             if (!TryCollectCheckpointPlanUnlocked(
                     out var incomplete,
                     out _,

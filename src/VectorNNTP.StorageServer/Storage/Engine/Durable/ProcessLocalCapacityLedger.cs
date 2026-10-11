@@ -58,6 +58,12 @@ internal sealed class ProcessLocalCapacityLedger
     private readonly Dictionary<ulong, long> _journalBySequence = new();
     private readonly Dictionary<ulong, long> _indexUnboundBySequence = new();
     private readonly List<IndexPresentReservation> _indexFrames = new();
+
+    /// <summary>
+    /// Identity set for <see cref="HoldsIndexFrame"/>. Reservation count and byte totals stay on
+    /// the frame list, which can contain more than one row for one identity.
+    /// </summary>
+    private readonly HashSet<IndexFrameIdentity> _indexFrameIdentities = new();
     private readonly Dictionary<(ulong CompactionId, ulong RelocationId), CompactionDestinationHold> _compactionByKey = new();
     private readonly Dictionary<CompactionJournalFrameKey, long> _compactionJournalFrames = new();
     private readonly Dictionary<ulong, long> _checkpointById = new();
@@ -630,7 +636,7 @@ internal sealed class ProcessLocalCapacityLedger
                 $"Index capacity reservation for sequence {sequence} is not unbound.");
         }
 
-        _indexFrames.Add(new IndexPresentReservation(artId, fileOffset, SnapshotGeneration: 0, bytes));
+        TrackIndexFrame(new IndexPresentReservation(artId, fileOffset, SnapshotGeneration: 0, bytes));
     }
 
     /// <summary>Reserves one additional Present frame before a relocation append.</summary>
@@ -651,7 +657,7 @@ internal sealed class ProcessLocalCapacityLedger
         }
 
         _indexDirectUnboundBytes -= requiredBytes;
-        _indexFrames.Add(new IndexPresentReservation(artId, fileOffset, SnapshotGeneration: 0, requiredBytes));
+        TrackIndexFrame(new IndexPresentReservation(artId, fileOffset, SnapshotGeneration: 0, requiredBytes));
     }
 
     /// <summary>Drops a relocation Present reservation that did not append a frame.</summary>
@@ -681,24 +687,12 @@ internal sealed class ProcessLocalCapacityLedger
         }
 
         _indexReservedBytes = checked(_indexReservedBytes + requiredBytes);
-        _indexFrames.Add(new IndexPresentReservation(artId, fileOffset, snapshotGeneration, requiredBytes));
+        TrackIndexFrame(new IndexPresentReservation(artId, fileOffset, snapshotGeneration, requiredBytes));
     }
 
     /// <summary>True when this ledger already holds the physical Present frame.</summary>
-    public bool HoldsIndexFrame(ArticleId artId, long fileOffset, ulong snapshotGeneration)
-    {
-        foreach (var frame in _indexFrames)
-        {
-            if (frame.ArtId == artId
-                && frame.FileOffset == fileOffset
-                && frame.SnapshotGeneration == snapshotGeneration)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    public bool HoldsIndexFrame(ArticleId artId, long fileOffset, ulong snapshotGeneration) =>
+        _indexFrameIdentities.Contains(new IndexFrameIdentity(artId, fileOffset, snapshotGeneration));
 
     /// <summary>
     /// Releases index-frame reservations whose bytes are no longer in the authoritative index,
@@ -733,8 +727,26 @@ internal sealed class ProcessLocalCapacityLedger
         }
 
         _indexFrames.Clear();
-        _indexFrames.AddRange(next);
+        _indexFrameIdentities.Clear();
+        foreach (var frame in next)
+        {
+            TrackIndexFrame(frame);
+        }
+
         RecalculateIndexReserved();
+    }
+
+    /// <summary>
+    /// Appends one frame reservation and records its identity.
+    /// A repeated identity remains in the reservation list so reserved bytes still count
+    /// every append, while membership stays a single hash lookup.
+    /// </summary>
+    /// <param name="frame">Frame to reserve.</param>
+    private void TrackIndexFrame(in IndexPresentReservation frame)
+    {
+        _indexFrames.Add(frame);
+        _ = _indexFrameIdentities.Add(
+            new IndexFrameIdentity(frame.ArtId, frame.FileOffset, frame.SnapshotGeneration));
     }
 
     private void RecalculateIndexReserved()
@@ -1238,4 +1250,16 @@ internal sealed class ProcessLocalCapacityLedger
         long FileOffset,
         ulong SnapshotGeneration,
         long Bytes);
+
+    /// <summary>
+    /// Identity of one reserved index frame. Offset and snapshot generation keep a snapshot
+    /// row distinct from a delta frame for the same article.
+    /// </summary>
+    /// <param name="ArtId">Article the frame names.</param>
+    /// <param name="FileOffset">Byte offset in the authoritative index, or -1 for an installed snapshot row.</param>
+    /// <param name="SnapshotGeneration">Snapshot generation for a checkpoint-installed row. Zero for a delta frame.</param>
+    private readonly record struct IndexFrameIdentity(
+        ArticleId ArtId,
+        long FileOffset,
+        ulong SnapshotGeneration);
 }

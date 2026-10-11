@@ -1635,8 +1635,9 @@ public sealed class StorageMaintenanceCoordinator
     /// Accept-path recovery. Reclaims one already-retired segment and one already fully-dead
     /// closed segment when the cache volume is High, Critical, or Emergency, then runs
     /// usage-pressure recovery only while that latch is on and the volume is not Emergency.
-    /// Does not scan segment payloads, start a low-density rewrite, or evict Present articles
-    /// for Emergency. Extent accounting stays on the maintenance cycle.
+    /// Usage-pressure recovery may evict a whole cold Closed segment and delete it. Emergency
+    /// still does not evict Present articles or start a rewrite. The usage-pressure pass
+    /// completes extent accounting before it selects a fully dead file.
     /// </summary>
     private async Task RunAdmissionRecoveryAsync(CancellationToken cancellationToken)
     {
@@ -1750,15 +1751,62 @@ public sealed class StorageMaintenanceCoordinator
             _engine.CompleteUnreferencedExtentAccounting();
             pressure = _engine.ObserveCapacityAdmissionPressure();
             ObserveBulk(in pressure);
-            if (CurrentBulk().AccelerateReclamation
-                && TrySelectFullyDeadClosed(out var acceleratedDead))
+            if (TrySelectFullyDeadClosed(out var deadClosed))
             {
-                var deadResult = await TryReclaimFullyDeadClosedAsync(acceleratedDead, cancellationToken)
+                var deadResult = await TryReclaimFullyDeadClosedAsync(deadClosed, cancellationToken)
                     .ConfigureAwait(false);
-                if (deadResult.Reclaimed || deadResult.Outcome == StorageMaintenanceOutcome.Failed)
+                var afterDead = _engine.ObserveCapacityAdmissionPressure();
+                if (deadResult.Outcome == StorageMaintenanceOutcome.Failed)
                 {
-                    return AttachPressure(deadResult, _engine.ObserveCapacityAdmissionPressure());
+                    return AttachPressure(deadResult, afterDead);
                 }
+
+                if (deadResult.Reclaimed)
+                {
+                    if (ReaderReleasedDeletedBytes(deadClosed.SizeBytes, pressure.UsedBytes, in afterDead))
+                    {
+                        last = AttachPressure(deadResult, afterDead);
+                        continue;
+                    }
+
+                    return AttachPressure(deadResult, afterDead);
+                }
+            }
+
+            if (_engine.TryEvictColdestUniformClosedSegment(
+                    _bulkPolicy.Options.MinimumRetentionAge,
+                    out var sacrificedId,
+                    out var sacrificed)
+                && sacrificed > 0)
+            {
+                _engine.CompleteUnreferencedExtentAccounting();
+                if (TrySelectFullyDeadClosed(out var sacrificedDead))
+                {
+                    var sacrificedResult = await TryReclaimFullyDeadClosedAsync(sacrificedDead, cancellationToken)
+                        .ConfigureAwait(false);
+                    var afterSacrifice = _engine.ObserveCapacityAdmissionPressure();
+                    if (sacrificedResult.Outcome == StorageMaintenanceOutcome.Failed)
+                    {
+                        return AttachPressure(sacrificedResult, afterSacrifice);
+                    }
+
+                    if (sacrificedResult.Reclaimed)
+                    {
+                        if (ReaderReleasedDeletedBytes(sacrificedDead.SizeBytes, pressure.UsedBytes, in afterSacrifice))
+                        {
+                            last = AttachPressure(sacrificedResult, afterSacrifice);
+                            continue;
+                        }
+
+                        return AttachPressure(sacrificedResult, afterSacrifice);
+                    }
+                }
+
+                // The cold segment is already Evicted. A second LFU pass would evict a
+                // different segment before this file is deleted.
+                return AttachPressure(
+                    Skipped(sacrificedId, compactionId: 0, StorageMaintenanceSkipReasons.CapacityPressureUnrecoverable),
+                    _engine.ObserveCapacityAdmissionPressure());
             }
 
             var closed = CatalogueSnapshotExcludingOpenUncommittedSources();
@@ -1829,6 +1877,24 @@ public sealed class StorageMaintenanceCoordinator
         return AttachPressure(
             Skipped(default, compactionId: 0, StorageMaintenanceSkipReasons.CapacityPressureUnrecoverable),
             _engine.ObserveCapacityAdmissionPressure());
+    }
+
+    /// <summary>
+    /// True only when the capacity reader has dropped by at least the deleted file.
+    /// A smaller drop is a stale or partial sample and must not start another eviction.
+    /// </summary>
+    private static bool ReaderReleasedDeletedBytes(
+        long deletedBytes,
+        long usedBefore,
+        in CapacityAdmissionPressureSnapshot after)
+    {
+        if (deletedBytes <= 0 || !after.IsUnderUsagePressure || after.UsedBytes <= after.UsageRecoveryTargetBytes)
+        {
+            return false;
+        }
+
+        var observedDrop = usedBefore - after.UsedBytes;
+        return observedDrop >= deletedBytes;
     }
 
     private static StorageMaintenanceResult NoWork() =>

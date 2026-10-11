@@ -1344,13 +1344,30 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
             "A different journal operation is waiting for a durable flush.",
             new IOException("Pending durable payload identity mismatch."));
 
-    private void ThrowIfPendingJournalAppendUnlocked()
+    /// <summary>
+    /// Makes grouped accepts durable, then rejects a torn tail.
+    /// Prepared accepts that are not yet appended stay queued: they are not in the file,
+    /// and replacing the journal must not wait for encodes that are still outside the lock.
+    /// </summary>
+    private void QuiesceAppliedGroupsForCheckpointUnlocked()
+    {
+        ThrowIfTornJournalTailUnlocked();
+        FlushOpenAcceptGroupIfAnyUnlocked();
+        ThrowIfTornJournalTailUnlocked();
+        if (_openAcceptGroup is not null)
+        {
+            throw new UnreconciledDurableTailException(
+                "Article journal checkpoint cannot replace the file while a physical append is pending.",
+                new IOException("pending-journal-frame"));
+        }
+    }
+
+    /// <summary>Rejects a frame or group whose bytes are not yet a durable, reconciled tail.</summary>
+    private void ThrowIfTornJournalTailUnlocked()
     {
         if (_pending is null
             && _pendingBatch is null
-            && _openAcceptGroup is null
             && _failedAcceptGroup is null
-            && _preparedQueue.Count == 0
             && !_tailUnreconciled)
         {
             return;

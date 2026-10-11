@@ -377,6 +377,52 @@ public sealed class IndexEntryCapacityReservationTests
     }
 
     [Fact]
+    public async Task Restart_reconstructs_present_frames_and_replays_one_incomplete_accept()
+    {
+        using var dir = TempStorageDir.Create();
+        var first = CreateRecord("<idx-restart-a@seg.test>");
+        var second = CreateRecord("<idx-restart-b@seg.test>");
+        var pending = CreateRecord("<idx-restart-pending@seg.test>");
+        await using (var engine = Open(dir))
+        {
+            Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(first, CancellationToken.None)).Outcome);
+            Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(second, CancellationToken.None)).Outcome);
+            await engine.DrainPendingAsync(CancellationToken.None);
+            engine.SuspendBackgroundPersist = true;
+            Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(pending, CancellationToken.None)).Outcome);
+            Assert.Equal(2, engine.ProcessLocalIndexFrameCount);
+            Assert.Equal(IndexBytes * 3, engine.ProcessLocalIndexReservedBytes);
+            Assert.True(engine.TryRead(first.ArtId, out var proved));
+            Assert.Equal(first.ArtHash, proved.Metadata.ArtHash);
+            Assert.Equal(first.ArtSize, proved.ArtData.Length);
+        }
+
+        await using (var restarted = Open(dir))
+        {
+            Assert.Equal(2, restarted.ProcessLocalIndexFrameCount);
+            Assert.Equal(IndexBytes * 2, restarted.ProcessLocalIndexReservedBytes);
+            _ = Assert.Single(restarted.Journal.EnumerateIncomplete());
+            Assert.True(restarted.TryRead(first.ArtId, out var kept));
+            Assert.Equal(first.ArtHash, kept.Metadata.ArtHash);
+            await restarted.RecoverAsync(CancellationToken.None);
+            Assert.Equal(3, restarted.ProcessLocalIndexFrameCount);
+            Assert.Equal(IndexBytes * 3, restarted.ProcessLocalIndexReservedBytes);
+            Assert.Empty(restarted.Journal.EnumerateIncomplete());
+            Assert.True(restarted.TryRead(pending.ArtId, out var replayed));
+            Assert.Equal(pending.ArtHash, replayed.Metadata.ArtHash);
+            Assert.Equal(pending.ArtSize, replayed.ArtData.Length);
+        }
+
+        await using var again = Open(dir);
+        Assert.Equal(3, again.ProcessLocalIndexFrameCount);
+        Assert.Equal(IndexBytes * 3, again.ProcessLocalIndexReservedBytes);
+        Assert.Empty(again.Journal.EnumerateIncomplete());
+        Assert.True(again.TryRead(second.ArtId, out var visible));
+        Assert.Equal(second.ArtHash, visible.Metadata.ArtHash);
+        Assert.Equal(second.ArtSize, visible.ArtData.Length);
+    }
+
+    [Fact]
     public async Task Evict_installation_failure_retains_both_frame_reservations()
     {
         using var dir = TempStorageDir.Create();

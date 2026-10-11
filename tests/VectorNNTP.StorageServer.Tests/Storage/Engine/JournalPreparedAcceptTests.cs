@@ -268,6 +268,48 @@ public sealed class JournalPreparedAcceptTests : IDisposable
     }
 
     [Fact]
+    public async Task Checkpoint_replaces_the_journal_while_a_later_accept_is_still_prepared()
+    {
+        var engine = OpenPrepared(groupLimit: 1, suspendPersist: false);
+        var durable = CreateRecord("<prep-ckpt-durable@seg.test>");
+        var accepted = await engine.AcceptAsync(durable, CancellationToken.None);
+        Assert.Equal(ArticleAcceptOutcome.Accepted, accepted.Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        var physicalBefore = engine.Journal.JournalPhysicalBytes;
+        Assert.True(physicalBefore > 256);
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.Journal.TestPreparedEncodeGate = async (_, _) =>
+        {
+            entered.TrySetResult();
+            await release.Task.ConfigureAwait(false);
+        };
+
+        var queued = CreateRecord("<prep-ckpt-queued@seg.test>");
+        var queuedAccept = engine.AcceptAsync(queued, CancellationToken.None);
+        await entered.Task;
+        Assert.True(engine.Journal.PreparedAcceptCount >= 1);
+        Assert.False(queuedAccept.IsCompleted);
+
+        var omitted = engine.CheckpointTruncateCommitted();
+        Assert.True(omitted > 0);
+        Assert.True(engine.Journal.JournalPhysicalBytes < physicalBefore);
+        Assert.False(queuedAccept.IsCompleted);
+        Assert.True(engine.TryRead(durable.ArtId, out _));
+
+        release.TrySetResult();
+        var queuedResult = await queuedAccept;
+        Assert.Equal(ArticleAcceptOutcome.Accepted, queuedResult.Outcome);
+        await engine.DrainPendingAsync(CancellationToken.None);
+        await engine.DisposeAsync();
+
+        await using var restarted = FileArticleStorageEngine.Open(_directory!.Options);
+        Assert.True(restarted.TryRead(durable.ArtId, out _));
+        Assert.True(restarted.TryRead(queued.ArtId, out _));
+    }
+
+    [Fact]
     public async Task Duplicate_while_prepared_does_not_reserve_a_second_sequence()
     {
         await using var engine = OpenPrepared(groupLimit: 4);
