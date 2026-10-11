@@ -7,10 +7,10 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// Streams a legacy append-only <c>article.index</c> one fixed frame at a time.
 /// </summary>
 /// <remarks>
-/// Each frame declares its length. Schema 3 is <see cref="ArticleIndexRecordCodec.RecordLength"/>
-/// bytes. Schema 2 is <see cref="ArticleIndexRecordCodec.Schema2RecordLength"/> bytes and is still read.
+/// Each frame declares its length. The only accepted length is
+/// <see cref="ArticleIndexRecordCodec.RecordLength"/> bytes.
 /// The file length stays a <see cref="long"/> and is never used as a buffer size.
-/// A declared length other than those two sizes fails closed before any further read.
+/// Any other declared length fails closed before any further read.
 /// </remarks>
 internal static class ArticleIndexReplayer
 {

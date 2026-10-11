@@ -9,8 +9,8 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// <remarks>
 /// <para>
 /// Little-endian. The magic is ASCII <c>VNID</c>, which is not a little-endian frame length and is not
-/// the snapshot magic <c>VNIS</c>. An unheadered index is a bare sequence of schema 2 or schema 3
-/// frames and does not carry this header. Schema 1 files of 88-byte frames are rejected.
+/// the snapshot magic <c>VNIS</c>. An unheadered index is a bare sequence of index
+/// frames and does not carry this header. Any other frame length is rejected.
 /// </para>
 /// <list type="table">
 /// <item><term>0</term><description>4 ASCII magic <c>VNID</c></description></item>
@@ -19,7 +19,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// <item><term>16</term><description>u32 CRC-32 of bytes [0, 16)</description></item>
 /// </list>
 /// <para>
-/// The payload is the raw schema 2 or schema 3 frames that were past the snapshot's covered length when
+/// The payload is the raw index frames that were past the snapshot's covered length when
 /// the replacement was installed. The snapshot generation is index-local. It is not a journal
 /// sequence and it is not <see cref="ArticleIndexSnapshotCodec.LegacyDeltaGeneration"/>.
 /// Startup compares this generation with the installed snapshot generation so a covered byte

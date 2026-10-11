@@ -89,13 +89,13 @@ public sealed class PersistenceIntegrityPassTests
         mutated[^1] ^= 0xFF;
         Assert.False(ArticleStorageIntegrity.TryProve(mutated, artId, artHash, mutated.Length));
 
-        var framed = SegmentRecordCodec.Encode(artId, artHash, payload);
+        var framed = SegmentRecordCodec.Encode(artId, artHash, payload, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Assert.True(SegmentRecordCodec.TryDecode(framed, out _, out _, out _, out _, out _, out _));
         framed[^1] ^= 0xFF;
         Assert.False(SegmentRecordCodec.TryDecode(framed, out _, out _, out _, out _, out _, out var crcError));
         Assert.Equal(SegmentRecordCodec.DecodeError.CorruptChecksum, crcError);
 
-        var payloadCorrupt = SegmentRecordCodec.Encode(artId, artHash, payload);
+        var payloadCorrupt = SegmentRecordCodec.Encode(artId, artHash, payload, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         payloadCorrupt[SegmentRecordCodec.FixedHeaderLength] ^= 0xFF;
         var crc = Crc32.HashToUInt32(payloadCorrupt.AsSpan(0, payloadCorrupt.Length - 4));
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(payloadCorrupt.AsSpan(payloadCorrupt.Length - 4, 4), crc);

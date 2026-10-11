@@ -119,7 +119,11 @@ public sealed class StartupPresentValidationTests
             OverwriteRecord(
                 prepared.Dir,
                 prepared.Metadata.Location,
-                SegmentRecordCodec.Encode(other.ArtId, other.ArtHash, other.ArtData.Span));
+                SegmentRecordCodec.Encode(
+                    other.ArtId,
+                    other.ArtHash,
+                    other.ArtData.Span,
+                    prepared.Metadata.AcceptedUtc));
             await using var service = await StartReadyAsync(prepared.Dir);
             await AssertInvalidAsync(service, prepared);
             Assert.False(service.Engine.Index.TryGet(other.ArtId, out _));
@@ -139,7 +143,7 @@ public sealed class StartupPresentValidationTests
             OverwriteRecord(
                 prepared.Dir,
                 prepared.Metadata.Location,
-                SegmentRecordCodec.Encode(prepared.Record.ArtId, hash, payload));
+                SegmentRecordCodec.Encode(prepared.Record.ArtId, hash, payload, prepared.Metadata.AcceptedUtc));
             await using var service = await StartReadyAsync(prepared.Dir);
             await AssertInvalidAsync(service, prepared);
         }

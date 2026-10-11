@@ -22,8 +22,8 @@ public sealed class ActiveRepairCandidateReuseTests
         var orphan = CreateRecord("<reuse-orphan@seg.test>");
         var decoy = CreateRecord("<reuse-decoy@seg.test>");
         await JournalAcceptsAsync(dir, orphan);
-        var orphanBytes = SegmentRecordCodec.Encode(orphan.ArtId, orphan.ArtHash, orphan.ArtData.Span);
-        var decoyBytes = SegmentRecordCodec.Encode(decoy.ArtId, decoy.ArtHash, decoy.ArtData.Span);
+        var orphanBytes = SegmentRecordCodec.Encode(orphan.ArtId, orphan.ArtHash, orphan.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
+        var decoyBytes = SegmentRecordCodec.Encode(decoy.ArtId, decoy.ArtHash, decoy.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Active, segmentId: 1, [.. orphanBytes, .. decoyBytes]);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -47,7 +47,7 @@ public sealed class ActiveRepairCandidateReuseTests
         var kept = CreateRecord("<reuse-torn-kept@seg.test>");
         var missing = CreateRecord("<reuse-torn-missing@seg.test>");
         await JournalAcceptsAsync(dir, kept, missing);
-        var keptBytes = SegmentRecordCodec.Encode(kept.ArtId, kept.ArtHash, kept.ArtData.Span);
+        var keptBytes = SegmentRecordCodec.Encode(kept.ArtId, kept.ArtHash, kept.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         var torn = new byte[keptBytes.Length + 3];
         keptBytes.CopyTo(torn, 0);
         torn[^3] = 0x11;
@@ -104,7 +104,7 @@ public sealed class ActiveRepairCandidateReuseTests
         Assert.Equal(journalled.ArtId, planted.ArtId);
         Assert.NotEqual(journalled.ArtHash, planted.ArtHash);
         await JournalAcceptsAsync(dir, journalled);
-        var plantedBytes = SegmentRecordCodec.Encode(planted.ArtId, planted.ArtHash, planted.ArtData.Span);
+        var plantedBytes = SegmentRecordCodec.Encode(planted.ArtId, planted.ArtHash, planted.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Active, segmentId: 1, plantedBytes);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -126,7 +126,7 @@ public sealed class ActiveRepairCandidateReuseTests
         var other = CreateRecord("<reuse-other@seg.test>");
         Assert.NotEqual(wanted.ArtId, other.ArtId);
         await JournalAcceptsAsync(dir, wanted);
-        var otherBytes = SegmentRecordCodec.Encode(other.ArtId, other.ArtHash, other.ArtData.Span);
+        var otherBytes = SegmentRecordCodec.Encode(other.ArtId, other.ArtHash, other.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Active, segmentId: 1, otherBytes);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -147,8 +147,8 @@ public sealed class ActiveRepairCandidateReuseTests
         var record = CreateRecord("<reuse-copies@seg.test>");
         var decoy = CreateRecord("<reuse-copies-decoy@seg.test>");
         await JournalAcceptsAsync(dir, record);
-        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
-        var decoyBytes = SegmentRecordCodec.Encode(decoy.ArtId, decoy.ArtHash, decoy.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
+        var decoyBytes = SegmentRecordCodec.Encode(decoy.ArtId, decoy.ArtHash, decoy.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Active, segmentId: 1, [.. encoded, .. decoyBytes, .. encoded]);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -168,7 +168,7 @@ public sealed class ActiveRepairCandidateReuseTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<reuse-closed@seg.test>");
         await JournalAcceptsAsync(dir, record);
-        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Closed, segmentId: 1, encoded);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -192,9 +192,9 @@ public sealed class ActiveRepairCandidateReuseTests
         var activeArticle = CreateRecord("<reuse-mix-active@seg.test>");
         var decoy = CreateRecord("<reuse-mix-decoy@seg.test>");
         await JournalAcceptsAsync(dir, closedArticle, activeArticle);
-        var closedBytes = SegmentRecordCodec.Encode(closedArticle.ArtId, closedArticle.ArtHash, closedArticle.ArtData.Span);
-        var activeBytes = SegmentRecordCodec.Encode(activeArticle.ArtId, activeArticle.ArtHash, activeArticle.ArtData.Span);
-        var decoyBytes = SegmentRecordCodec.Encode(decoy.ArtId, decoy.ArtHash, decoy.ArtData.Span);
+        var closedBytes = SegmentRecordCodec.Encode(closedArticle.ArtId, closedArticle.ArtHash, closedArticle.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
+        var activeBytes = SegmentRecordCodec.Encode(activeArticle.ArtId, activeArticle.ArtHash, activeArticle.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
+        var decoyBytes = SegmentRecordCodec.Encode(decoy.ArtId, decoy.ArtHash, decoy.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Closed, segmentId: 1, closedBytes);
         Plant(dir, SegmentFileKind.Active, segmentId: 2, [.. activeBytes, .. decoyBytes]);
 
@@ -221,7 +221,7 @@ public sealed class ActiveRepairCandidateReuseTests
         var planted = CreateRecord("<reuse-planted@seg.test>");
         var appended = CreateRecord("<reuse-appended@seg.test>");
         await JournalAcceptsAsync(dir, planted, appended);
-        var plantedBytes = SegmentRecordCodec.Encode(planted.ArtId, planted.ArtHash, planted.ArtData.Span);
+        var plantedBytes = SegmentRecordCodec.Encode(planted.ArtId, planted.ArtHash, planted.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Active, segmentId: 1, plantedBytes);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -282,7 +282,7 @@ public sealed class ActiveRepairCandidateReuseTests
             dir,
             SegmentFileKind.Active,
             segmentId: 1,
-            SegmentRecordCodec.Encode(history.ArtId, history.ArtHash, history.ArtData.Span));
+            SegmentRecordCodec.Encode(history.ArtId, history.ArtHash, history.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero)));
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
         var scans = AttachScanCounter(engine);

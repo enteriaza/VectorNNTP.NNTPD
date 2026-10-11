@@ -13,8 +13,8 @@ namespace VectorNNTP.StorageServer.Storage.Engine;
 /// <para>
 /// Arrival time is the journal Accept instant. <c>IndexCommitted</c> releases the Accept
 /// record, and the index keeps that same instant on
-/// <see cref="StoredArticleMetadata.AcceptedUtc"/>. Schema 2 rows have no field and restore as
-/// <see cref="DateTimeOffset.MinValue"/>. This predicate does not read the index. The maintenance
+/// <see cref="StoredArticleMetadata.AcceptedUtc"/>. A missing instant is not an arrival.
+/// This predicate does not read the index. The maintenance
 /// batch passes the stored instant and evicts only when this method returns true.
 /// <see cref="StoredArticleMetadata.LastAccessUtc"/> is a soft hint: reads update it only in
 /// memory, and the durable copy is the publication or tombstone time. It is not an arrival time.

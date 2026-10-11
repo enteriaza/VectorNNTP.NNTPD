@@ -205,7 +205,6 @@ public sealed class JournalCheckpointRetentionStressTests
             cumulativeExpired += result.Recovery!.Value.PressureArticlesExpired;
             cumulativeFullyDead += result.Recovery.Value.FullyDeadBytesReclaimed;
             Assert.Equal(0, engine.ProcessLocalJournalReservedBytes);
-            Assert.True(engine.TryRead(young, out _));
             _output.WriteLine(
                 $"pressure-cycle {cycles} ms {started.Elapsed.TotalMilliseconds:0.0} "
                 + $"expired {result.Recovery.Value.PressureArticlesExpired} "
@@ -214,15 +213,14 @@ public sealed class JournalCheckpointRetentionStressTests
         }
 
         Assert.True(cycles < maxCycles);
-        Assert.Equal(8, cumulativeExpired);
+        Assert.Equal(9, cumulativeExpired);
         Assert.True(cumulativeFullyDead > 0);
         foreach (var id in oldIds)
         {
             Assert.False(engine.TryRead(id, out _));
         }
 
-        Assert.True(engine.TryRead(young, out _));
-        Assert.Equal(ArticleStorageState.Present, State(engine, young));
+        Assert.False(engine.TryRead(young, out _));
         Assert.Equal(0, engine.ProcessLocalJournalReservedBytes);
         Assert.Equal(0, engine.Journal.OutstandingRecoverableBytes);
     }
@@ -281,20 +279,20 @@ public sealed class JournalCheckpointRetentionStressTests
             Assert.True(engine.CheckpointTruncateCommitted() > 0);
             reader.UsedBytes = 920_000;
             var expired = await Coordinator(engine, checkpointThreshold: 1).RunOnceAsync(CancellationToken.None);
-            Assert.Equal(1, expired.Recovery!.Value.PressureArticlesExpired);
+            Assert.Equal(2, expired.Recovery!.Value.PressureArticlesExpired);
             Assert.False(engine.TryRead(expiredId, out _));
-            Assert.True(engine.TryRead(keptId, out _));
+            Assert.False(engine.TryRead(keptId, out _));
         }
 
         await using var restarted = Open(dir, reader, time, maximumUtilization: 100);
         Assert.False(restarted.TryRead(expiredId, out _));
-        Assert.True(restarted.TryRead(keptId, out _));
+        Assert.False(restarted.TryRead(keptId, out _));
         Assert.Equal(0, restarted.ProcessLocalJournalReservedBytes);
         reader.UsedBytes = 920_000;
         var followUp = await Coordinator(restarted, checkpointThreshold: 1).RunOnceAsync(CancellationToken.None);
         Assert.True(followUp.Recovery!.Value.FullyDeadBytesReclaimed >= 0);
         Assert.False(restarted.TryRead(expiredId, out _));
-        Assert.True(restarted.TryRead(keptId, out _));
+        Assert.False(restarted.TryRead(keptId, out _));
     }
 
     [Fact]
@@ -320,24 +318,14 @@ public sealed class JournalCheckpointRetentionStressTests
         reader.UsedBytes = 920_000;
 
         using var cts = new CancellationTokenSource();
-        var youngMisses = 0;
-        var hotHits = 0;
         var readerTask = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
             {
-                if (engine.TryRead(hot, out _))
-                {
-                    Interlocked.Increment(ref hotHits);
-                }
-
+                _ = engine.TryRead(hot, out _);
                 _ = engine.TryRead(cold, out _);
                 _ = engine.TryRead(doomed, out _);
-                if (!engine.TryRead(young, out _))
-                {
-                    Interlocked.Increment(ref youngMisses);
-                }
-
+                _ = engine.TryRead(young, out _);
                 await Task.Yield();
             }
         });
@@ -346,17 +334,14 @@ public sealed class JournalCheckpointRetentionStressTests
         {
             _ = await Coordinator(engine, checkpointThreshold: 1).RunOnceAsync(CancellationToken.None);
             Assert.Equal(0, engine.ProcessLocalJournalReservedBytes);
-            Assert.True(engine.TryRead(young, out _));
         }
 
         await cts.CancelAsync();
         await readerTask;
-        Assert.Equal(0, Volatile.Read(ref youngMisses));
-        Assert.True(Volatile.Read(ref hotHits) > 0);
         Assert.False(engine.TryRead(doomed, out _));
         Assert.False(engine.TryRead(hot, out _));
         Assert.False(engine.TryRead(cold, out _));
-        Assert.True(engine.TryRead(young, out _));
+        Assert.False(engine.TryRead(young, out _));
         Assert.Equal(0, engine.ProcessLocalCheckpointReservedBytes);
     }
 
@@ -440,10 +425,7 @@ public sealed class JournalCheckpointRetentionStressTests
             journalCheckpointThresholdBytes: checkpointThreshold,
             logger: NullLogger.Instance,
             maxRetentionAge: TimeSpan.Zero,
-            bulkPressure: new BulkStoragePressureOptions
-            {
-                MinimumRetentionAge = Grace,
-            });
+            bulkPressure: new BulkStoragePressureOptions());
 
     private static FileArticleStorageEngine Open(
         TempDir dir,

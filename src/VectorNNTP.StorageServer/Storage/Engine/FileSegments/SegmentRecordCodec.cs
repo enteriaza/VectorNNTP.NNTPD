@@ -84,31 +84,33 @@ internal static partial class SegmentFileNames
 
 /// <summary>Physical article record framing inside a segment file.</summary>
 /// <remarks>
-/// Little-endian layout:
-/// <c>u32 TotalLength</c> (entire record including CRC),
-/// <c>u8 SchemaVersion</c>, <c>u8 Flags=0</c>, <c>u16 Reserved=0</c>,
-/// <c>ArticleId</c> (32), <c>u64 ArtHash</c>, <c>i32 ArtSize</c>,
-/// ArtData, <c>u32 CRC-32</c> over all preceding record bytes.
-/// <see cref="StoredArticleLocation.Offset"/> is the record start;
+/// Little-endian layout. The payload starts at <see cref="FixedHeaderLength"/>.
+/// The only record is header, ArtData, AcceptedUtcTicks i64, then CRC-32 over all preceding
+/// bytes. <see cref="StoredArticleLocation.Offset"/> is the record start;
 /// <see cref="StoredArticleLocation.Length"/> is <c>TotalLength</c> (full physical record).
 /// </remarks>
 internal static class SegmentRecordCodec
 {
-    public const byte SchemaVersion = 1;
+    /// <summary>The only segment-record schema. Every record stores AcceptedUtcTicks before the CRC.</summary>
+    public const byte SchemaVersion = 2;
+
+    /// <summary>AcceptedUtc UTC ticks stored by <see cref="SchemaVersion"/>.</summary>
+    public const int ArrivalTrailerLength = 8;
 
     public const int FixedHeaderLength = 4 + 1 + 1 + 2 + ArticleId.Length + 8 + 4;
 
-    public const int MinimumRecordLength = FixedHeaderLength + 1 + 4;
+    public const int MinimumRecordLength = FixedHeaderLength + 1 + ArrivalTrailerLength + 4;
 
     public const int MaxArtDataBytes = ArticleResourceLimits.MaxArticleBytes;
 
-    public const int MaxRecordLength = FixedHeaderLength + MaxArtDataBytes + 4;
+    public const int MaxRecordLength = FixedHeaderLength + MaxArtDataBytes + ArrivalTrailerLength + 4;
 
     private static readonly AsyncLocal<EncodeCallScope?> EncodeScope = new();
 
     /// <summary>
-    /// Times <see cref="Encode"/> has been entered on this execution context since <see cref="ResetEncodeCalls"/>.
-    /// Other tests do not affect the count. The successful production append path does not call <see cref="Encode"/>.
+    /// Times <see cref="Encode(ArticleId, ulong, ReadOnlySpan{byte}, DateTimeOffset)"/> has been entered
+    /// on this execution context since <see cref="ResetEncodeCalls"/>. Other tests do not affect the count.
+    /// The successful production append path does not call that method.
     /// </summary>
     internal static long EncodeCalls => EncodeScope.Value?.Count ?? 0;
 
@@ -125,28 +127,33 @@ internal static class SegmentRecordCodec
         scope.Count = 0;
     }
 
-    /// <summary>Computes on-disk record length for an article of <paramref name="artSize"/>.</summary>
+    /// <summary>On-disk record length, including the arrival trailer and CRC.</summary>
     public static int RecordLengthForArtSize(int artSize)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(artSize, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(artSize, MaxArtDataBytes);
-        return FixedHeaderLength + artSize + 4;
+        return FixedHeaderLength + artSize + ArrivalTrailerLength + 4;
     }
 
-    /// <summary>
-    /// Encodes one physical record into a new buffer.
-    /// Production append does not call this; it writes the header, the existing payload span, and the CRC.
-    /// </summary>
+    /// <summary>True when <paramref name="recordLength"/> is the canonical frame of <paramref name="artSize"/>.</summary>
+    public static bool IsAcceptedRecordLength(int artSize, int recordLength) =>
+        artSize is >= 1 and <= MaxArtDataBytes
+        && recordLength == RecordLengthForArtSize(artSize);
+
+    /// <summary>Encodes one segment record, including <paramref name="acceptedUtc"/>.</summary>
     public static byte[] Encode(
         ArticleId artId,
         ulong artHash,
-        ReadOnlySpan<byte> artData)
+        ReadOnlySpan<byte> artData,
+        DateTimeOffset acceptedUtc)
     {
         var encodeScope = EncodeScope.Value;
         if (encodeScope is not null)
         {
             encodeScope.Count++;
         }
+
+        var stored = ArticleArrivalTime.RequireStored(acceptedUtc, nameof(acceptedUtc));
         var artSize = artData.Length;
         if (artSize is < 1 or > MaxArtDataBytes)
         {
@@ -154,22 +161,19 @@ internal static class SegmentRecordCodec
         }
 
         var total = RecordLengthForArtSize(artSize);
-        var allocStart = PhysicalProofProbe.MarkAppend();
         var buffer = new byte[total];
-        PhysicalProofProbe.AddAppendEncodeAlloc(allocStart, total);
-        WriteHeader(buffer.AsSpan(0, FixedHeaderLength), artId, artHash, artSize);
-        var copyStart = PhysicalProofProbe.MarkAppend();
+        WriteHeader(buffer.AsSpan(0, FixedHeaderLength), artId, artHash, artSize, SchemaVersion, total);
         artData.CopyTo(buffer.AsSpan(FixedHeaderLength, artSize));
-        PhysicalProofProbe.AddAppendEncodeCopy(copyStart);
-        var crcStart = PhysicalProofProbe.MarkAppend();
+        BinaryPrimitives.WriteInt64LittleEndian(
+            buffer.AsSpan(FixedHeaderLength + artSize, ArrivalTrailerLength),
+            stored.UtcTicks);
         var crc = Crc32.HashToUInt32(buffer.AsSpan(0, total - 4));
-        PhysicalProofProbe.AddAppendEncodeCrc(crcStart);
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(total - 4, 4), crc);
         return buffer;
     }
 
     /// <summary>
-    /// Fills a 52-byte header and 4-byte CRC for one record.
+    /// Fills a 52-byte header, an 8-byte arrival trailer, and a 4-byte CRC for one schema 2 record.
     /// Does not copy the payload, does not allocate a payload buffer, and does not hash the frame.
     /// Pending-record reconciliation calls <see cref="FramedHash"/> only when it needs that value.
     /// </summary>
@@ -177,7 +181,9 @@ internal static class SegmentRecordCodec
         ArticleId artId,
         ulong artHash,
         ReadOnlySpan<byte> artData,
+        DateTimeOffset acceptedUtc,
         Span<byte> header,
+        Span<byte> arrival,
         Span<byte> crc)
     {
         if (header.Length != FixedHeaderLength)
@@ -185,26 +191,39 @@ internal static class SegmentRecordCodec
             throw new ArgumentException("Header buffer must be the fixed header length.", nameof(header));
         }
 
+        if (arrival.Length != ArrivalTrailerLength)
+        {
+            throw new ArgumentException("Arrival buffer must be 8 bytes.", nameof(arrival));
+        }
+
         if (crc.Length != 4)
         {
             throw new ArgumentException("CRC buffer must be 4 bytes.", nameof(crc));
         }
 
-        WriteHeader(header, artId, artHash, artData.Length);
-        BinaryPrimitives.WriteUInt32LittleEndian(crc, Checksum(header, artData));
+        var stored = ArticleArrivalTime.RequireStored(acceptedUtc, nameof(acceptedUtc));
+        var total = RecordLengthForArtSize(artData.Length);
+        WriteHeader(header, artId, artHash, artData.Length, SchemaVersion, total);
+        BinaryPrimitives.WriteInt64LittleEndian(arrival, stored.UtcTicks);
+        BinaryPrimitives.WriteUInt32LittleEndian(crc, Checksum(header, artData, arrival));
     }
 
     /// <summary>Writes the fixed record header, including the full-record length.</summary>
-    internal static void WriteHeader(Span<byte> header, ArticleId artId, ulong artHash, int artSize)
+    internal static void WriteHeader(
+        Span<byte> header,
+        ArticleId artId,
+        ulong artHash,
+        int artSize,
+        byte schema,
+        int totalLength)
     {
         if (header.Length != FixedHeaderLength)
         {
             throw new ArgumentException("Header buffer must be the fixed header length.", nameof(header));
         }
 
-        var total = RecordLengthForArtSize(artSize);
-        BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)total);
-        header[4] = SchemaVersion;
+        BinaryPrimitives.WriteUInt32LittleEndian(header, (uint)totalLength);
+        header[4] = schema;
         header[5] = 0;
         header[6] = 0;
         header[7] = 0;
@@ -213,23 +232,52 @@ internal static class SegmentRecordCodec
         BinaryPrimitives.WriteInt32LittleEndian(header.Slice(8 + ArticleId.Length + 8, 4), artSize);
     }
 
-    /// <summary>CRC32 over the header and then the article payload, matching a contiguous record checksum.</summary>
-    internal static uint Checksum(ReadOnlySpan<byte> header, ReadOnlySpan<byte> artData)
+    /// <summary>CRC32 over the header, payload, and arrival trailer.</summary>
+    internal static uint Checksum(
+        ReadOnlySpan<byte> header,
+        ReadOnlySpan<byte> artData,
+        ReadOnlySpan<byte> arrival)
     {
         var crc = new Crc32();
         crc.Append(header);
         crc.Append(artData);
+        crc.Append(arrival);
         return crc.GetCurrentHashAsUInt32();
     }
 
-    /// <summary>XxHash3 over the header, payload, and CRC, matching a contiguous framed record.</summary>
-    internal static ulong FramedHash(ReadOnlySpan<byte> header, ReadOnlySpan<byte> artData, ReadOnlySpan<byte> crc)
+    /// <summary>XxHash3 over the header, payload, arrival trailer, and CRC.</summary>
+    internal static ulong FramedHash(
+        ReadOnlySpan<byte> header,
+        ReadOnlySpan<byte> artData,
+        ReadOnlySpan<byte> arrival,
+        ReadOnlySpan<byte> crc)
     {
         var hash = new XxHash3();
         hash.Append(header);
         hash.Append(artData);
+        hash.Append(arrival);
         hash.Append(crc);
         return hash.GetCurrentHashAsUInt64();
+    }
+
+    /// <summary>
+    /// Reads the arrival from a canonical record. Returns false when the schema, length, or ticks are not valid.
+    /// </summary>
+    internal static bool TryReadArrival(ReadOnlySpan<byte> record, int artSize, out DateTimeOffset acceptedUtc)
+    {
+        acceptedUtc = default;
+        if (record.Length < 5 || record[4] != SchemaVersion || !IsAcceptedRecordLength(artSize, record.Length))
+        {
+            return false;
+        }
+
+        if (record.Length != RecordLengthForArtSize(artSize))
+        {
+            return false;
+        }
+
+        var ticks = BinaryPrimitives.ReadInt64LittleEndian(record.Slice(FixedHeaderLength + artSize, ArrivalTrailerLength));
+        return ArticleArrivalTime.TryStored(ticks, out acceptedUtc);
     }
 
     private sealed class EncodeCallScope
@@ -303,7 +351,8 @@ internal static class SegmentRecordCodec
             return false;
         }
 
-        if (record[4] != SchemaVersion || record[5] != 0 || record[6] != 0 || record[7] != 0)
+        var schema = record[4];
+        if (schema != SchemaVersion || record[5] != 0 || record[6] != 0 || record[7] != 0)
         {
             error = DecodeError.Corrupt;
             return false;
@@ -313,7 +362,11 @@ internal static class SegmentRecordCodec
         artId = ArticleId.FromSpan(record.Slice(8, ArticleId.Length));
         artHash = BinaryPrimitives.ReadUInt64LittleEndian(record.Slice(8 + ArticleId.Length, 8));
         artSize = BinaryPrimitives.ReadInt32LittleEndian(record.Slice(8 + ArticleId.Length + 8, 4));
-        var headerValid = artSize is >= 1 and <= MaxArtDataBytes && FixedHeaderLength + artSize + 4 == recordLength;
+        var expectedLength = artSize is >= 1 and <= MaxArtDataBytes ? RecordLengthForArtSize(artSize) : -1;
+        var headerValid = expectedLength == recordLength
+            && ArticleArrivalTime.TryStored(
+                BinaryPrimitives.ReadInt64LittleEndian(record.Slice(FixedHeaderLength + artSize, ArrivalTrailerLength)),
+                out _);
         PhysicalProofProbe.AddHeader(headerStart);
         if (!headerValid)
         {
@@ -435,7 +488,7 @@ internal static class SegmentRecordCodec
     {
         if (header.Length != FixedHeaderLength
             || expectedArtSize is < 1 or > MaxArtDataBytes
-            || recordLength != RecordLengthForArtSize(expectedArtSize))
+            || !IsAcceptedRecordLength(expectedArtSize, recordLength))
         {
             return false;
         }
@@ -446,7 +499,11 @@ internal static class SegmentRecordCodec
             return false;
         }
 
-        if (header[4] != SchemaVersion || header[5] != 0 || header[6] != 0 || header[7] != 0)
+        if (header[4] != SchemaVersion
+            || header[5] != 0
+            || header[6] != 0
+            || header[7] != 0
+            || RecordLengthForArtSize(expectedArtSize) != recordLength)
         {
             return false;
         }
@@ -493,7 +550,7 @@ internal static class SegmentRecordCodec
         var artId = ArticleId.FromSpan(record.Slice(8, ArticleId.Length));
         var artHash = BinaryPrimitives.ReadUInt64LittleEndian(record.Slice(8 + ArticleId.Length, 8));
         var artSize = BinaryPrimitives.ReadInt32LittleEndian(record.Slice(8 + ArticleId.Length + 8, 4));
-        if (artSize is < 1 or > MaxArtDataBytes || FixedHeaderLength + artSize + 4 != record.Length)
+        if (!IsAcceptedRecordLength(artSize, record.Length) || !TryReadArrival(record, artSize, out _))
         {
             return false;
         }

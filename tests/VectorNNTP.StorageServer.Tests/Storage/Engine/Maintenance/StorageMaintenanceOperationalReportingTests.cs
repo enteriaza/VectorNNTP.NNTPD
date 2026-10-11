@@ -123,7 +123,8 @@ public sealed class StorageMaintenanceOperationalReportingTests
                 liveMeta.Location,
                 ArticleStorageState.Present,
                 DateTimeOffset.UtcNow,
-                1UL)));
+                1UL,
+                DateTimeOffset.UtcNow)));
         };
 
         var result = await CreateCoordinator(engine, minimumDeadBytes: 0, minimumDeadRatio: 0)

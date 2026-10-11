@@ -47,7 +47,7 @@ public sealed class ImmutableSegmentStartupTests
         var record = CreateRecord("<imm-b@seg.test>", "kept-body\r\n");
         var location = await SeedClosedAsync(dir, record);
         var other = CreateRecord("<imm-b-other@seg.test>", "other-body\r\n");
-        var encoded = SegmentRecordCodec.Encode(other.ArtId, other.ArtHash, other.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(other.ArtId, other.ArtHash, other.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         encoded[^1] ^= 0xFF;
         AppendToClosed(dir, location.SegmentId, encoded);
 
@@ -253,7 +253,7 @@ public sealed class ImmutableSegmentStartupTests
         var record = CreateRecord("<imm-j@seg.test>");
         var location = await SeedClosedAsync(dir, record);
         var extra = CreateRecord("<imm-j-extra@seg.test>", "orphan-body\r\n");
-        var encoded = SegmentRecordCodec.Encode(extra.ArtId, extra.ArtHash, extra.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(extra.ArtId, extra.ArtHash, extra.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         AppendToClosed(dir, location.SegmentId, encoded);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);

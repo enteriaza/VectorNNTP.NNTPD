@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Storage.Engine;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 
@@ -13,7 +14,7 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// <para>
 /// Single append-only file <c>article.index</c>. Each durable mutation appends a full
 /// <see cref="StoredArticleMetadata"/> snapshot; replay is last-write-wins per
-/// <see cref="ArticleId"/>. Startup reads one schema 2 or schema 3 frame at a time, so the
+/// <see cref="ArticleId"/>. Startup reads one index frame at a time, so the
 /// file-byte working set does not grow with the file. Durability uses
 /// <see cref="FileStream.Flush(bool)"/> with <c>flushToDisk: true</c>.
 /// </para>
@@ -806,9 +807,9 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     /// <param name="frameOffset">File offset of the appended frame; otherwise -1.</param>
     /// <returns>True when this call appended an Evicted frame.</returns>
     /// <remarks>
-    /// Compare and append share one index critical section. A relocation, a newer Accept, an
-    /// existing tombstone, or <see cref="DateTimeOffset.MinValue"/> leaves the row unchanged.
-    /// <see cref="StoredArticleMetadata.AcceptedUtc"/> is copied from the current row.
+    /// Compare and append share one index critical section. A relocation, a newer Accept, or an
+    /// existing tombstone leaves the row unchanged. <see cref="StoredArticleMetadata.AcceptedUtc"/>
+    /// is copied from the current row and must already be a stored instant.
     /// </remarks>
     internal bool TryExpirePresentIfUnchanged(
         ArticleId artId,
@@ -828,7 +829,6 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
                 || existing.State != ArticleStorageState.Present
                 || existing.Sequence != expectedSequence
                 || existing.AcceptedUtc != expectedAcceptedUtc
-                || existing.AcceptedUtc == DateTimeOffset.MinValue
                 || !LocationsEqual(existing.Location, expectedLocation))
             {
                 return false;

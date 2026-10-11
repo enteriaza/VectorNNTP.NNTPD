@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.StorageServer.Storage.Engine;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.FileJournal;
 
@@ -627,6 +628,11 @@ internal static class ArticleJournalFrameCodec
 
         var artId = ArticleId.FromSpan(body.Slice(o, ArticleId.Length));
         o += ArticleId.Length;
+        if (!ArticleArrivalTime.TryStored(ticks, out var acceptedUtc))
+        {
+            return false;
+        }
+
         var artData = body.Slice(o, artSize).ToArray();
         accept = new JournalAcceptRecord(
             schema,
@@ -634,7 +640,7 @@ internal static class ArticleJournalFrameCodec
             artId,
             artHash,
             artSize,
-            new DateTimeOffset(ticks, TimeSpan.Zero),
+            acceptedUtc,
             artData);
         return true;
     }

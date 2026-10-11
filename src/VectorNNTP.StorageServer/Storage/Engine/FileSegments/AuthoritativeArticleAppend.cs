@@ -32,11 +32,17 @@ internal readonly struct AuthoritativeArticleAppend
     /// <param name="artData">Payload that will be written.</param>
     /// <param name="artId">Message-ID identity of <paramref name="artData"/>.</param>
     /// <param name="artHash">XXH3-64 of <paramref name="artData"/>.</param>
-    private AuthoritativeArticleAppend(ReadOnlyMemory<byte> artData, ArticleId artId, ulong artHash)
+    /// <param name="acceptedUtc">UTC accept instant stored in the segment record.</param>
+    private AuthoritativeArticleAppend(
+        ReadOnlyMemory<byte> artData,
+        ArticleId artId,
+        ulong artHash,
+        DateTimeOffset acceptedUtc)
     {
         ArtData = artData;
         ArtId = artId;
         ArtHash = artHash;
+        AcceptedUtc = acceptedUtc;
     }
 
     /// <summary>Payload bytes that will be written after the segment header.</summary>
@@ -47,6 +53,9 @@ internal readonly struct AuthoritativeArticleAppend
 
     /// <summary>ArtHash written into the segment header. Not recomputed by the writer.</summary>
     internal ulong ArtHash { get; }
+
+    /// <summary>Original accept instant written into the segment record.</summary>
+    internal DateTimeOffset AcceptedUtc { get; }
 
     /// <summary>Payload length. Equal to <see cref="ArtData"/> length.</summary>
     internal int ArtSize => ArtData.Length;
@@ -71,17 +80,22 @@ internal readonly struct AuthoritativeArticleAppend
                 nameof(accept));
         }
 
-        return new AuthoritativeArticleAppend(artData, accept.ArtId, accept.ArtHash);
+        return new AuthoritativeArticleAppend(
+            artData,
+            accept.ArtId,
+            accept.ArtHash,
+            ArticleArrivalTime.RequireStored(accept.AcceptedUtc, nameof(accept)));
     }
 
     /// <summary>
     /// Hashes <paramref name="artData"/> and returns an append carrying that hash.
     /// </summary>
     /// <param name="artData">Payload that does not already carry an Accept proof.</param>
+    /// <param name="acceptedUtc">UTC accept instant stored in the segment record.</param>
     /// <returns>An append whose ArtHash is <c>XxHash3.HashToUInt64</c> of <paramref name="artData"/>.</returns>
     /// <exception cref="ArgumentOutOfRangeException">Thrown when the payload length is outside the article limit.</exception>
     /// <exception cref="ArgumentException">Thrown when the payload has no Message-ID value.</exception>
-    internal static AuthoritativeArticleAppend Derive(ReadOnlyMemory<byte> artData)
+    internal static AuthoritativeArticleAppend Derive(ReadOnlyMemory<byte> artData, DateTimeOffset acceptedUtc)
     {
         if (artData.Length is < 1 or > ArticleResourceLimits.MaxArticleBytes)
         {
@@ -95,7 +109,11 @@ internal readonly struct AuthoritativeArticleAppend
                 nameof(artData));
         }
 
-        return new AuthoritativeArticleAppend(artData, artId, artHash);
+        return new AuthoritativeArticleAppend(
+            artData,
+            artId,
+            artHash,
+            ArticleArrivalTime.RequireStored(acceptedUtc, nameof(acceptedUtc)));
     }
 
     /// <summary>
@@ -105,12 +123,17 @@ internal readonly struct AuthoritativeArticleAppend
     /// <param name="artData">Payload the caller claims to have hashed.</param>
     /// <param name="artId">Identity the caller claims for that payload.</param>
     /// <param name="artHash">Hash the caller claims for that payload.</param>
+    /// <param name="acceptedUtc">UTC accept instant stored in the segment record.</param>
     /// <param name="article">The append when this returns true. Default when it returns false.</param>
     /// <returns>True when the supplied identity matches the payload.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// Thrown when the identity matches and <paramref name="acceptedUtc"/> is not a stored UTC instant.
+    /// </exception>
     internal static bool TryMatch(
         ReadOnlyMemory<byte> artData,
         ArticleId artId,
         ulong artHash,
+        DateTimeOffset acceptedUtc,
         out AuthoritativeArticleAppend article)
     {
         article = default;
@@ -121,7 +144,11 @@ internal readonly struct AuthoritativeArticleAppend
             return false;
         }
 
-        article = new AuthoritativeArticleAppend(artData, artId, artHash);
+        article = new AuthoritativeArticleAppend(
+            artData,
+            artId,
+            artHash,
+            ArticleArrivalTime.RequireStored(acceptedUtc, nameof(acceptedUtc)));
         return true;
     }
 

@@ -16,8 +16,8 @@ using VectorNNTP.StorageServer.Tests.Fixtures;
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine.Maintenance;
 
 /// <summary>
-/// Pressure expiration logically evicts old Present rows. It does not replace MaxRetentionAge
-/// and it does not delete segment bytes.
+/// Pressure expiration logically evicts Present rows. Arrival age is not a gate.
+/// It does not replace MaxRetentionAge and it does not delete segment bytes.
 /// </summary>
 public sealed class PressureRetentionExpirationTests
 {
@@ -26,18 +26,6 @@ public sealed class PressureRetentionExpirationTests
     private static readonly DateTimeOffset Arrival = new(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
 
     private static readonly TimeSpan Grace = TimeSpan.FromDays(7);
-
-    [Fact]
-    public void Negative_minimum_retention_age_is_rejected()
-    {
-        var options = StorageServerTestOptions.CreateValid();
-        options.Storage.BulkPressure.MinimumRetentionAge = TimeSpan.FromTicks(-1);
-        var result = new StorageServerOptionsValidator().Validate(Options.DefaultName, options);
-        Assert.True(result.Failed);
-        Assert.Contains(
-            result.Failures!,
-            static failure => failure.Contains("MinimumRetentionAge", StringComparison.Ordinal));
-    }
 
     [Fact]
     public void Recovery_margin_above_the_pressure_watermark_is_rejected()
@@ -99,7 +87,6 @@ public sealed class PressureRetentionExpirationTests
         var recent = await PublishAsync(engine, "<pressure-recent@example>");
 
         var result = engine.ExpirePressureRetentionBatch(
-            Grace,
             ArticlePressureRetentionPolicy.PressureExpirationLimit,
             BulkStoragePressureState.Pressure,
             CancellationToken.None);
@@ -146,7 +133,6 @@ public sealed class PressureRetentionExpirationTests
         time.Advance(Grace);
         var recent = await PublishAsync(engine, "<pressure-high-recent@example>");
         var result = engine.ExpirePressureRetentionBatch(
-            Grace,
             ArticlePressureRetentionPolicy.HighExpirationLimit,
             BulkStoragePressureState.High,
             CancellationToken.None);
@@ -171,7 +157,6 @@ public sealed class PressureRetentionExpirationTests
         var recent = await PublishAsync(engine, "<pressure-critical-recent@example>");
 
         var conservative = engine.ExpirePressureRetentionBatch(
-            Grace,
             ArticlePressureRetentionPolicy.PressureExpirationLimit,
             BulkStoragePressureState.Pressure,
             CancellationToken.None,
@@ -179,15 +164,14 @@ public sealed class PressureRetentionExpirationTests
         Assert.Equal(1, conservative.Expired);
 
         var aggressive = engine.ExpirePressureRetentionBatch(
-            Grace,
             ArticlePressureRetentionPolicy.CriticalExpirationLimit,
             BulkStoragePressureState.Critical,
             CancellationToken.None,
             batchSize: 8);
-        Assert.Equal(1, aggressive.Expired);
+        Assert.Equal(2, aggressive.Expired);
         AssertEvicted(engine, first.ArtId);
         AssertEvicted(engine, second.ArtId);
-        AssertPresent(engine, recent.ArtId);
+        AssertEvicted(engine, recent.ArtId);
     }
 
     [Fact]
@@ -207,21 +191,20 @@ public sealed class PressureRetentionExpirationTests
         var outstanding = engine.Journal.OutstandingRecoverableBytes;
         reader.UsedBytes = 9_600_000;
         var expired = engine.ExpirePressureRetentionBatch(
-            Grace,
             ArticlePressureRetentionPolicy.EmergencyExpirationLimit,
             BulkStoragePressureState.Emergency,
             CancellationToken.None);
-        Assert.Equal(1, expired.Expired);
+        Assert.Equal(2, expired.Expired);
         AssertEvicted(engine, old.ArtId);
-        AssertPresent(engine, recent.ArtId);
+        AssertEvicted(engine, recent.ArtId);
         Assert.True(engine.Catalogue.TryGet(segment, out _));
 
         _ = await Coordinator(engine, reader).RunOnceAsync(CancellationToken.None);
 
         Assert.True(engine.TryRead(ingress.ArtId, out _));
         Assert.False(engine.TryRead(old.ArtId, out _));
+        Assert.False(engine.TryRead(recent.ArtId, out _));
         Assert.Equal(outstanding, engine.Journal.OutstandingRecoverableBytes);
-        AssertPresent(engine, recent.ArtId);
     }
 
     [Fact]
@@ -233,58 +216,49 @@ public sealed class PressureRetentionExpirationTests
         var record = await PublishAsync(engine, "<pressure-boundary@example>");
         Assert.True(engine.Index.TryGet(record.ArtId, out var published));
 
-        time.SetUtcNow(published.AcceptedUtc.Add(Grace).AddTicks(-1));
+        time.SetUtcNow(published.AcceptedUtc);
         var young = engine.ExpirePressureRetentionBatch(
-            Grace,
             8,
             BulkStoragePressureState.Emergency,
             CancellationToken.None);
-        Assert.Equal(0, young.Expired);
-        Assert.Equal(1, young.TooYoung);
+        Assert.Equal(1, young.Expired);
+        Assert.Equal(0, young.TooYoung);
 
-        time.SetUtcNow(published.AcceptedUtc.Add(Grace));
-        var due = engine.ExpirePressureRetentionBatch(
-            Grace,
-            8,
-            BulkStoragePressureState.Emergency,
-            CancellationToken.None);
-        Assert.Equal(1, due.Expired);
-
-        var legacy = Synthetic(engine, "<pressure-legacy@example>", DateTimeOffset.MinValue, 50);
+        Assert.True(ArticlePressureRetentionPolicy.IsPressureExpirationEligible(
+            true,
+            DateTimeOffset.MinValue,
+            time.GetUtcNow()));
         var future = Synthetic(engine, "<pressure-future@example>", time.GetUtcNow().AddDays(1), 51);
         var skipped = engine.ExpirePressureRetentionBatch(
-            Grace,
             8,
             BulkStoragePressureState.Emergency,
             CancellationToken.None);
-        Assert.Equal(0, skipped.Expired);
-        Assert.Equal(1, skipped.MissingArrival);
-        Assert.Equal(1, skipped.FutureArrival);
-        Assert.Equal(ArticleStorageState.Present, State(engine, legacy));
-        Assert.Equal(ArticleStorageState.Present, State(engine, future));
+        Assert.Equal(1, skipped.Expired);
+        Assert.Equal(0, skipped.MissingArrival);
+        Assert.Equal(0, skipped.FutureArrival);
+        Assert.Equal(ArticleStorageState.Evicted, State(engine, future));
     }
 
     [Fact]
-    public async Task Known_cold_access_is_preferred_over_a_missing_hint()
+    public async Task A_past_read_is_kept_ahead_of_an_unread_article()
     {
         using var dir = TempDir.Create();
         var time = new FakeTimeProvider(Arrival);
         await using var engine = Open(dir, new MutableCapacityReader(Total, 8_200_000), time);
         var unread = await PublishAsync(engine, "<pressure-unread@example>");
-        var cold = await PublishAsync(engine, "<pressure-cold@example>");
+        var read = await PublishAsync(engine, "<pressure-read@example>");
         time.Advance(TimeSpan.FromHours(1));
-        Assert.True(engine.TryRead(cold.ArtId, out _));
-        time.Advance(Grace);
+        Assert.True(engine.TryRead(read.ArtId, out _));
+        time.Advance(TimeSpan.FromDays(7));
 
         var result = engine.ExpirePressureRetentionBatch(
-            Grace,
             ArticlePressureRetentionPolicy.PressureExpirationLimit,
             BulkStoragePressureState.Pressure,
             CancellationToken.None);
 
         Assert.Equal(1, result.Expired);
-        AssertEvicted(engine, cold.ArtId);
-        AssertPresent(engine, unread.ArtId);
+        AssertEvicted(engine, unread.ArtId);
+        AssertPresent(engine, read.ArtId);
     }
 
     [Fact]
@@ -295,11 +269,10 @@ public sealed class PressureRetentionExpirationTests
         await using var engine = Open(dir, new MutableCapacityReader(Total, 8_200_000), time);
         var unread = await PublishAsync(engine, "<pressure-unread-2@example>");
         var touched = await PublishAsync(engine, "<pressure-touched@example>");
-        time.Advance(Grace);
+        time.Advance(TimeSpan.FromHours(1));
         Assert.True(engine.TryRead(touched.ArtId, out _));
 
         var result = engine.ExpirePressureRetentionBatch(
-            Grace,
             ArticlePressureRetentionPolicy.PressureExpirationLimit,
             BulkStoragePressureState.Pressure,
             CancellationToken.None);
@@ -307,6 +280,57 @@ public sealed class PressureRetentionExpirationTests
         Assert.Equal(1, result.Expired);
         AssertEvicted(engine, unread.ArtId);
         AssertPresent(engine, touched.ArtId);
+    }
+
+    [Fact]
+    public async Task Older_arrival_is_evicted_before_a_newer_unread_article()
+    {
+        using var dir = TempDir.Create();
+        var time = new FakeTimeProvider(Arrival);
+        await using var engine = Open(dir, new MutableCapacityReader(Total, 8_200_000), time);
+        var older = await PublishAsync(engine, "<pressure-older-read@example>");
+        time.Advance(TimeSpan.FromDays(1));
+        var newer = await PublishAsync(engine, "<pressure-newer-unread@example>");
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.True(engine.TryRead(older.ArtId, out _));
+
+        var result = engine.ExpirePressureRetentionBatch(
+            ArticlePressureRetentionPolicy.PressureExpirationLimit,
+            BulkStoragePressureState.Pressure,
+            CancellationToken.None);
+
+        Assert.Equal(1, result.Expired);
+        AssertEvicted(engine, older.ArtId);
+        AssertPresent(engine, newer.ArtId);
+    }
+
+    [Fact]
+    public async Task A_missing_access_hint_is_evicted_before_a_known_read()
+    {
+        using var dir = TempDir.Create();
+        var time = new FakeTimeProvider(Arrival.AddHours(2));
+        await using var engine = Open(dir, new MutableCapacityReader(Total, 8_200_000), time);
+        var missing = Synthetic(
+            engine,
+            "<pressure-missing-hint@example>",
+            Arrival,
+            sequence: 70,
+            lastAccessUtc: DateTimeOffset.MinValue);
+        var read = Synthetic(
+            engine,
+            "<pressure-known-hint@example>",
+            Arrival,
+            sequence: 71,
+            lastAccessUtc: Arrival.AddHours(1));
+
+        var result = engine.ExpirePressureRetentionBatch(
+            ArticlePressureRetentionPolicy.PressureExpirationLimit,
+            BulkStoragePressureState.Pressure,
+            CancellationToken.None);
+
+        Assert.Equal(1, result.Expired);
+        AssertEvicted(engine, missing);
+        AssertPresent(engine, read);
     }
 
     [Fact]
@@ -332,7 +356,6 @@ public sealed class PressureRetentionExpirationTests
         };
 
         var result = engine.ExpirePressureRetentionBatch(
-            Grace,
             4,
             BulkStoragePressureState.Critical,
             CancellationToken.None);
@@ -368,7 +391,6 @@ public sealed class PressureRetentionExpirationTests
         };
 
         var result = engine.ExpirePressureRetentionBatch(
-            Grace,
             4,
             BulkStoragePressureState.Critical,
             CancellationToken.None);
@@ -450,10 +472,7 @@ public sealed class PressureRetentionExpirationTests
             new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 10),
             logger: NullLogger.Instance,
             maxRetentionAge: maxRetentionAge ?? TimeSpan.Zero,
-            bulkPressure: new BulkStoragePressureOptions
-            {
-                MinimumRetentionAge = Grace,
-            });
+            bulkPressure: new BulkStoragePressureOptions());
     }
 
     private static FileArticleStorageEngine Open(TempDir dir, IStorageCapacityReader reader, TimeProvider time) =>
@@ -498,7 +517,8 @@ public sealed class PressureRetentionExpirationTests
         FileArticleStorageEngine engine,
         string messageId,
         DateTimeOffset acceptedUtc,
-        ulong sequence)
+        ulong sequence,
+        DateTimeOffset? lastAccessUtc = null)
     {
         var id = ArticleId.FromMessageId(Encoding.ASCII.GetBytes(messageId));
         Assert.True(engine.Index.TryCommitPresent(new StoredArticleMetadata(
@@ -507,7 +527,7 @@ public sealed class PressureRetentionExpirationTests
             10,
             new StoredArticleLocation(new SegmentId(9), (long)sequence, 10),
             ArticleStorageState.Present,
-            Arrival,
+            lastAccessUtc ?? Arrival,
             sequence,
             acceptedUtc)));
         return id;

@@ -395,8 +395,8 @@ public readonly record struct StoredArticleLocation(SegmentId SegmentId, long Of
 /// <param name="AcceptedUtc">
 /// Original local arrival instant from the journal Accept that established the row.
 /// Relocation, eviction, invalidation, checkpoint, and replay copy it. They do not replace it
-/// with publication, access, or restart time. <see cref="DateTimeOffset.MinValue"/> means the
-/// instant was not stored (a schema 2 index row). It is not an arrival time.
+/// with publication, access, or restart time. <see cref="DateTimeOffset.MinValue"/> is not an
+/// arrival and is rejected by the journal, segment, and index codecs.
 /// </param>
 public readonly record struct StoredArticleMetadata(
     ArticleId ArtId,
@@ -406,7 +406,7 @@ public readonly record struct StoredArticleMetadata(
     ArticleStorageState State,
     DateTimeOffset LastAccessUtc,
     ulong Sequence,
-    DateTimeOffset AcceptedUtc = default);
+    DateTimeOffset AcceptedUtc);
 
 /// <summary>
 /// Segment catalogue entry with live/dead accounting and retirement fencing.
@@ -539,7 +539,7 @@ public sealed class JournalAcceptRecord
         ArtId = artId;
         ArtHash = artHash;
         ArtSize = artSize;
-        AcceptedUtc = acceptedUtc;
+        AcceptedUtc = ArticleArrivalTime.RequireStored(acceptedUtc, nameof(acceptedUtc));
         _artData = artData.ToArray();
     }
 

@@ -14,8 +14,9 @@ using VectorNNTP.StorageServer.Storage.Engine.Policy;
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine.Maintenance;
 
 /// <summary>
-/// Maintenance uses the bulk watermark to choose existing work. It does not expire an article
-/// early and it does not discard acknowledged ingress.
+/// Maintenance uses the bulk watermark to choose reclaim and rewrite work. Pressure expiration
+/// takes the oldest known arrivals up to the watermark limit. These tests keep the observed
+/// article newer than that window so rewrite and ingress behaviour stay visible.
 /// </summary>
 public sealed class BulkStoragePressureMaintenanceTests
 {
@@ -73,7 +74,8 @@ public sealed class BulkStoragePressureMaintenanceTests
     {
         using var dir = TempDir.Create();
         var reader = new MutableCapacityReader(1_000_000_000, 0);
-        await using var engine = Open(dir, reader, new FakeTimeProvider(Arrival));
+        var time = new FakeTimeProvider(Arrival);
+        await using var engine = Open(dir, reader, time);
         var deadA = await PublishAsync(engine, "<bulk-dead-a@example>");
         var deadB = await PublishAsync(engine, "<bulk-dead-b@example>");
         await engine.DrainPendingAsync(CancellationToken.None);
@@ -82,6 +84,7 @@ public sealed class BulkStoragePressureMaintenanceTests
         Assert.True(engine.TryEvict(deadA.ArtId));
         Assert.True(engine.TryEvict(deadB.ArtId));
 
+        await AbsorbExpirationWindow(engine, time, ArticlePressureRetentionPolicy.PressureExpirationLimit);
         var keep = await PublishAsync(engine, "<bulk-pressure-keep@example>");
         var drop = await PublishAsync(engine, "<bulk-pressure-drop@example>");
         await engine.DrainPendingAsync(CancellationToken.None);
@@ -108,7 +111,9 @@ public sealed class BulkStoragePressureMaintenanceTests
     {
         using var dir = TempDir.Create();
         var reader = new MutableCapacityReader(1_000_000_000, 0);
-        await using var engine = Open(dir, reader, new FakeTimeProvider(Arrival));
+        var time = new FakeTimeProvider(Arrival);
+        await using var engine = Open(dir, reader, time);
+        await AbsorbExpirationWindow(engine, time, ArticlePressureRetentionPolicy.HighExpirationLimit);
         var keep = await PublishAsync(engine, "<bulk-high-keep@example>");
         var drop = await PublishAsync(engine, "<bulk-high-drop@example>");
         await engine.DrainPendingAsync(CancellationToken.None);
@@ -133,7 +138,9 @@ public sealed class BulkStoragePressureMaintenanceTests
     {
         using var dir = TempDir.Create();
         var reader = new MutableCapacityReader(1_000_000_000, 0);
-        await using var engine = Open(dir, reader, new FakeTimeProvider(Arrival));
+        var time = new FakeTimeProvider(Arrival);
+        await using var engine = Open(dir, reader, time);
+        await AbsorbExpirationWindow(engine, time, ArticlePressureRetentionPolicy.HighExpirationLimit);
         var keep = await PublishAsync(engine, "<bulk-high-fit-keep@example>");
         var drop = await PublishAsync(engine, "<bulk-high-fit-drop@example>");
         await engine.DrainPendingAsync(CancellationToken.None);
@@ -155,7 +162,9 @@ public sealed class BulkStoragePressureMaintenanceTests
     {
         using var dir = TempDir.Create();
         var reader = new MutableCapacityReader(1_000_000_000, 0);
-        await using var engine = Open(dir, reader, new FakeTimeProvider(Arrival));
+        var time = new FakeTimeProvider(Arrival);
+        await using var engine = Open(dir, reader, time);
+        await AbsorbExpirationWindow(engine, time, ArticlePressureRetentionPolicy.CriticalExpirationLimit);
         var records = new ArticleRecord[4];
         for (var i = 0; i < records.Length; i++)
         {
@@ -183,7 +192,9 @@ public sealed class BulkStoragePressureMaintenanceTests
     {
         using var dir = TempDir.Create();
         var reader = new MutableCapacityReader(1_000_000_000, 0);
-        await using var engine = Open(dir, reader, new FakeTimeProvider(Arrival));
+        var time = new FakeTimeProvider(Arrival);
+        await using var engine = Open(dir, reader, time);
+        await AbsorbExpirationWindow(engine, time, ArticlePressureRetentionPolicy.CriticalExpirationLimit);
         var keep = await PublishAsync(engine, "<bulk-critical-keep@example>");
         var drop1 = await PublishAsync(engine, "<bulk-critical-drop1@example>");
         var drop2 = await PublishAsync(engine, "<bulk-critical-drop2@example>");
@@ -210,11 +221,13 @@ public sealed class BulkStoragePressureMaintenanceTests
     {
         using var dir = TempDir.Create();
         var reader = new MutableCapacityReader(1_000_000_000, 0);
+        var time = new FakeTimeProvider(Arrival);
         await using var engine = Open(
             dir,
             reader,
-            new FakeTimeProvider(Arrival),
+            time,
             maximumUsageCapacity: 80);
+        await AbsorbExpirationWindow(engine, time, ArticlePressureRetentionPolicy.EmergencyExpirationLimit);
         var keep = await PublishAsync(engine, "<bulk-emergency-keep@example>");
         var drop = await PublishAsync(engine, "<bulk-emergency-drop@example>");
         await engine.DrainPendingAsync(CancellationToken.None);
@@ -229,7 +242,7 @@ public sealed class BulkStoragePressureMaintenanceTests
         reader.UsedBytes = 960_000_000;
         Assert.True(engine.ObserveCapacityAdmissionPressure().IsUnderUsagePressure);
 
-        var result = await Coordinator(engine, TimeSpan.FromHours(24)).RunOnceAsync(CancellationToken.None);
+        var result = await Coordinator(engine).RunOnceAsync(CancellationToken.None);
 
         Assert.Equal(nameof(BulkStoragePressureState.Emergency), result.BulkPressureState);
         Assert.Equal("EmergencyProtectIngress", result.BulkMaintenanceMode);
@@ -267,6 +280,27 @@ public sealed class BulkStoragePressureMaintenanceTests
         {
             Assert.Equal(ArticleStorageState.Evicted, expired.State);
         }
+    }
+
+    /// <summary>
+    /// Publishes one extra older article so the expiration limit is consumed in a separate
+    /// segment that still has a live article and is not deleted ahead of the segment under test.
+    /// </summary>
+    private static async Task AbsorbExpirationWindow(FileArticleStorageEngine engine, FakeTimeProvider time, int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            _ = await PublishAsync(engine, $"<bulk-absorb-{count}-{i}@example>");
+        }
+
+        time.Advance(TimeSpan.FromTicks(1));
+        _ = await PublishAsync(
+            engine,
+            $"<bulk-absorb-{count}-survivor@example>",
+            bodyBytes: Math.Max(65_536, count * 4_096));
+        await engine.DrainPendingAsync(CancellationToken.None);
+        await engine.Segments.CloseActiveAsync(CancellationToken.None);
+        time.Advance(TimeSpan.FromTicks(1));
     }
 
     private static StorageMaintenanceCoordinator Coordinator(
@@ -308,7 +342,8 @@ public sealed class BulkStoragePressureMaintenanceTests
     private static async Task<ArticleRecord> PublishAsync(
         FileArticleStorageEngine engine,
         string messageId,
-        bool drain = true)
+        bool drain = true,
+        int bodyBytes = 0)
     {
         var builder = new StringBuilder();
         _ = builder.Append("Path: peer.example\r\n");
@@ -316,7 +351,20 @@ public sealed class BulkStoragePressureMaintenanceTests
         _ = builder.Append("Message-ID: ").Append(messageId).Append("\r\n");
         _ = builder.Append("Newsgroups: alt.test\r\n");
         _ = builder.Append("From: user@example.test\r\n");
-        _ = builder.Append("Subject: phase26\r\n\r\nbody\r\n");
+        _ = builder.Append("Subject: phase26\r\n\r\n");
+        if (bodyBytes > 0)
+        {
+            for (var written = 0; written < bodyBytes;)
+            {
+                var line = Math.Min(100, bodyBytes - written);
+                _ = builder.Append('x', line).Append("\r\n");
+                written += line;
+            }
+        }
+        else
+        {
+            _ = builder.Append("body\r\n");
+        }
         var created = ArticleRecordFactory.TryCreate(
             new NntpArticleParser("cache01.usenet.ninja"),
             Encoding.ASCII.GetBytes(builder.ToString()));

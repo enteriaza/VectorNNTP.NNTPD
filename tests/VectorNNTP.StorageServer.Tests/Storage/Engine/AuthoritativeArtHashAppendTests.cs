@@ -26,6 +26,7 @@ public sealed class AuthoritativeArtHashAppendTests : IDisposable
             record.ArtData,
             record.ArtId,
             record.ArtHash,
+            new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero),
             out var article));
 
         using var dir = TempStorageDir.Create();
@@ -68,6 +69,7 @@ public sealed class AuthoritativeArtHashAppendTests : IDisposable
             record.ArtData,
             record.ArtId,
             record.ArtHash ^ 1,
+            new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero),
             out _));
         var error = Assert.Throws<ArgumentOutOfRangeException>(
             () => store.AppendActiveBatch([default(AuthoritativeArticleAppend)]));

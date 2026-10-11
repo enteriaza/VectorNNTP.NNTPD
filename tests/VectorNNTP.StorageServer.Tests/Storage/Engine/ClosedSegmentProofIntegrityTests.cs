@@ -288,7 +288,7 @@ public sealed class ClosedSegmentProofIntegrityTests
     }
 
     private static byte[] Frame(ArticleRecord record)
-        => SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        => SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
 
     private static byte[] Corrupt(byte[] framed, Action<byte[]> mutate)
     {

@@ -55,8 +55,6 @@ public sealed class ArticleStorageOptionsTests
         Assert.Equal(5, storage.BulkPressure.RecoveryReservePercent);
         Assert.Equal(BulkStoragePressureOptions.DefaultRewriteReservePercent, storage.BulkPressure.RewriteReservePercent);
         Assert.Equal(10, storage.BulkPressure.RewriteReservePercent);
-        Assert.Equal(BulkStoragePressureOptions.DefaultMinimumRetentionAge, storage.BulkPressure.MinimumRetentionAge);
-        Assert.Equal(TimeSpan.FromDays(7), storage.BulkPressure.MinimumRetentionAge);
         Assert.Equal(BulkStoragePressureOptions.DefaultPressureRecoveryMarginPercent, storage.BulkPressure.PressureRecoveryMarginPercent);
         Assert.Equal(5, storage.BulkPressure.PressureRecoveryMarginPercent);
         Assert.Null(typeof(ArticleCapacityOptions).GetProperty("Enabled"));

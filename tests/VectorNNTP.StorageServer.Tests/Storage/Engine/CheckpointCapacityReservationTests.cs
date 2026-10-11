@@ -607,7 +607,8 @@ public sealed class CheckpointCapacityReservationTests
             new StoredArticleLocation(new SegmentId(1), (long)hash * 8, 8),
             ArticleStorageState.Present,
             new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero),
-            1UL);
+            1UL,
+            new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero));
 
     private static ArticleRecord CreateRecord(string messageId)
     {

@@ -348,12 +348,6 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             "StorageServer:Storage:BulkPressure:RewriteReservePercent",
             failures);
 
-        if (bulkPressure.MinimumRetentionAge < TimeSpan.Zero)
-        {
-            failures.Add(
-                "StorageServer:Storage:BulkPressure:MinimumRetentionAge must be greater than or equal to 00:00:00. 00:00:00 allows any known past arrival to be pressure-expired.");
-        }
-
         ValidatePercent(
             bulkPressure.PressureRecoveryMarginPercent,
             "StorageServer:Storage:BulkPressure:PressureRecoveryMarginPercent",

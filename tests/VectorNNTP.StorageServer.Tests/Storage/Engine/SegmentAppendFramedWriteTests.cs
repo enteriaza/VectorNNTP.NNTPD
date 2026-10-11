@@ -1,5 +1,6 @@
 using System.IO.Hashing;
 using System.Text;
+using Microsoft.Extensions.Time.Testing;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.StorageServer.Configuration;
@@ -10,20 +11,24 @@ namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
 public sealed class SegmentAppendFramedWriteTests
 {
+    private static readonly DateTimeOffset FrameClock = new(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+
     [Fact]
     public void Incremental_header_crc_and_hash_match_contiguous_encode()
     {
         var article = CreateArtData("<frame-codec@example.test>", "payload\r\n");
         var (artId, artHash) = Identity(article);
-        var encoded = SegmentRecordCodec.Encode(artId, artHash, article);
+        var encoded = SegmentRecordCodec.Encode(artId, artHash, article, FrameClock);
         Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
+        Span<byte> arrival = stackalloc byte[SegmentRecordCodec.ArrivalTrailerLength];
         Span<byte> crc = stackalloc byte[4];
-        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, article, header, crc);
-        var framedHash = SegmentRecordCodec.FramedHash(header, article, crc);
+        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, article, FrameClock, header, arrival, crc);
+        var framedHash = SegmentRecordCodec.FramedHash(header, article, arrival, crc);
 
         Assert.Equal(SegmentRecordCodec.FixedHeaderLength, header.Length);
         Assert.True(encoded.AsSpan(0, header.Length).SequenceEqual(header));
         Assert.True(encoded.AsSpan(header.Length, article.Length).SequenceEqual(article));
+        Assert.True(encoded.AsSpan(header.Length + article.Length, arrival.Length).SequenceEqual(arrival));
         Assert.True(encoded.AsSpan(encoded.Length - 4).SequenceEqual(crc));
         Assert.Equal(XxHash3.HashToUInt64(encoded), framedHash);
     }
@@ -40,7 +45,7 @@ public sealed class SegmentAppendFramedWriteTests
         var snapshots = articles.Select(static article => article.ToArray()).ToArray();
 
         using var dir = TempSegmentDir.Create();
-        using var store = FileSegmentStore.Open(dir.Options);
+        using var store = FileSegmentStore.Open(dir.Options, timeProvider: new FakeTimeProvider(FrameClock));
         SegmentRecordCodec.ResetEncodeCalls();
         var appender = await store.GetActiveAppenderAsync(CancellationToken.None);
         var locations = new StoredArticleLocation[articles.Length];
@@ -70,7 +75,7 @@ public sealed class SegmentAppendFramedWriteTests
     public async Task Empty_payload_is_rejected_without_encoding()
     {
         using var dir = TempSegmentDir.Create();
-        using var store = FileSegmentStore.Open(dir.Options);
+        using var store = FileSegmentStore.Open(dir.Options, timeProvider: new FakeTimeProvider(FrameClock));
         var appender = await store.GetActiveAppenderAsync(CancellationToken.None);
         SegmentRecordCodec.ResetEncodeCalls();
 
@@ -93,7 +98,7 @@ public sealed class SegmentAppendFramedWriteTests
         var second = CreateArtData("<torn-cut@example.test>", "torn-body-is-long-enough\r\n");
         StoredArticleLocation firstLoc;
         SegmentRecordCodec.ResetEncodeCalls();
-        using (var storeA = FileSegmentStore.Open(dir.Options))
+        using (var storeA = FileSegmentStore.Open(dir.Options, timeProvider: new FakeTimeProvider(FrameClock)))
         {
             var appender = await storeA.GetActiveAppenderAsync(CancellationToken.None);
             firstLoc = await appender.AppendAsync(first, CancellationToken.None);
@@ -113,7 +118,7 @@ public sealed class SegmentAppendFramedWriteTests
         Assert.InRange(tornLength, firstLoc.Length + 1, bytes.Length - 1);
         File.WriteAllBytes(path, bytes.AsSpan(0, tornLength).ToArray());
 
-        using var storeB = FileSegmentStore.Open(dir.Options);
+        using var storeB = FileSegmentStore.Open(dir.Options, timeProvider: new FakeTimeProvider(FrameClock));
         Assert.True(storeB.TryRead(firstLoc, out var kept));
         Assert.True(kept.Span.SequenceEqual(first));
         Assert.True(storeB.TryGetSegmentInfo(firstLoc.SegmentId, out var info));
@@ -133,7 +138,7 @@ public sealed class SegmentAppendFramedWriteTests
     public async Task Complete_bad_crc_fails_closed()
     {
         using var dir = TempSegmentDir.Create();
-        using (var storeA = FileSegmentStore.Open(dir.Options))
+        using (var storeA = FileSegmentStore.Open(dir.Options, timeProvider: new FakeTimeProvider(FrameClock)))
         {
             var appender = await storeA.GetActiveAppenderAsync(CancellationToken.None);
             _ = await appender.AppendAsync(CreateArtData("<bad-crc-a@example.test>", "keep\r\n"), CancellationToken.None);
@@ -145,7 +150,7 @@ public sealed class SegmentAppendFramedWriteTests
         bytes[^1] ^= 0xFF;
         File.WriteAllBytes(path, bytes);
 
-        var error = Assert.Throws<SegmentStoreCorruptException>(() => FileSegmentStore.Open(dir.Options));
+        var error = Assert.Throws<SegmentStoreCorruptException>(() => FileSegmentStore.Open(dir.Options, timeProvider: new FakeTimeProvider(FrameClock)));
         Assert.Contains("CorruptChecksum", error.Message, StringComparison.Ordinal);
         Assert.Equal(bytes, File.ReadAllBytes(path));
     }
@@ -154,7 +159,7 @@ public sealed class SegmentAppendFramedWriteTests
     public async Task Ambiguous_flush_retries_the_same_record_then_appends_the_next()
     {
         using var dir = TempSegmentDir.Create();
-        using var store = FileSegmentStore.Open(dir.Options);
+        using var store = FileSegmentStore.Open(dir.Options, timeProvider: new FakeTimeProvider(FrameClock));
         var article = CreateArtData("<ambiguous@example.test>", "pending\r\n");
         var recordLength = SegmentRecordCodec.RecordLengthForArtSize(article.Length);
         var afterWrites = 0;
@@ -214,7 +219,7 @@ public sealed class SegmentAppendFramedWriteTests
             CreateArtData("<batch-c@example.test>", "three\r\n"),
         };
         using var dir = TempSegmentDir.Create();
-        using var store = FileSegmentStore.Open(dir.Options);
+        using var store = FileSegmentStore.Open(dir.Options, timeProvider: new FakeTimeProvider(FrameClock));
         var durableFlushes = 0;
         store.TestBeforeDurableFlush = () => durableFlushes++;
         SegmentRecordCodec.ResetEncodeCalls();
@@ -245,7 +250,7 @@ public sealed class SegmentAppendFramedWriteTests
         foreach (var article in articles)
         {
             var (artId, artHash) = Identity(article);
-            var encoded = SegmentRecordCodec.Encode(artId, artHash, article);
+            var encoded = SegmentRecordCodec.Encode(artId, artHash, article, FrameClock);
             expected.Write(encoded);
         }
 

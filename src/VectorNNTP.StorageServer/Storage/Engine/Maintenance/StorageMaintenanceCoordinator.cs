@@ -1400,8 +1400,7 @@ public sealed class StorageMaintenanceCoordinator
                     _logger,
                     bulk.State.ToString(),
                     bulk.UsedPercent,
-                    target,
-                    _bulkPolicy.Options.MinimumRetentionAge);
+                    target);
             }
             else
             {
@@ -1420,7 +1419,6 @@ public sealed class StorageMaintenanceCoordinator
         }
 
         _recoveryPressure = _engine.ExpirePressureRetentionBatch(
-            _bulkPolicy.Options.MinimumRetentionAge,
             ArticlePressureRetentionPolicy.ExpirationLimit(bulk.State, mode),
             bulk.State,
             cancellationToken);
@@ -1707,6 +1705,11 @@ public sealed class StorageMaintenanceCoordinator
                 return AttachPressure(last, pressure);
             }
 
+            if (!EffectiveUsageStillRequiresEviction(in pressure))
+            {
+                return AttachPressure(last, pressure);
+            }
+
             if (_policy.TrySelectReclamationVictim(_engine.Catalogue, out var retiredVictim))
             {
                 TestHookAfterReclamationVictimSelected?.Invoke(retiredVictim.SegmentId);
@@ -1769,14 +1772,12 @@ public sealed class StorageMaintenanceCoordinator
                         continue;
                     }
 
+                    NoteUncreditedDelete(deadClosed.SizeBytes, pressure.UsedBytes, afterDead.UsedBytes);
                     return AttachPressure(deadResult, afterDead);
                 }
             }
 
-            if (_engine.TryEvictColdestUniformClosedSegment(
-                    _bulkPolicy.Options.MinimumRetentionAge,
-                    out var sacrificedId,
-                    out var sacrificed)
+            if (_engine.TryEvictColdestUniformClosedSegment(out var sacrificedId, out var sacrificed)
                 && sacrificed > 0)
             {
                 _engine.CompleteUnreferencedExtentAccounting();
@@ -1798,6 +1799,7 @@ public sealed class StorageMaintenanceCoordinator
                             continue;
                         }
 
+                        NoteUncreditedDelete(sacrificedDead.SizeBytes, pressure.UsedBytes, afterSacrifice.UsedBytes);
                         return AttachPressure(sacrificedResult, afterSacrifice);
                     }
                 }
@@ -1877,6 +1879,58 @@ public sealed class StorageMaintenanceCoordinator
         return AttachPressure(
             Skipped(default, compactionId: 0, StorageMaintenanceSkipReasons.CapacityPressureUnrecoverable),
             _engine.ObserveCapacityAdmissionPressure());
+    }
+
+    /// <summary>Deleted bytes the capacity reader has not yet dropped.</summary>
+    private long _uncreditedDeletedBytes;
+
+    /// <summary>Used-byte sample taken before <see cref="_uncreditedDeletedBytes"/> was recorded.</summary>
+    private long _usedBytesBeforeUncreditedDelete;
+
+    /// <summary>
+    /// Records a physical delete the capacity sample has not fully released.
+    /// </summary>
+    private void NoteUncreditedDelete(long deletedBytes, long usedBefore, long usedAfter)
+    {
+        var observedDrop = Math.Max(0L, usedBefore - usedAfter);
+        var unseen = deletedBytes - observedDrop;
+        if (unseen <= 0)
+        {
+            return;
+        }
+
+        if (_uncreditedDeletedBytes == 0)
+        {
+            _usedBytesBeforeUncreditedDelete = usedBefore;
+        }
+
+        _uncreditedDeletedBytes += unseen;
+    }
+
+    /// <summary>
+    /// True when crediting unseen deletes still leaves usage above the recovery target.
+    /// A stale sample that still includes a deleted file does not start another eviction.
+    /// </summary>
+    private bool EffectiveUsageStillRequiresEviction(in CapacityAdmissionPressureSnapshot pressure)
+    {
+        if (_uncreditedDeletedBytes <= 0)
+        {
+            return true;
+        }
+
+        var observedDrop = _usedBytesBeforeUncreditedDelete - pressure.UsedBytes;
+        if (observedDrop > 0)
+        {
+            _uncreditedDeletedBytes = Math.Max(0L, _uncreditedDeletedBytes - observedDrop);
+            _usedBytesBeforeUncreditedDelete = pressure.UsedBytes;
+        }
+
+        if (_uncreditedDeletedBytes <= 0)
+        {
+            return pressure.UsedBytes > pressure.UsageRecoveryTargetBytes;
+        }
+
+        return pressure.UsedBytes - _uncreditedDeletedBytes > pressure.UsageRecoveryTargetBytes;
     }
 
     /// <summary>

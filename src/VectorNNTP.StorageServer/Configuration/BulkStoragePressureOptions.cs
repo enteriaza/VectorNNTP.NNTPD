@@ -23,8 +23,8 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// </para>
 /// <para>
 /// Pressure-driven expiration, when the volume is at Pressure or higher, logically evicts
-/// Present articles older than <see cref="MinimumRetentionAge"/>. It does not delete segment
-/// bytes and it does not expire an article that is still only in the ingress journal.
+/// Present articles. Article age is not a gate, and a missing arrival does not exclude a row.
+/// It does not delete segment bytes and it does not expire an article that is still only in the ingress journal.
 /// <see cref="ArticleStorageOptions.MaxRetentionAge"/> remains a separate predicate.
 /// </para>
 /// </remarks>
@@ -56,13 +56,6 @@ public sealed class BulkStoragePressureOptions
     /// Ten percent is the configured upper end of the five-to-ten percent reserve.
     /// </summary>
     public const int DefaultRewriteReservePercent = 10;
-
-    /// <summary>
-    /// Youngest arrival age that pressure-driven expiration may select.
-    /// Seven days. <see cref="ArticleStorageOptions.MaxRetentionAge"/> is a separate policy and
-    /// defaults to disabled. There is no other finite retention age in this configuration.
-    /// </summary>
-    public static readonly TimeSpan DefaultMinimumRetentionAge = TimeSpan.FromDays(7);
 
     /// <summary>
     /// Used-percent points below <see cref="DefaultPressurePercent"/> at which a pressure-expiration
@@ -101,13 +94,6 @@ public sealed class BulkStoragePressureOptions
     /// Gets or sets the rewrite/reclamation reserve percent. Default <see cref="DefaultRewriteReservePercent"/>.
     /// </summary>
     public int RewriteReservePercent { get; set; } = DefaultRewriteReservePercent;
-
-    /// <summary>
-    /// Gets or sets the minimum durable arrival age for pressure-driven expiration.
-    /// Default <see cref="DefaultMinimumRetentionAge"/>. Zero allows any known past arrival.
-    /// This does not change <see cref="ArticleStorageOptions.MaxRetentionAge"/>.
-    /// </summary>
-    public TimeSpan MinimumRetentionAge { get; set; } = DefaultMinimumRetentionAge;
 
     /// <summary>
     /// Gets or sets how many used-percent points below <see cref="PressurePercent"/> a started

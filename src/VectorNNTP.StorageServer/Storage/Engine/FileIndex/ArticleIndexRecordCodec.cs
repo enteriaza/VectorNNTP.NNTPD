@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Hashing;
 using VectorNNTP.Common.Articles;
+using VectorNNTP.StorageServer.Storage.Engine;
 
 namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 
@@ -19,26 +20,22 @@ internal enum ArticleIndexFrameError
 /// </summary>
 /// <remarks>
 /// Fixed-layout mutation record (latest write for an <see cref="ArticleId"/> wins on replay).
-/// Each frame starts with <c>u32 TotalLength</c>. Schema 3 is 104 bytes:
+/// Each frame starts with <c>u32 TotalLength</c>. The only frame is 104 bytes:
 /// <c>u8 SchemaVersion</c>, <c>u8 Reserved</c>, <c>u16 Reserved</c>,
 /// ArtId[32], ArtHash u64, ArtSize i32, SegmentId u64, Offset i64, Length i32,
 /// State u8, pad u8, pad u16, LastAccessUtcTicks i64, Sequence u64, AcceptedUtcTicks i64,
-/// CRC-32 over preceding bytes. Schema 2 is the same prefix through Sequence and is 96 bytes;
-/// it has no arrival instant and decodes as <see cref="DateTimeOffset.MinValue"/>.
-/// Schema 1 records are 88 bytes and are rejected. Sequence is the journal Accept that established
-/// the row. Relocation and death copy it; they do not allocate a new one.
-/// AcceptedUtcTicks is that Accept's original UTC ticks. Relocation, eviction, and replay copy it.
+/// CRC-32 over preceding bytes. Any other length is rejected.
+/// Sequence is the journal Accept that established the row. Relocation and death copy it;
+/// they do not allocate a new one. AcceptedUtcTicks is that Accept's original UTC ticks.
+/// Relocation, eviction, and replay copy it. A missing or non-UTC instant is corruption.
 /// </remarks>
 internal static class ArticleIndexRecordCodec
 {
-    /// <summary>Current schema version written by <see cref="Encode"/>.</summary>
+    /// <summary>The only index-frame schema written and read by <see cref="Encode"/>.</summary>
     public const byte SchemaVersion = 3;
 
-    /// <summary>Schema 2 version. Those 96-byte frames are still read.</summary>
-    public const byte Schema2Version = 2;
-
-    /// <summary>Schema 2 encoded size, including CRC. Still accepted on replay.</summary>
-    public const int Schema2RecordLength =
+    /// <summary>Encoded mutation size including CRC and AcceptedUtcTicks.</summary>
+    public const int RecordLength =
         4 + 1 + 1 + 2
         + ArticleId.Length
         + 8 + 4
@@ -46,25 +43,29 @@ internal static class ArticleIndexRecordCodec
         + 1 + 1 + 2
         + 8
         + 8
+        + 8
         + 4;
 
-    /// <summary>Current encoded mutation size including CRC. Schema 3 adds AcceptedUtcTicks.</summary>
-    public const int RecordLength = Schema2RecordLength + 8;
+    /// <summary>Accepted frame length. There is one.</summary>
+    public const int MinimumFrameLength = RecordLength;
 
-    /// <summary>Shortest accepted frame (schema 2).</summary>
-    public const int MinimumFrameLength = Schema2RecordLength;
-
-    /// <summary>Longest accepted frame (schema 3).</summary>
+    /// <summary>Accepted frame length. There is one.</summary>
     public const int MaxFrameLength = RecordLength;
 
-    /// <summary>True when <paramref name="length"/> is a schema 2 or schema 3 frame.</summary>
-    public static bool IsAcceptedFrameLength(uint length) =>
-        length == Schema2RecordLength || length == RecordLength;
+    /// <summary>True when <paramref name="length"/> is the canonical index frame.</summary>
+    public static bool IsAcceptedFrameLength(uint length) => length == RecordLength;
 
-    /// <summary>Encodes one durable mutation snapshot for <paramref name="metadata"/>.</summary>
+    /// <summary>
+    /// Encodes one durable index mutation for <paramref name="metadata"/>.
+    /// </summary>
+    /// <remarks>
+    /// A missing arrival is rejected. The frame is the only length a snapshot or replay accepts.
+    /// </remarks>
     public static byte[] Encode(in StoredArticleMetadata metadata)
     {
         ValidateMetadata(metadata);
+        var acceptedUtc = ArticleArrivalTime.RequireStored(metadata.AcceptedUtc, "AcceptedUtc");
+
         var buffer = new byte[RecordLength];
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)RecordLength);
         buffer[4] = SchemaVersion;
@@ -92,7 +93,7 @@ internal static class ArticleIndexRecordCodec
         o += 8;
         BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(o, 8), metadata.Sequence);
         o += 8;
-        BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(o, 8), metadata.AcceptedUtc.UtcTicks);
+        BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(o, 8), acceptedUtc.UtcTicks);
         o += 8;
         var crc = Crc32.HashToUInt32(buffer.AsSpan(0, o));
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(o, 4), crc);
@@ -141,9 +142,7 @@ internal static class ArticleIndexRecordCodec
         }
 
         var schema = frame[4];
-        var schemaMatchesLength = (schema == SchemaVersion && frameLength == RecordLength)
-            || (schema == Schema2Version && frameLength == Schema2RecordLength);
-        if (!schemaMatchesLength || frame[5] != 0 || frame[6] != 0 || frame[7] != 0)
+        if (schema != SchemaVersion || frameLength != RecordLength || frame[5] != 0 || frame[6] != 0 || frame[7] != 0)
         {
             error = ArticleIndexFrameError.Corrupt;
             return false;
@@ -192,23 +191,20 @@ internal static class ArticleIndexRecordCodec
         o += 8;
         var sequence = BinaryPrimitives.ReadUInt64LittleEndian(frame.Slice(o, 8));
         o += 8;
-        long acceptedTicks = 0;
-        if (schema == SchemaVersion)
-        {
-            acceptedTicks = BinaryPrimitives.ReadInt64LittleEndian(frame.Slice(o, 8));
-        }
+        var acceptedTicks = BinaryPrimitives.ReadInt64LittleEndian(frame.Slice(o, 8));
 
         DateTimeOffset lastAccess;
-        DateTimeOffset acceptedUtc = default;
         try
         {
             lastAccess = new DateTimeOffset(ticks, TimeSpan.Zero);
-            if (schema == SchemaVersion)
-            {
-                acceptedUtc = new DateTimeOffset(acceptedTicks, TimeSpan.Zero);
-            }
         }
         catch (ArgumentOutOfRangeException)
+        {
+            error = ArticleIndexFrameError.Corrupt;
+            return false;
+        }
+
+        if (!ArticleArrivalTime.TryStored(acceptedTicks, out var acceptedUtc))
         {
             error = ArticleIndexFrameError.Corrupt;
             return false;
@@ -235,7 +231,7 @@ internal static class ArticleIndexRecordCodec
     }
 
     /// <summary>
-    /// True when <c>[start, end)</c> is empty or a concatenation of complete schema 2 and schema 3 frames.
+    /// True when <c>[start, end)</c> is empty or a concatenation of complete index frames.
     /// Checksums are not verified. Restores <paramref name="stream"/> position.
     /// </summary>
     public static bool EndsOnFrameBoundary(Stream stream, long start, long end)

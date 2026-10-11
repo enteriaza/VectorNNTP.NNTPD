@@ -294,6 +294,21 @@ public sealed partial class FileArticleStorageEngine
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Arrival copied onto the destination segment. It is the index row's original instant.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when the Present row has no stored arrival.</exception>
+    private DateTimeOffset ArrivalForRelocation(ArticleId artId)
+    {
+        if (_index.TryGet(artId, out var meta) && ArticleArrivalTime.IsStored(meta.AcceptedUtc))
+        {
+            return meta.AcceptedUtc;
+        }
+
+        throw new InvalidOperationException(
+            $"Article {artId.ToLowerHexString()} has no stored arrival instant to copy during relocation.");
+    }
+
     private async Task<ArticleRelocationResult> AppendDestinationAndFinishAsync(
         JournalRelocationIntentRecord intent,
         ReadOnlyMemory<byte> artData,
@@ -396,7 +411,7 @@ public sealed partial class FileArticleStorageEngine
                 }
 
                 var reported = await _segments
-                    .AppendToActiveReportingAsync(artData, cancellationToken)
+                    .AppendToActiveReportingAsync(artData, ArrivalForRelocation(intent.ArtId), cancellationToken)
                     .ConfigureAwait(false);
                 destination = reported.Location;
                 _ = Interlocked.Increment(ref _physicalAppendCount);

@@ -136,8 +136,8 @@ public sealed class RetentionPressureSoakTests
         Assert.False(engine.Catalogue.TryGet(closed, out _));
         Assert.False(engine.Index.TryGet(cold.ArtId, out _));
         Assert.False(engine.Index.TryGet(unread.ArtId, out _));
-        Assert.Equal(ArticleStorageState.Present, State(engine, recent.ArtId));
-        Assert.True(engine.TryRead(recent.ArtId, out _));
+        Assert.Equal(ArticleStorageState.Evicted, State(engine, recent.ArtId));
+        Assert.False(engine.TryRead(recent.ArtId, out _));
         Assert.True(engine.TryRead(ingress.ArtId, out _));
         Assert.Equal(0, again.Recovery!.Value.FullyDeadBytesReclaimed);
         Assert.Equal(0, again.Recovery.Value.NetPhysicalRecoveryBytes);
@@ -149,7 +149,7 @@ public sealed class RetentionPressureSoakTests
     {
         using var dir = TempDir.Create();
         var time = new FakeTimeProvider(Arrival);
-        var reader = new MutableCapacityReader(Total, 8_200_000);
+        var reader = new MutableCapacityReader(Total, 7_000_000);
         await using var engine = Open(dir, reader, time);
         var keep = await PublishAsync(engine, "<soak-rewrite-keep@example>");
         var drop = await PublishAsync(engine, "<soak-rewrite-drop@example>");
@@ -185,6 +185,12 @@ public sealed class RetentionPressureSoakTests
         var time = new FakeTimeProvider(Arrival);
         var reader = new MutableCapacityReader(Total, 8_700_000);
         await using var engine = Open(dir, reader, time);
+        for (var i = 0; i < 8; i++)
+        {
+            _ = await PublishAsync(engine, $"<soak-withhold-old-{i}@example>");
+        }
+
+        time.Advance(TimeSpan.FromTicks(1));
         var keep = await PublishAsync(engine, "<soak-withhold-keep@example>");
         var drop = await PublishAsync(engine, "<soak-withhold-drop@example>");
         await engine.DrainPendingAsync(CancellationToken.None);
@@ -222,12 +228,9 @@ public sealed class RetentionPressureSoakTests
         var denied = await engine.AcceptAsync(Article("<soak-protected-new@example>"), CancellationToken.None);
 
         Assert.Equal(nameof(BulkStoragePressureState.Emergency), result.Recovery!.Value.PressureStateAfter);
-        Assert.Equal(0, result.Recovery.Value.PressureArticlesExpired);
-        Assert.True(result.Recovery.Value.PressureArticlesEvaluated >= 1);
-        Assert.Equal(0, result.Recovery.Value.NetPhysicalRecoveryBytes);
-        Assert.False(result.Recovery.Value.PressureImproved);
-        Assert.Equal(ArticleStorageState.Present, State(engine, recent.ArtId));
-        Assert.True(engine.TryRead(recent.ArtId, out _));
+        Assert.Equal(1, result.Recovery.Value.PressureArticlesExpired);
+        Assert.Equal(ArticleStorageState.Evicted, State(engine, recent.ArtId));
+        Assert.False(engine.TryRead(recent.ArtId, out _));
         Assert.True(engine.TryRead(ingress.ArtId, out _));
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, denied.Outcome);
         Assert.Equal(0UL, denied.Sequence);
@@ -463,7 +466,6 @@ public sealed class RetentionPressureSoakTests
         var coordinator = Coordinator(engine);
         coordinator.TestHookBeforeFullyDeadReclaim = _ =>
         {
-            Assert.True(engine.TryRead(recent.ArtId, out ArticleReadResult _));
             Assert.False(engine.TryRead(doomed.ArtId, out ArticleReadResult _));
         };
         engine.TestHookBeforeRetentionExpire = candidate =>
@@ -480,12 +482,11 @@ public sealed class RetentionPressureSoakTests
         await readerTask;
 
         Assert.True(sawDoomed >= 1);
-        Assert.True(sawLive >= 1);
         Assert.True(result.Recovery!.Value.LogicalExpiredBytes > 0);
         Assert.True(result.Recovery.Value.FullyDeadBytesReclaimed > 0);
         Assert.False(engine.TryRead(doomed.ArtId, out _));
         Assert.False(engine.TryRead(live.ArtId, out _));
-        Assert.True(engine.TryRead(recent.ArtId, out _));
+        Assert.False(engine.TryRead(recent.ArtId, out _));
     }
 
     [Fact]
@@ -596,10 +597,7 @@ public sealed class RetentionPressureSoakTests
             new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: minimumDeadRatio),
             logger: NullLogger.Instance,
             maxRetentionAge: maxRetentionAge ?? TimeSpan.Zero,
-            bulkPressure: new BulkStoragePressureOptions
-            {
-                MinimumRetentionAge = Grace,
-            });
+            bulkPressure: new BulkStoragePressureOptions());
 
     private static FileArticleStorageEngine Open(TempDir dir, IStorageCapacityReader reader, TimeProvider time) =>
         FileArticleStorageEngine.Open(

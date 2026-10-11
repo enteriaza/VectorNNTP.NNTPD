@@ -137,7 +137,11 @@ public sealed class ActiveSegmentRepairStreamingTests
         artData["Message-ID: "u8.Length + messageId.Length + 3] = (byte)'\n';
         var artId = ArticleId.FromMessageId(messageId);
         var artHash = XxHash3.HashToUInt64(artData);
-        var encoded = SegmentRecordCodec.Encode(artId, artHash, artData);
+        var encoded = SegmentRecordCodec.Encode(
+            artId,
+            artHash,
+            artData,
+            new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Assert.Equal(SegmentRecordCodec.MaxRecordLength, encoded.Length);
         Assert.True(SegmentRecordCodec.TryDecode(encoded, out _, out _, out _, out _, out _, out _));
         return encoded;

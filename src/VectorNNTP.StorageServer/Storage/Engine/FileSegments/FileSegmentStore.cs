@@ -500,6 +500,44 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     }
 
     /// <summary>
+    /// Reads the arrival stored in <paramref name="location"/> after the record proves.
+    /// Returns false when the frame, schema, or ticks are not valid.
+    /// </summary>
+    internal bool TryReadStoredArrival(in StoredArticleLocation location, int artSize, out DateTimeOffset acceptedUtc)
+    {
+        acceptedUtc = default;
+        if (artSize < 1 || location.Length != SegmentRecordCodec.RecordLengthForArtSize(artSize))
+        {
+            return false;
+        }
+
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_segments.TryGetValue(location.SegmentId.Value, out var runtime)
+                || runtime.State == SegmentState.Retired
+                || location.Offset < 0
+                || location.Offset + location.Length > runtime.SizeBytes)
+            {
+                return false;
+            }
+
+            var observed = ReadExact(runtime.Stream, location.Offset, location.Length);
+            return observed.Length == location.Length
+                && SegmentRecordCodec.TryProveFramedRecord(
+                    observed,
+                    out var provedLength,
+                    out _,
+                    out _,
+                    out var provedSize,
+                    out _)
+                && provedLength == location.Length
+                && provedSize == artSize
+                && SegmentRecordCodec.TryReadArrival(observed, artSize, out acceptedUtc);
+        }
+    }
+
+    /// <summary>
     /// Reads and proves the article at <paramref name="location"/> against expected identity.
     /// </summary>
     public bool TryReadProven(
@@ -893,13 +931,24 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     internal ValueTask<ActiveSegmentAppend> AppendToActiveReportingAsync(
         ReadOnlyMemory<byte> artData,
+        CancellationToken cancellationToken) =>
+        AppendToActiveReportingAsync(artData, _time.GetUtcNow(), cancellationToken);
+
+    /// <summary>
+    /// Appends one record stamped with <paramref name="acceptedUtc"/> and reports whether a
+    /// failed durability flush was reconciled because the complete record was already present.
+    /// </summary>
+    internal ValueTask<ActiveSegmentAppend> AppendToActiveReportingAsync(
+        ReadOnlyMemory<byte> artData,
+        DateTimeOffset acceptedUtc,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_writeGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            return ValueTask.FromResult(AppendToActiveUnlocked(artData));
+            return ValueTask.FromResult(AppendPreparedUnlocked(
+                AuthoritativeArticleAppend.Derive(artData, acceptedUtc)));
         }
     }
 
@@ -929,7 +978,9 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// <returns>An append carrying the computed XXH3-64.</returns>
     private AuthoritativeArticleAppend DerivePayload(ReadOnlyMemory<byte> artData)
     {
-        var derived = AuthoritativeArticleAppend.Derive(artData);
+        var derived = AuthoritativeArticleAppend.Derive(
+            artData,
+            ArticleArrivalTime.RequireStored(_time.GetUtcNow(), nameof(artData)));
         _ = Interlocked.Increment(ref _derivedPayloadArtHashCount);
         return derived;
     }
@@ -1006,15 +1057,17 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         // ArtHash. A caller that only has bytes passes a hash Derive just computed.
         // Disk reads prove the persisted record. This method does not hash the payload.
         Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
+        Span<byte> arrival = stackalloc byte[SegmentRecordCodec.ArrivalTrailerLength];
         Span<byte> crc = stackalloc byte[4];
-        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc);
+        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, article.AcceptedUtc, header, arrival, crc);
         var recordLength = SegmentRecordCodec.RecordLengthForArtSize(artData.Length);
         EnsureActiveUnlocked();
         var activeId = _activeSegmentId!.Value;
         var runtime = _segments[activeId];
         if (runtime.PendingRecord is not null)
         {
-            var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, crc);
+            RestorePendingArrival(runtime, artId, artHash, artData.Span, header, arrival, crc);
+            var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, arrival, crc);
             var finished = FinishPendingSegmentRecord(runtime, recordLength, framedHash, artId, artHash, artData.Length);
             if (ActiveAgeElapsedUnlocked(runtime))
             {
@@ -1083,6 +1136,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             // writes. The CRC is not written before the payload, and the payload is not copied.
             runtime.Stream.Write(header);
             runtime.Stream.Write(artData.Span);
+            runtime.Stream.Write(arrival);
             runtime.Stream.Write(crc);
             PhysicalProofProbe.AddAppendWrite(writeStart);
             TestAfterWriteBeforeFlush?.Invoke(runtime.Stream, offset, recordLength);
@@ -1102,7 +1156,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
         catch (Exception ex) when (ex is not UnreconciledDurableTailException)
         {
-            var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, crc);
+            var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, arrival, crc);
             if (TryRecoverFailedActiveWrite(
                     runtime,
                     offset,
@@ -1113,6 +1167,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                     artData.Length,
                     header,
                     artData.Span,
+                    arrival,
                     crc,
                     publishActivation: true,
                     allowPending: true,
@@ -1143,6 +1198,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         int artSize,
         ReadOnlySpan<byte> header,
         ReadOnlySpan<byte> artData,
+        ReadOnlySpan<byte> arrival,
         ReadOnlySpan<byte> crc,
         bool publishActivation,
         bool allowPending,
@@ -1155,7 +1211,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             return false;
         }
 
-        var outcome = InspectSegmentAppend(runtime, offset, recordLength, header, artData, crc);
+        var outcome = InspectSegmentAppend(runtime, offset, recordLength, header, artData, arrival, crc);
         if (outcome == AmbiguousAppend.Growth.CompleteExpected)
         {
             if (runtime.Stream.Length > offset + recordLength)
@@ -1204,6 +1260,44 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Copies the arrival already written on <paramref name="runtime"/>'s pending record into the retry frame.
+    /// </summary>
+    /// <param name="runtime">Segment that holds the pending record.</param>
+    /// <param name="artId">Retry article identity.</param>
+    /// <param name="artHash">Retry payload hash.</param>
+    /// <param name="artData">Retry payload.</param>
+    /// <param name="header">Frame header rebuilt when the stored arrival is readable.</param>
+    /// <param name="arrival">Arrival trailer rebuilt from the stored instant.</param>
+    /// <param name="crc">CRC rebuilt over the restored frame.</param>
+    /// <remarks>
+    /// A later append reads the clock again. The bytes already on disk keep the first instant.
+    /// Article identity stays the retry payload. Only the trailer ticks are taken from the file.
+    /// </remarks>
+    private static void RestorePendingArrival(
+        SegmentRuntime runtime,
+        ArticleId artId,
+        ulong artHash,
+        ReadOnlySpan<byte> artData,
+        Span<byte> header,
+        Span<byte> arrival,
+        Span<byte> crc)
+    {
+        var pending = runtime.PendingRecord;
+        if (pending is null || pending.Length != SegmentRecordCodec.RecordLengthForArtSize(artData.Length))
+        {
+            return;
+        }
+
+        var observed = ReadExact(runtime.Stream, pending.Offset, pending.Length);
+        if (!SegmentRecordCodec.TryReadArrival(observed, artData.Length, out var stored))
+        {
+            return;
+        }
+
+        SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData, stored, header, arrival, crc);
     }
 
     private ActiveSegmentAppend FinishPendingSegmentRecord(
@@ -1712,12 +1806,14 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             // ArtHash is the supplied value. Message-ID identity must still match.
             // The second proof would rescan this span. Disk recovery hashes on read.
             Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
+            Span<byte> arrival = stackalloc byte[SegmentRecordCodec.ArrivalTrailerLength];
             Span<byte> crc = stackalloc byte[4];
-            SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc);
+            SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, article.AcceptedUtc, header, arrival, crc);
             var recordLength = SegmentRecordCodec.RecordLengthForArtSize(artData.Length);
             if (runtime.PendingRecord is not null)
             {
-                var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, crc);
+                RestorePendingArrival(runtime, artId, artHash, artData.Span, header, arrival, crc);
+                var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, arrival, crc);
                 var finished = FinishPendingSegmentRecord(
                     runtime,
                     recordLength,
@@ -1755,6 +1851,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 runtime.Stream.Position = expectedOffset;
                 runtime.Stream.Write(header);
                 runtime.Stream.Write(artData.Span);
+                runtime.Stream.Write(arrival);
                 runtime.Stream.Write(crc);
                 TestAfterWriteBeforeFlush?.Invoke(runtime.Stream, expectedOffset, recordLength);
                 var end = expectedOffset + recordLength;
@@ -1775,7 +1872,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             }
             catch (Exception ex) when (ex is not UnreconciledDurableTailException)
             {
-                var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, crc);
+                var framedHash = SegmentRecordCodec.FramedHash(header, artData.Span, arrival, crc);
                 if (TryRecoverFailedActiveWrite(
                         runtime,
                         expectedOffset,
@@ -1786,6 +1883,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                         artData.Length,
                         header,
                         artData.Span,
+                        arrival,
                         crc,
                         publishActivation: false,
                         allowPending,
@@ -2238,6 +2336,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         int recordLength,
         ReadOnlySpan<byte> header,
         ReadOnlySpan<byte> artData,
+        ReadOnlySpan<byte> arrival,
         ReadOnlySpan<byte> crc)
     {
         try
@@ -2258,7 +2357,8 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             if (observed.Length != recordLength
                 || !observed.AsSpan(0, header.Length).SequenceEqual(header)
                 || !observed.AsSpan(header.Length, artData.Length).SequenceEqual(artData)
-                || !observed.AsSpan(header.Length + artData.Length, crc.Length).SequenceEqual(crc))
+                || !observed.AsSpan(header.Length + artData.Length, arrival.Length).SequenceEqual(arrival)
+                || !observed.AsSpan(header.Length + artData.Length + arrival.Length, crc.Length).SequenceEqual(crc))
             {
                 return AmbiguousAppend.Growth.IncompleteGrowth;
             }

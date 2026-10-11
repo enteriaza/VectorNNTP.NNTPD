@@ -9,12 +9,11 @@ namespace VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 /// </summary>
 /// <remarks>
 /// Little-endian header, then one current index frame per row, then a trailer CRC.
-/// Version 3 bodies are schema 3 frames. Version 2 bodies are schema 2 frames and are still read;
-/// those rows have no arrival instant. The magic is ASCII <c>VNIS</c>, which is not a little-endian
+/// Version 3 bodies are index frames that each store an arrival instant. The magic is ASCII <c>VNIS</c>, which is not a little-endian
 /// frame length, so a snapshot cannot be mistaken for a legacy index frame.
 /// <list type="table">
 /// <item><term>0</term><description>4 ASCII magic <c>VNIS</c></description></item>
-/// <item><term>4</term><description>u32 version (3; version 2 snapshots are still read)</description></item>
+/// <item><term>4</term><description>u32 version (3)</description></item>
 /// <item><term>8</term><description>u64 snapshot generation</description></item>
 /// <item><term>16</term><description>u64 covered delta generation (0 while <c>article.index</c> has no generation header)</description></item>
 /// <item><term>24</term><description>u64 covered <c>article.index</c> length at the dictionary copy</description></item>
@@ -29,14 +28,8 @@ internal static class ArticleIndexSnapshotCodec
     /// <summary>ASCII <c>VNIS</c>.</summary>
     public static ReadOnlySpan<byte> Magic => "VNIS"u8;
 
-    /// <summary>
-    /// Current snapshot version. Version 2 snapshots store schema 2 frames and are still read.
-    /// Version 1 snapshots use 88-byte records and are rejected.
-    /// </summary>
+    /// <summary>The only snapshot version. Other versions are rejected.</summary>
     public const uint Version = 3;
-
-    /// <summary>Snapshot version whose body frames are schema 2.</summary>
-    public const uint Schema2Version = 2;
 
     /// <summary>
     /// Covered delta generation written while <c>article.index</c> is still an unheadered frame log.
@@ -186,12 +179,7 @@ internal static class ArticleIndexSnapshotCodec
         }
 
         var version = BinaryPrimitives.ReadUInt32LittleEndian(header[4..]);
-        frameLength = version switch
-        {
-            Version => ArticleIndexRecordCodec.RecordLength,
-            Schema2Version => ArticleIndexRecordCodec.Schema2RecordLength,
-            _ => 0,
-        };
+        frameLength = version == Version ? ArticleIndexRecordCodec.RecordLength : 0;
         if (frameLength == 0)
         {
             throw new ArticleIndexCorruptException(

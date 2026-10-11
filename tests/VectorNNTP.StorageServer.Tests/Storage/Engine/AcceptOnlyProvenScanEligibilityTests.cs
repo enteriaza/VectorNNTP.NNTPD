@@ -85,7 +85,7 @@ public sealed class AcceptOnlyProvenScanEligibilityTests
                 (await engineA.AcceptAsync(record, CancellationToken.None)).Outcome);
         }
 
-        Plant(dir, SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span));
+        Plant(dir, SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero)));
         await using var engineB = FileArticleStorageEngine.Open(dir.Options);
         var scans = AttachScanCounter(engineB);
         await engineB.RecoverAsync(CancellationToken.None);

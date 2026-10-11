@@ -210,7 +210,7 @@ public sealed class PhysicalLocationProofTests
         var article = CreateArtData("<proof-decl@example.test>");
         var artId = ArticleId.FromMessageId("<proof-decl@example.test>"u8);
         var hash = XxHash3.HashToUInt64(article);
-        var record = SegmentRecordCodec.Encode(artId, hash, article);
+        var record = SegmentRecordCodec.Encode(artId, hash, article, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Assert.True(SegmentRecordCodec.TryProveExactRecord(record, artId, hash, article.Length));
 
         var shortRecord = record.AsSpan(0, record.Length - 1).ToArray();

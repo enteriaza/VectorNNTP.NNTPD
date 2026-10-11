@@ -263,10 +263,7 @@ public sealed class JournalCheckpointRetentionProgressTests
             journalCheckpointThresholdBytes: checkpointThreshold,
             logger: NullLogger.Instance,
             maxRetentionAge: TimeSpan.Zero,
-            bulkPressure: new BulkStoragePressureOptions
-            {
-                MinimumRetentionAge = Grace,
-            });
+            bulkPressure: new BulkStoragePressureOptions());
 
     private static FileArticleStorageEngine Open(
         TempDir dir,

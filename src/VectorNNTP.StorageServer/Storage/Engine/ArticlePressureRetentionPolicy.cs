@@ -26,15 +26,16 @@ public enum PressureExpirationMode : byte
 /// <remarks>
 /// <para>
 /// This is not <see cref="ArticleRetentionPolicy.IsExpirationEligible"/>. Age retention uses
-/// <c>MaxRetentionAge</c>. This predicate uses <see cref="BulkStoragePressureOptions.MinimumRetentionAge"/>
-/// and runs only when the maintenance cycle is in <see cref="PressureExpirationMode.Active"/> or
+/// <c>MaxRetentionAge</c> and skips a missing or future arrival. Pressure expiration does not
+/// apply an age gate. It runs only when the maintenance cycle is in <see cref="PressureExpirationMode.Active"/> or
 /// <see cref="PressureExpirationMode.WindingDown"/>. Neither predicate deletes segment bytes.
 /// </para>
 /// <para>
-/// Arrival time is <see cref="StoredArticleMetadata.AcceptedUtc"/>.
-/// <see cref="StoredArticleMetadata.LastAccessUtc"/> is only a tie-break. A missing or
-/// never-updated hint is not treated as colder than an article whose last access is known
-/// and already outside the grace period.
+/// Arrival time is <see cref="StoredArticleMetadata.AcceptedUtc"/> and is the first sort key.
+/// It is not an eligibility gate. <see cref="StoredArticleMetadata.LastAccessUtc"/> breaks
+/// ties: a read after acceptance is kept ahead of an article whose hint is missing or still
+/// the arrival instant. That distinction is not an age threshold. A future hint is not
+/// selected ahead of either.
 /// </para>
 /// </remarks>
 public static class ArticlePressureRetentionPolicy
@@ -126,52 +127,34 @@ public static class ArticlePressureRetentionPolicy
     }
 
     /// <summary>
-    /// Returns whether a bulk-committed article is old enough for pressure expiration.
+    /// Returns whether a bulk-committed Present article may be pressure-expired.
     /// </summary>
     /// <param name="bulkCommitted">True only for an authoritative Present row.</param>
-    /// <param name="arrivalUtc">Durable Accept instant. MinValue and the future are ineligible.</param>
-    /// <param name="minimumRetentionAge">
-    /// Grace period. Zero allows any known past arrival. Negative is not a configured value.
-    /// </param>
-    /// <param name="nowUtc">Evaluation instant.</param>
-    /// <returns>True when the grace has elapsed and the arrival instant is usable.</returns>
+    /// <param name="arrivalUtc">Durable Accept instant. A missing or future instant does not exclude the row.</param>
+    /// <param name="nowUtc">Evaluation instant. Unused; capacity eligibility does not depend on age.</param>
+    /// <returns>True when the row is a bulk-committed Present article.</returns>
     public static bool IsPressureExpirationEligible(
         bool bulkCommitted,
         DateTimeOffset? arrivalUtc,
-        TimeSpan minimumRetentionAge,
         DateTimeOffset nowUtc)
     {
-        if (!bulkCommitted || minimumRetentionAge < TimeSpan.Zero || arrivalUtc is not { } arrival)
-        {
-            return false;
-        }
-
-        if (arrival == DateTimeOffset.MinValue || arrival.UtcTicks > nowUtc.UtcTicks)
-        {
-            return false;
-        }
-
-        if (minimumRetentionAge == TimeSpan.Zero)
-        {
-            return true;
-        }
-
-        return nowUtc.UtcTicks - arrival.UtcTicks >= minimumRetentionAge.Ticks;
+        _ = arrivalUtc;
+        _ = nowUtc;
+        return bulkCommitted;
     }
 
     /// <summary>
-    /// Orders two eligible candidates. Older arrival first, then known-cold access, then larger records.
+    /// Orders two eligible candidates. Older arrival first, then an unread hint before a known
+    /// access, then the older access hint, then larger records.
     /// </summary>
     /// <param name="left">First candidate.</param>
     /// <param name="right">Second candidate.</param>
     /// <param name="nowUtc">Evaluation instant.</param>
-    /// <param name="minimumRetentionAge">Grace used to separate a cold access from a recent one.</param>
     /// <returns>Negative when <paramref name="left"/> should expire before <paramref name="right"/>.</returns>
     internal static int CompareExpirationOrder(
         in RetentionScanCandidate left,
         in RetentionScanCandidate right,
-        DateTimeOffset nowUtc,
-        TimeSpan minimumRetentionAge)
+        DateTimeOffset nowUtc)
     {
         var age = left.AcceptedUtc.CompareTo(right.AcceptedUtc);
         if (age != 0)
@@ -179,26 +162,31 @@ public static class ArticlePressureRetentionPolicy
             return age;
         }
 
-        var access = AccessClass(in left, nowUtc, minimumRetentionAge)
-            .CompareTo(AccessClass(in right, nowUtc, minimumRetentionAge));
+        var access = AccessClass(in left, nowUtc).CompareTo(AccessClass(in right, nowUtc));
         if (access != 0)
         {
             return access;
         }
 
+        var hint = left.LastAccessUtc.CompareTo(right.LastAccessUtc);
+        if (hint != 0)
+        {
+            return hint;
+        }
+
         return right.Location.Length.CompareTo(left.Location.Length);
     }
 
-    /// <summary>0 known-cold, 1 unknown, 2 recently accessed.</summary>
-    private static int AccessClass(
-        in RetentionScanCandidate candidate,
-        DateTimeOffset nowUtc,
-        TimeSpan minimumRetentionAge)
+    /// <summary>
+    /// 0 when the hint is missing or not after arrival, 1 for a known past access, 2 for a future hint.
+    /// Lower expires first. This is not an age threshold.
+    /// </summary>
+    private static int AccessClass(in RetentionScanCandidate candidate, DateTimeOffset nowUtc)
     {
         var access = candidate.LastAccessUtc;
         if (access == DateTimeOffset.MinValue || access.UtcTicks <= candidate.AcceptedUtc.UtcTicks)
         {
-            return 1;
+            return 0;
         }
 
         if (access.UtcTicks > nowUtc.UtcTicks)
@@ -206,12 +194,6 @@ public static class ArticlePressureRetentionPolicy
             return 2;
         }
 
-        if (minimumRetentionAge > TimeSpan.Zero
-            && nowUtc.UtcTicks - access.UtcTicks < minimumRetentionAge.Ticks)
-        {
-            return 2;
-        }
-
-        return 0;
+        return 1;
     }
 }

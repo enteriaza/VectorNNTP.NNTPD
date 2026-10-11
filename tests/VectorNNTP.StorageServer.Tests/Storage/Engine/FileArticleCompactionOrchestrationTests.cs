@@ -204,7 +204,8 @@ public sealed class FileArticleCompactionOrchestrationTests
                 liveMeta.Location,
                 ArticleStorageState.Present,
                 DateTimeOffset.UtcNow,
-                1UL)));
+                1UL,
+                DateTimeOffset.UtcNow)));
         };
 
         var result = await engine.CompactClosedSegmentAsync(sourceId, CancellationToken.None);

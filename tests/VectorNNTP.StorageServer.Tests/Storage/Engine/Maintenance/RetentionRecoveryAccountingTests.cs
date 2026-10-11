@@ -232,7 +232,7 @@ public sealed class RetentionRecoveryAccountingTests
     {
         using var dir = TempDir.Create();
         var time = new FakeTimeProvider(Arrival);
-        var reader = new MutableCapacityReader(Total, 8_700_000);
+        var reader = new MutableCapacityReader(Total, 7_000_000);
         await using var engine = Open(dir, reader, time);
         var old = await PublishAsync(engine, "<recovery-partial-old@example>");
         time.Advance(TimeSpan.FromHours(2));
@@ -251,7 +251,7 @@ public sealed class RetentionRecoveryAccountingTests
         Assert.True(info.LiveBytes > 0);
         Assert.True(info.DeadBytes > 0);
         Assert.True(File.Exists(ActivePath(engine, segment)));
-        Assert.Equal(8_700_000, reader.UsedBytes);
+        Assert.Equal(7_000_000, reader.UsedBytes);
     }
 
     [Fact]
@@ -336,7 +336,7 @@ public sealed class RetentionRecoveryAccountingTests
         Assert.False(result.Recovery.Value.PressureImproved);
         Assert.Equal(9_600_000, reader.UsedBytes);
         Assert.Equal(ArticleStorageState.Evicted, State(engine, old.ArtId));
-        Assert.Equal(ArticleStorageState.Present, State(engine, recent.ArtId));
+        Assert.Equal(ArticleStorageState.Evicted, State(engine, recent.ArtId));
         var denied = await engine.AcceptAsync(Article("<recovery-admit-new@example>"), CancellationToken.None);
         Assert.Equal(ArticleAcceptOutcome.RejectedCapacity, denied.Outcome);
     }
@@ -364,10 +364,7 @@ public sealed class RetentionRecoveryAccountingTests
             new ArticleSegmentPolicy(minimumDeadBytes: 0, minimumDeadRatio: 10),
             logger: NullLogger.Instance,
             maxRetentionAge: maxRetentionAge ?? TimeSpan.Zero,
-            bulkPressure: new BulkStoragePressureOptions
-            {
-                MinimumRetentionAge = TimeSpan.FromDays(7),
-            });
+            bulkPressure: new BulkStoragePressureOptions());
     }
 
     private static FileArticleStorageEngine Open(TempDir dir, IStorageCapacityReader reader, TimeProvider time) =>

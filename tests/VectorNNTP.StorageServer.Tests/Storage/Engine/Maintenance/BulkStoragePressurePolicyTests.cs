@@ -66,7 +66,6 @@ public sealed class BulkStoragePressurePolicyTests
         Assert.Equal(5, options.OperationalReservePercent);
         Assert.Equal(5, options.RecoveryReservePercent);
         Assert.Equal(10, options.RewriteReservePercent);
-        Assert.Equal(TimeSpan.FromDays(7), options.MinimumRetentionAge);
         Assert.Equal(5, options.PressureRecoveryMarginPercent);
         Assert.False(new StorageServerOptionsValidator().Validate(
             Options.DefaultName,

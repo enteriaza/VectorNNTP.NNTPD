@@ -22,8 +22,8 @@ public sealed class AcceptOnlyRecoveryBatchTests
         var first = CreateRecord("<batch-a@seg.test>");
         var second = CreateRecord("<batch-b@seg.test>");
         await JournalAcceptsAsync(dir, first, second);
-        var firstBytes = SegmentRecordCodec.Encode(first.ArtId, first.ArtHash, first.ArtData.Span);
-        var secondBytes = SegmentRecordCodec.Encode(second.ArtId, second.ArtHash, second.ArtData.Span);
+        var firstBytes = SegmentRecordCodec.Encode(first.ArtId, first.ArtHash, first.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
+        var secondBytes = SegmentRecordCodec.Encode(second.ArtId, second.ArtHash, second.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Active, segmentId: 1, [.. firstBytes, .. secondBytes]);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -51,7 +51,7 @@ public sealed class AcceptOnlyRecoveryBatchTests
             dir,
             SegmentFileKind.Active,
             segmentId: 1,
-            SegmentRecordCodec.Encode(unrelated.ArtId, unrelated.ArtHash, unrelated.ArtData.Span));
+            SegmentRecordCodec.Encode(unrelated.ArtId, unrelated.ArtHash, unrelated.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero)));
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
         var appendsDuringScan = -1;
@@ -116,7 +116,7 @@ public sealed class AcceptOnlyRecoveryBatchTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<batch-copies@seg.test>");
         await JournalAcceptsAsync(dir, record);
-        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Active, segmentId: 1, [.. encoded, .. encoded]);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -171,8 +171,8 @@ public sealed class AcceptOnlyRecoveryBatchTests
         var kept = CreateRecord("<batch-kept@seg.test>");
         var dropped = CreateRecord("<batch-dropped@seg.test>");
         await JournalAcceptsAsync(dir, kept, dropped);
-        var keptBytes = SegmentRecordCodec.Encode(kept.ArtId, kept.ArtHash, kept.ArtData.Span);
-        var droppedBytes = SegmentRecordCodec.Encode(dropped.ArtId, dropped.ArtHash, dropped.ArtData.Span);
+        var keptBytes = SegmentRecordCodec.Encode(kept.ArtId, kept.ArtHash, kept.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
+        var droppedBytes = SegmentRecordCodec.Encode(dropped.ArtId, dropped.ArtHash, dropped.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         droppedBytes[^1] ^= 0xFF;
         Plant(dir, SegmentFileKind.Closed, segmentId: 1, [.. keptBytes, .. droppedBytes]);
 
@@ -200,7 +200,7 @@ public sealed class AcceptOnlyRecoveryBatchTests
             dir,
             SegmentFileKind.Active,
             segmentId: 1,
-            SegmentRecordCodec.Encode(filler.ArtId, filler.ArtHash, filler.ArtData.Span));
+            SegmentRecordCodec.Encode(filler.ArtId, filler.ArtHash, filler.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero)));
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
         engine.Segments.TestHookDuringProvenLocationScan = () => throw new IOException("batch-scan");
@@ -223,9 +223,9 @@ public sealed class AcceptOnlyRecoveryBatchTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<batch-stale@seg.test>");
         await JournalAcceptsAsync(dir, record);
-        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         var filler = CreateRecord("<batch-stale-filler@seg.test>");
-        var fillerBytes = SegmentRecordCodec.Encode(filler.ArtId, filler.ArtHash, filler.ArtData.Span);
+        var fillerBytes = SegmentRecordCodec.Encode(filler.ArtId, filler.ArtHash, filler.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, SegmentFileKind.Closed, segmentId: 1, encoded);
         Plant(dir, SegmentFileKind.Closed, segmentId: 2, fillerBytes);
 

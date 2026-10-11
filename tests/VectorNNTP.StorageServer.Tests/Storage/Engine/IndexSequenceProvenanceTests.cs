@@ -28,7 +28,8 @@ public sealed class IndexSequenceProvenanceTests
             new StoredArticleLocation(new SegmentId(3), 8, 10),
             ArticleStorageState.Present,
             new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero),
-            42UL);
+            42UL,
+            new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero));
         var encoded = ArticleIndexRecordCodec.Encode(metadata);
         Assert.Equal(104, encoded.Length);
         Assert.Equal(ArticleIndexRecordCodec.RecordLength, encoded.Length);
@@ -71,7 +72,8 @@ public sealed class IndexSequenceProvenanceTests
             new StoredArticleLocation(new SegmentId(1), 0, 10),
             ArticleStorageState.Evicted,
             new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero),
-            9UL);
+            9UL,
+            new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero));
         using (var index = FileArticleIndex.Open(dir.Options))
         {
             Assert.True(index.TryCommitPresent(row with { State = ArticleStorageState.Present }));

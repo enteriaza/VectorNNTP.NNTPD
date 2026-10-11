@@ -8,12 +8,13 @@ using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
 using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
+using VectorNNTP.StorageServer.Storage.Engine.FileSegments;
 
 namespace VectorNNTP.StorageServer.Tests.Storage.Engine;
 
 /// <summary>
 /// The original Accept instant stays on the index row through publication, relocation,
-/// checkpoint, restart, eviction, and a torn schema 3 tail. Schema 2 rows stay unknown.
+/// checkpoint, restart, eviction, and a torn final frame.
 /// </summary>
 public sealed class DurableArrivalTimestampTests
 {
@@ -188,53 +189,115 @@ public sealed class DurableArrivalTimestampTests
     }
 
     [Fact]
-    public void Schema2_index_opens_without_inventing_an_arrival()
+    public void Noncanonical_index_length_is_rejected()
     {
         using var dir = TempDir.Create();
-        var legacy = Row("<phase22-legacy@seg.test>", DateTimeOffset.MinValue, sequence: 4);
-        var legacyFrame = EncodeSchema2(legacy);
+        var row = Row("<phase22-canonical@seg.test>", Arrival, sequence: 4);
+        var intact = ArticleIndexRecordCodec.Encode(row);
         var path = Path.Combine(dir.Control, FileArticleIndex.IndexFileName);
-        File.WriteAllBytes(path, legacyFrame);
-        WriteSchema2Snapshot(dir.Control, legacy with { Sequence = 9UL }, coveredIndexLength: legacyFrame.Length);
+        var corrupt = new byte[intact.Length + 4];
+        intact.CopyTo(corrupt, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(corrupt.AsSpan(intact.Length, 4), 96);
+        File.WriteAllBytes(path, corrupt);
 
-        using (var index = FileArticleIndex.Open(dir.Options))
-        {
-            Assert.True(index.TryGet(legacy.ArtId, out var fromSnapshot));
-            Assert.Equal(9UL, fromSnapshot.Sequence);
-            Assert.Equal(DateTimeOffset.MinValue, fromSnapshot.AcceptedUtc);
-
-            var current = Row("<phase22-new@seg.test>", Arrival, sequence: 11);
-            Assert.True(index.TryCommitPresent(current));
-            _ = index.Checkpoint();
-        }
-
-        using var reopened = FileArticleIndex.Open(dir.Options);
-        Assert.True(reopened.TryGet(legacy.ArtId, out var oldRow));
-        Assert.Equal(DateTimeOffset.MinValue, oldRow.AcceptedUtc);
-        Assert.Equal(9UL, oldRow.Sequence);
-        var currentId = ArticleId.FromMessageId("<phase22-new@seg.test>"u8);
-        Assert.True(reopened.TryGet(currentId, out var newRow));
-        Assert.Equal(Arrival, newRow.AcceptedUtc);
-        Assert.Equal(ArticleStorageState.Present, newRow.State);
+        var ex = Assert.Throws<ArticleIndexCorruptException>(() => FileArticleIndex.Open(dir.Options));
+        Assert.Contains("CorruptLength", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(corrupt.Length, new FileInfo(path).Length);
     }
 
     [Fact]
-    public void Schema2_frame_then_torn_schema3_frame_keeps_the_legacy_row()
+    public void Index_frame_without_a_stored_arrival_is_rejected()
     {
         using var dir = TempDir.Create();
-        var legacy = Row("<phase22-mixed-torn@seg.test>", DateTimeOffset.MinValue, sequence: 2);
-        var path = Path.Combine(dir.Control, FileArticleIndex.IndexFileName);
-        var legacyFrame = EncodeSchema2(legacy);
-        var torn = new byte[legacyFrame.Length + 14];
-        legacyFrame.CopyTo(torn, 0);
-        BinaryPrimitives.WriteUInt32LittleEndian(torn.AsSpan(legacyFrame.Length, 4), (uint)ArticleIndexRecordCodec.RecordLength);
-        File.WriteAllBytes(path, torn);
+        var row = Row("<phase22-missing@seg.test>", Arrival, sequence: 4);
+        var frame = ArticleIndexRecordCodec.Encode(row);
+        BinaryPrimitives.WriteInt64LittleEndian(frame.AsSpan(frame.Length - 12, 8), 0);
+        var crc = Crc32.HashToUInt32(frame.AsSpan(0, frame.Length - 4));
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(frame.Length - 4, 4), crc);
+        File.WriteAllBytes(Path.Combine(dir.Control, FileArticleIndex.IndexFileName), frame);
 
-        using var index = FileArticleIndex.Open(dir.Options);
-        Assert.True(index.TryGet(legacy.ArtId, out var restored));
-        Assert.Equal(DateTimeOffset.MinValue, restored.AcceptedUtc);
-        Assert.Equal(legacy.Sequence, restored.Sequence);
-        Assert.Equal(legacyFrame.Length, new FileInfo(path).Length);
+        var ex = Assert.Throws<ArticleIndexCorruptException>(() => FileArticleIndex.Open(dir.Options));
+        Assert.Contains("Corrupt", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Segment_record_without_a_valid_arrival_is_rejected()
+    {
+        var artId = ArticleId.FromMessageId("<phase22-bad-segment@seg.test>"u8);
+        var payload = "body"u8.ToArray();
+        var frame = SegmentRecordCodec.Encode(artId, 1, payload, Arrival);
+        BinaryPrimitives.WriteInt64LittleEndian(
+            frame.AsSpan(SegmentRecordCodec.FixedHeaderLength + payload.Length, 8),
+            0);
+        var crc = Crc32.HashToUInt32(frame.AsSpan(0, frame.Length - 4));
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(frame.Length - 4, 4), crc);
+
+        Assert.False(SegmentRecordCodec.TryProveFramedRecord(
+            frame,
+            out _,
+            out _,
+            out _,
+            out _,
+            out var missing));
+        Assert.Equal(SegmentRecordCodec.DecodeError.Corrupt, missing);
+
+        frame = SegmentRecordCodec.Encode(artId, 1, payload, Arrival);
+        frame[4] = 1;
+        crc = Crc32.HashToUInt32(frame.AsSpan(0, frame.Length - 4));
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(frame.Length - 4, 4), crc);
+        Assert.False(SegmentRecordCodec.TryProveFramedRecord(
+            frame,
+            out _,
+            out _,
+            out _,
+            out _,
+            out var wrongSchema));
+        Assert.Equal(SegmentRecordCodec.DecodeError.Corrupt, wrongSchema);
+    }
+
+    [Fact]
+    public async Task Segment_record_keeps_the_accept_instant_across_restart()
+    {
+        using var dir = TempDir.Create();
+        var time = new FakeTimeProvider(Arrival);
+        var record = Article("<phase22-segment@seg.test>");
+        DateTimeOffset accepted;
+        StoredArticleLocation location;
+        byte[] payload;
+        await using (var engine = FileArticleStorageEngine.Open(dir.Options, timeProvider: time))
+        {
+            engine.SuspendBackgroundPersist = true;
+            Assert.Equal(ArticleAcceptOutcome.Accepted, (await engine.AcceptAsync(record, CancellationToken.None)).Outcome);
+            Assert.True(engine.Journal.TryGetOutstanding(record.ArtId, out var accept));
+            accepted = accept.AcceptedUtc;
+            await engine.DrainPendingAsync(CancellationToken.None);
+            Assert.True(engine.Index.TryGet(record.ArtId, out var published));
+            location = published.Location;
+            Assert.True(engine.Segments.TryReadStoredArrival(location, record.ArtSize, out var onSegment));
+            Assert.Equal(accepted, onSegment);
+            Assert.True(engine.TryRead(record.ArtId, out var read));
+            payload = read.ArtData.ToArray();
+            Assert.Equal(accepted, read.Metadata.AcceptedUtc);
+        }
+
+        time.Advance(TimeSpan.FromDays(3));
+        await using var restarted = FileArticleStorageEngine.Open(dir.Options, timeProvider: time);
+        await restarted.RecoverAsync(CancellationToken.None);
+        Assert.True(restarted.Index.TryGet(record.ArtId, out var restored));
+        Assert.Equal(accepted, restored.AcceptedUtc);
+        Assert.NotEqual(time.GetUtcNow(), restored.AcceptedUtc);
+        Assert.True(restarted.Segments.TryReadStoredArrival(location, record.ArtSize, out var segmentAgain));
+        Assert.Equal(accepted, segmentAgain);
+        Assert.True(restarted.TryRead(record.ArtId, out var reread));
+        Assert.Equal(payload, reread.ArtData.ToArray());
+    }
+
+    [Fact]
+    public void Journal_accept_rejects_a_missing_arrival()
+    {
+        var error = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new JournalAcceptRecord(1, 1, ArticleId.FromMessageId("<missing@seg.test>"u8), 1, 1, default, new byte[] { 1 }));
+        Assert.Equal("acceptedUtc", error.ParamName);
     }
 
     private static StoredArticleMetadata Row(string messageId, DateTimeOffset acceptedUtc, ulong sequence) =>
@@ -247,55 +310,6 @@ public sealed class DurableArrivalTimestampTests
             new DateTimeOffset(2024, 8, 23, 7, 30, 10, TimeSpan.Zero),
             sequence,
             acceptedUtc);
-
-    private static byte[] EncodeSchema2(in StoredArticleMetadata metadata)
-    {
-        var buffer = new byte[ArticleIndexRecordCodec.Schema2RecordLength];
-        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)buffer.Length);
-        buffer[4] = ArticleIndexRecordCodec.Schema2Version;
-        var o = 8;
-        metadata.ArtId.CopyTo(buffer.AsSpan(o, ArticleId.Length));
-        o += ArticleId.Length;
-        BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(o, 8), metadata.ArtHash);
-        o += 8;
-        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(o, 4), metadata.ArtSize);
-        o += 4;
-        BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(o, 8), metadata.Location.SegmentId.Value);
-        o += 8;
-        BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(o, 8), metadata.Location.Offset);
-        o += 8;
-        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(o, 4), metadata.Location.Length);
-        o += 4;
-        buffer[o++] = (byte)metadata.State;
-        o += 3;
-        BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(o, 8), metadata.LastAccessUtc.UtcTicks);
-        o += 8;
-        BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(o, 8), metadata.Sequence);
-        o += 8;
-        var crc = Crc32.HashToUInt32(buffer.AsSpan(0, o));
-        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(o, 4), crc);
-        return buffer;
-    }
-
-    private static void WriteSchema2Snapshot(string controlDir, in StoredArticleMetadata row, long coveredIndexLength)
-    {
-        var frame = EncodeSchema2(row);
-        Span<byte> header = stackalloc byte[ArticleIndexSnapshotCodec.HeaderLength];
-        "VNIS"u8.CopyTo(header);
-        BinaryPrimitives.WriteUInt32LittleEndian(header[4..], ArticleIndexSnapshotCodec.Schema2Version);
-        BinaryPrimitives.WriteUInt64LittleEndian(header[8..], 1);
-        BinaryPrimitives.WriteUInt64LittleEndian(header[16..], 0);
-        BinaryPrimitives.WriteUInt64LittleEndian(header[24..], (ulong)coveredIndexLength);
-        BinaryPrimitives.WriteUInt64LittleEndian(header[32..], 1);
-        var headerCrc = Crc32.HashToUInt32(header[..40]);
-        BinaryPrimitives.WriteUInt32LittleEndian(header[40..], headerCrc);
-        var bodyCrc = Crc32.HashToUInt32(frame);
-        var snapshot = new byte[header.Length + frame.Length + 4];
-        header.CopyTo(snapshot);
-        frame.CopyTo(snapshot.AsSpan(header.Length));
-        BinaryPrimitives.WriteUInt32LittleEndian(snapshot.AsSpan(snapshot.Length - 4, 4), bodyCrc);
-        File.WriteAllBytes(Path.Combine(controlDir, FileArticleIndex.SnapshotFileName), snapshot);
-    }
 
     private static ArticleRecord Article(string messageId)
     {

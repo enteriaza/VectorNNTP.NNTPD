@@ -162,13 +162,6 @@ public sealed class CapacityUsagePressureTests
             "seg-" + olderRow.Location.SegmentId.Value.ToString("D20") + ".closed");
         Assert.True(File.Exists(olderFile));
 
-        var grace = engine.ExpirePressureRetentionBatch(
-            TimeSpan.FromDays(7),
-            maxExpire: 32,
-            BulkStoragePressureState.Pressure,
-            CancellationToken.None);
-        Assert.Equal(0, grace.Expired);
-
         var files = reader.Read().UsedBytes;
         reader.OtherUsed = Math.Max(0, 800_000 - files);
         var before = engine.ObserveCapacityAdmissionPressure();
@@ -232,6 +225,9 @@ public sealed class CapacityUsagePressureTests
             var after = engine.ObserveCapacityAdmissionPressure();
             Assert.Equal(before.UsedBytes, after.UsedBytes);
             Assert.True(after.IsUnderUsagePressure);
+            _ = await coordinator.RunUsagePressureRecoveryAsync(CancellationToken.None);
+            Assert.Equal(ArticleStorageState.Present, State(engine, newer.ArtId));
+            Assert.True(File.Exists(newerFile));
         }
 
         await using var restarted = Open(dir, reader);

@@ -24,7 +24,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<orphan-exact@seg.test>");
         await AcceptWithoutPersistAsync(dir, record);
-        var planted = Plant(dir, SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span));
+        var planted = Plant(dir, SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero)));
 
         await using var engine = OpenSuspended(dir);
         await engine.RecoverAsync(CancellationToken.None);
@@ -63,7 +63,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         var record = CreateRecord("<orphan-id@seg.test>", "wanted-body\r\n");
         var other = CreateRecord("<orphan-other@seg.test>", "other-body\r\n");
         await AcceptWithoutPersistAsync(dir, record);
-        var otherBytes = SegmentRecordCodec.Encode(other.ArtId, other.ArtHash, other.ArtData.Span);
+        var otherBytes = SegmentRecordCodec.Encode(other.ArtId, other.ArtHash, other.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, otherBytes);
 
         await using var engine = OpenSuspended(dir);
@@ -93,7 +93,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<orphan-hash@seg.test>");
         await AcceptWithoutPersistAsync(dir, record);
-        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         BinaryPrimitives.WriteUInt64LittleEndian(encoded.AsSpan(8 + ArticleId.Length), record.ArtHash + 1);
         RewriteCrc(encoded);
         Plant(dir, encoded);
@@ -113,7 +113,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<orphan-size@seg.test>");
         await AcceptWithoutPersistAsync(dir, record);
-        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         var sizeOffset = SegmentRecordCodec.FixedHeaderLength - 4;
         BinaryPrimitives.WriteInt32LittleEndian(encoded.AsSpan(sizeOffset), record.ArtSize - 1);
         RewriteCrc(encoded);
@@ -134,7 +134,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<orphan-corrupt@seg.test>");
         await AcceptWithoutPersistAsync(dir, record);
-        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         encoded[^1] ^= 0xFF;
         Plant(dir, encoded);
 
@@ -156,7 +156,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<orphan-multi@seg.test>");
         await AcceptWithoutPersistAsync(dir, record);
-        var one = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var one = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, [.. one, .. one]);
 
         await using var engine = OpenSuspended(dir);
@@ -185,7 +185,7 @@ public sealed class AcceptOnlyCrashOrphanTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<orphan-restart@seg.test>");
         await AcceptWithoutPersistAsync(dir, record);
-        var one = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var one = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Plant(dir, [.. one, .. one]);
 
         await using (var engineA = OpenSuspended(dir))

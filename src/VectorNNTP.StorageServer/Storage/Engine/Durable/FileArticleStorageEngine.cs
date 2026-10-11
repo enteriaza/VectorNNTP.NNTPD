@@ -594,25 +594,18 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
     /// <summary>
     /// Evicts every Present article in the oldest Closed segment whose articles are all at the
-    /// minimum use count, when another segment still holds Present articles and none of the
-    /// Present articles have reached <paramref name="minimumRetentionAge"/>. Capacity protection
-    /// does not delete the segment file. Articles old enough for pressure expiration stay on
-    /// that path. A segment that holds a hotter article, or the only Present articles, is left
-    /// for compaction.
+    /// minimum use count, when another segment still holds Present articles. Capacity protection
+    /// does not consult article age and does not delete the segment file. A segment that holds a
+    /// hotter article, or the only Present articles, is left for compaction.
     /// </summary>
-    /// <param name="minimumRetentionAge">Pressure grace. Capacity protection runs only while every Present article is younger than this.</param>
     /// <param name="segmentId">Closed segment whose Present rows were evicted.</param>
     /// <param name="evictedArticles">Present rows transitioned to Evicted.</param>
     /// <returns>True when at least one article in that segment was evicted.</returns>
-    internal bool TryEvictColdestUniformClosedSegment(
-        TimeSpan minimumRetentionAge,
-        out SegmentId segmentId,
-        out int evictedArticles)
+    internal bool TryEvictColdestUniformClosedSegment(out SegmentId segmentId, out int evictedArticles)
     {
         segmentId = default;
         evictedArticles = 0;
         var rows = _index.Snapshot();
-        var now = _timeProvider.GetUtcNow();
         long minimumUse = long.MaxValue;
         var presentCount = new Dictionary<ulong, int>();
         var maximumUse = new Dictionary<ulong, long>();
@@ -621,15 +614,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             if (row.State != ArticleStorageState.Present || row.Location.Length <= 0)
             {
                 continue;
-            }
-
-            if (ArticlePressureRetentionPolicy.IsPressureExpirationEligible(
-                    bulkCommitted: true,
-                    row.AcceptedUtc,
-                    minimumRetentionAge,
-                    now))
-            {
-                return false;
             }
 
             var use = _index.UseCount(row.ArtId);
@@ -3274,10 +3258,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     }
 
     /// <summary>
-    /// Logically expires at most <paramref name="maxExpire"/> Present articles in one index window
-    /// whose durable arrival age has reached <paramref name="minimumRetentionAge"/>.
+    /// Logically expires at most <paramref name="maxExpire"/> Present articles in one index window.
+    /// Article age is not a gate.
     /// </summary>
-    /// <param name="minimumRetentionAge">Pressure grace. Negative is rejected. Zero allows any known past arrival.</param>
     /// <param name="maxExpire">How many eligible rows this window may expire. Zero examines nothing.</param>
     /// <param name="state">Bulk class for the batch log. This method does not reclassify the volume.</param>
     /// <param name="cancellationToken">Stops the window between articles. Completed tombstones stay durable.</param>
@@ -3288,7 +3271,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// Ingress-only articles have no Present row and are not visited. Ranking is inside this window only.
     /// </remarks>
     internal PressureExpirationResult ExpirePressureRetentionBatch(
-        TimeSpan minimumRetentionAge,
         int maxExpire,
         BulkStoragePressureState state,
         CancellationToken cancellationToken,
@@ -3297,11 +3279,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         if (batchSize <= 0 || batchSize > MaxRetentionScanBatchSize)
         {
             throw new ArgumentOutOfRangeException(nameof(batchSize));
-        }
-
-        if (minimumRetentionAge < TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(minimumRetentionAge));
         }
 
         if (maxExpire < 0)
@@ -3338,22 +3315,9 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             {
                 evaluated++;
                 var candidate = present[i];
-                if (candidate.AcceptedUtc == DateTimeOffset.MinValue)
-                {
-                    missingArrival++;
-                    continue;
-                }
-
-                if (candidate.AcceptedUtc.UtcTicks > now.UtcTicks)
-                {
-                    futureArrival++;
-                    continue;
-                }
-
                 if (!ArticlePressureRetentionPolicy.IsPressureExpirationEligible(
                         bulkCommitted: true,
                         candidate.AcceptedUtc,
-                        minimumRetentionAge,
                         now))
                 {
                     tooYoung++;
@@ -3373,8 +3337,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                         ArticlePressureRetentionPolicy.CompareExpirationOrder(
                             in left,
                             in right,
-                            now,
-                            minimumRetentionAge)));
+                            now)));
             }
 
             var limit = Math.Min(maxExpire, eligibleCount);
@@ -3470,7 +3433,6 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         && existing.State == ArticleStorageState.Present
         && existing.Sequence == candidate.Sequence
         && existing.AcceptedUtc == candidate.AcceptedUtc
-        && existing.AcceptedUtc != DateTimeOffset.MinValue
         && LocationsEqual(existing.Location, candidate.Location);
 
     private bool TryExpireRetentionCandidate(in RetentionScanCandidate candidate)

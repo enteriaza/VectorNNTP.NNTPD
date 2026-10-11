@@ -64,7 +64,7 @@ public sealed class ColdReadIntegrityTests
         var payload = Article("<phase18-proof@seg.test>").ArtData.Span;
         var artId = ArticleId.FromMessageId(MessageId(payload));
         var hash = XxHash3.HashToUInt64(payload);
-        var framed = SegmentRecordCodec.Encode(artId, hash, payload);
+        var framed = SegmentRecordCodec.Encode(artId, hash, payload, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Assert.True(SegmentRecordCodec.TryProveExactRecord(framed, artId, hash, payload.Length));
         Assert.False(SegmentRecordCodec.TryProveExactRecord(framed, ArticleId.FromMessageId("<other@seg.test>"u8), hash, payload.Length));
         Assert.False(SegmentRecordCodec.TryProveExactRecord(framed, artId, hash ^ 1, payload.Length));

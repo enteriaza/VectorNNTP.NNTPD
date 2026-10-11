@@ -1,5 +1,3 @@
-using System.Buffers.Binary;
-using System.IO.Hashing;
 using System.Text;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -10,7 +8,6 @@ using VectorNNTP.StorageServer.Tests.Fixtures;
 using VectorNNTP.StorageServer.Storage.Cache;
 using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Storage.Engine.Durable;
-using VectorNNTP.StorageServer.Storage.Engine.FileIndex;
 using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 using VectorNNTP.StorageServer.Storage.Engine.Policy;
 
@@ -84,13 +81,26 @@ public sealed class RetentionExpirationTests
         var time = new FakeTimeProvider(Arrival);
         await using var engine = FileArticleStorageEngine.Open(dir.Options, timeProvider: time);
         var future = Synthetic(engine, "<phase23-future@seg.test>", Arrival.AddYears(10), sequence: 50);
-        var unknown = Synthetic(engine, "<phase23-min@seg.test>", DateTimeOffset.MinValue, sequence: 51);
+        var unknown = ArticleId.FromMessageId("<phase23-min@seg.test>"u8);
+        var missing = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            engine.Index.TryCommitPresent(new StoredArticleMetadata(
+                unknown,
+                3,
+                10,
+                new StoredArticleLocation(new SegmentId(9), 51, 10),
+                ArticleStorageState.Present,
+                Arrival,
+                51UL,
+                DateTimeOffset.MinValue)));
+        Assert.Equal("AcceptedUtc", missing.ParamName);
+        Assert.False(ArticleRetentionPolicy.IsExpirationEligible(true, DateTimeOffset.MinValue, MaxAge, time.GetUtcNow()));
+        Assert.False(ArticleRetentionPolicy.IsExpirationEligible(true, Arrival.AddYears(10), MaxAge, time.GetUtcNow()));
         time.Advance(TimeSpan.FromDays(30));
         var result = engine.ExpireRetentionBatch(MaxAge, CancellationToken.None, batchSize: 8);
         Assert.Equal(0, result.Expired);
-        Assert.Equal(2, result.NotEligible);
+        Assert.Equal(1, result.NotEligible);
         Assert.Equal(ArticleStorageState.Present, State(engine, future));
-        Assert.Equal(ArticleStorageState.Present, State(engine, unknown));
+        Assert.False(engine.Index.TryGet(unknown, out _));
     }
 
     [Fact]
@@ -275,34 +285,6 @@ public sealed class RetentionExpirationTests
     }
 
     [Fact]
-    public void Schema2_row_with_min_value_is_never_expired()
-    {
-        using var dir = TempDir.Create();
-        var row = new StoredArticleMetadata(
-            ArticleId.FromMessageId("<phase23-schema2@seg.test>"u8),
-            17,
-            10,
-            new StoredArticleLocation(new SegmentId(4), 8, 10),
-            ArticleStorageState.Present,
-            Arrival,
-            6UL,
-            DateTimeOffset.MinValue);
-        File.WriteAllBytes(
-            Path.Combine(dir.Options.ControlDir, FileArticleIndex.IndexFileName),
-            EncodeSchema2(row));
-        var time = new FakeTimeProvider(Arrival.AddYears(5));
-        using var engine = FileArticleStorageEngine.Open(dir.Options, timeProvider: time);
-        var writes = engine.Index.DurableWriteCount;
-        var result = engine.ExpireRetentionBatch(MaxAge, CancellationToken.None, batchSize: 8);
-        Assert.Equal(0, result.Expired);
-        Assert.Equal(1, result.NotEligible);
-        Assert.Equal(writes, engine.Index.DurableWriteCount);
-        Assert.True(engine.Index.TryGet(row.ArtId, out var restored));
-        Assert.Equal(ArticleStorageState.Present, restored.State);
-        Assert.Equal(DateTimeOffset.MinValue, restored.AcceptedUtc);
-    }
-
-    [Fact]
     public async Task Maintenance_cycle_expires_without_deleting_the_segment()
     {
         using var dir = TempDir.Create();
@@ -384,35 +366,6 @@ public sealed class RetentionExpirationTests
     {
         Assert.True(engine.Index.TryGet(artId, out var row));
         return row.State;
-    }
-
-    private static byte[] EncodeSchema2(in StoredArticleMetadata metadata)
-    {
-        var buffer = new byte[ArticleIndexRecordCodec.Schema2RecordLength];
-        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(0, 4), (uint)buffer.Length);
-        buffer[4] = ArticleIndexRecordCodec.Schema2Version;
-        var offset = 8;
-        metadata.ArtId.CopyTo(buffer.AsSpan(offset, ArticleId.Length));
-        offset += ArticleId.Length;
-        BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(offset, 8), metadata.ArtHash);
-        offset += 8;
-        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(offset, 4), metadata.ArtSize);
-        offset += 4;
-        BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(offset, 8), metadata.Location.SegmentId.Value);
-        offset += 8;
-        BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(offset, 8), metadata.Location.Offset);
-        offset += 8;
-        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(offset, 4), metadata.Location.Length);
-        offset += 4;
-        buffer[offset++] = (byte)metadata.State;
-        offset += 3;
-        BinaryPrimitives.WriteInt64LittleEndian(buffer.AsSpan(offset, 8), metadata.LastAccessUtc.UtcTicks);
-        offset += 8;
-        BinaryPrimitives.WriteUInt64LittleEndian(buffer.AsSpan(offset, 8), metadata.Sequence);
-        offset += 8;
-        var crc = Crc32.HashToUInt32(buffer.AsSpan(0, offset));
-        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(offset, 4), crc);
-        return buffer;
     }
 
     private static ArticleRecord Article(string messageId)

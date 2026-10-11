@@ -135,7 +135,7 @@ public sealed class MemoryArticleStorageEngineTests
         var oldLoc = new StoredArticleLocation(new SegmentId(1), 0, 10);
         var newLoc = new StoredArticleLocation(new SegmentId(2), 0, 10);
         Assert.True(index.TryCommitPresent(new StoredArticleMetadata(
-            artId, 123, 10, oldLoc, ArticleStorageState.Present, DateTimeOffset.UtcNow, 1UL)));
+            artId, 123, 10, oldLoc, ArticleStorageState.Present, DateTimeOffset.UtcNow, 1UL, DateTimeOffset.UtcNow)));
 
         Assert.Equal(
             ArticleRelocateOutcome.ExpectedLocationMismatch,
@@ -169,7 +169,7 @@ public sealed class MemoryArticleStorageEngineTests
         var oldLoc = new StoredArticleLocation(new SegmentId(3), 0, 8);
         var newLoc = new StoredArticleLocation(new SegmentId(4), 0, 8);
         Assert.True(index.TryCommitPresent(new StoredArticleMetadata(
-            artId, 42, 8, oldLoc, ArticleStorageState.Present, DateTimeOffset.UtcNow, 1UL)));
+            artId, 42, 8, oldLoc, ArticleStorageState.Present, DateTimeOffset.UtcNow, 1UL, DateTimeOffset.UtcNow)));
         Assert.Equal(ArticleRelocateOutcome.Relocated, index.TryRelocate(artId, oldLoc, newLoc, 42, 8));
         Assert.Equal(ArticleRelocateOutcome.IdempotentNoOp, index.TryRelocate(artId, oldLoc, newLoc, 42, 8));
         Assert.Equal(ArticleRelocateOutcome.IdempotentNoOp, index.TryRelocate(artId, newLoc, newLoc, 42, 8));

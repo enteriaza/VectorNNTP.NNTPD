@@ -49,12 +49,12 @@ public sealed class ClosedSegmentExtentAccountingTests
         var middle = SegmentRecordCodec.Encode(
             CreateRecord("<acct-mid-bad@seg.test>").ArtId,
             CreateRecord("<acct-mid-bad@seg.test>").ArtHash,
-            CreateRecord("<acct-mid-bad@seg.test>").ArtData.Span);
+            CreateRecord("<acct-mid-bad@seg.test>").ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         middle[^1] ^= 0xFF;
         var trailing = SegmentRecordCodec.Encode(
             CreateRecord("<acct-mid-tail@seg.test>", "tail-body\r\n").ArtId,
             CreateRecord("<acct-mid-tail@seg.test>", "tail-body\r\n").ArtHash,
-            CreateRecord("<acct-mid-tail@seg.test>", "tail-body\r\n").ArtData.Span);
+            CreateRecord("<acct-mid-tail@seg.test>", "tail-body\r\n").ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         AppendToClosed(dir, location.SegmentId, middle);
         AppendToClosed(dir, location.SegmentId, trailing);
 
@@ -82,7 +82,7 @@ public sealed class ClosedSegmentExtentAccountingTests
         var finalRecord = SegmentRecordCodec.Encode(
             CreateRecord("<acct-final-orphan@seg.test>").ArtId,
             CreateRecord("<acct-final-orphan@seg.test>").ArtHash,
-            CreateRecord("<acct-final-orphan@seg.test>").ArtData.Span);
+            CreateRecord("<acct-final-orphan@seg.test>").ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         finalRecord[^1] ^= 0xFF;
         AppendToClosed(dir, location.SegmentId, finalRecord);
 
@@ -120,7 +120,7 @@ public sealed class ClosedSegmentExtentAccountingTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<acct-repeat@seg.test>");
         var location = await SeedClosedAsync(dir, record);
-        var orphan = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var orphan = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         AppendToClosed(dir, location.SegmentId, orphan);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -142,7 +142,7 @@ public sealed class ClosedSegmentExtentAccountingTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<acct-dup@seg.test>");
         var location = await SeedClosedAsync(dir, record);
-        var duplicate = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var duplicate = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         AppendToClosed(dir, location.SegmentId, duplicate);
 
         await using var engine = FileArticleStorageEngine.Open(dir.Options);
@@ -166,7 +166,11 @@ public sealed class ClosedSegmentExtentAccountingTests
         var original = CreateRecord("<acct-ident-a@seg.test>");
         var other = CreateRecord("<acct-ident-b@seg.test>");
         var location = await SeedClosedAsync(dir, original);
-        var replacement = SegmentRecordCodec.Encode(other.ArtId, other.ArtHash, other.ArtData.Span);
+        var replacement = SegmentRecordCodec.Encode(
+            other.ArtId,
+            other.ArtHash,
+            other.ArtData.Span,
+            new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         Assert.Equal(location.Length, replacement.Length);
         Overwrite(ClosedPath(dir, location.SegmentId), location.Offset, replacement);
 
@@ -193,7 +197,7 @@ public sealed class ClosedSegmentExtentAccountingTests
         using var dir = TempStorageDir.Create();
         var record = CreateRecord("<acct-hash@seg.test>");
         var location = await SeedClosedAsync(dir, record);
-        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span);
+        var encoded = SegmentRecordCodec.Encode(record.ArtId, record.ArtHash, record.ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
             encoded.AsSpan(8 + ArticleId.Length),
             record.ArtHash + 1);
@@ -224,7 +228,7 @@ public sealed class ClosedSegmentExtentAccountingTests
         var orphan = SegmentRecordCodec.Encode(
             CreateRecord("<acct-active-orphan@seg.test>").ArtId,
             CreateRecord("<acct-active-orphan@seg.test>").ArtHash,
-            CreateRecord("<acct-active-orphan@seg.test>").ArtData.Span);
+            CreateRecord("<acct-active-orphan@seg.test>").ArtData.Span, new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero));
         var activePath = Directory.GetFiles(dir.Options.SegmentDir, "seg-*.active").Single();
         AppendFile(activePath, orphan);
 
