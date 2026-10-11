@@ -1,0 +1,104 @@
+name: Build and Validate
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-build-test:
+    name: Linux Build and Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET SDK (repo pin)
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore solution
+        run: dotnet restore VectorNNTP.NNTPD.sln
+
+      - name: Build solution
+        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release --no-restore -p:Platform=x64
+
+      - name: Run NNTPD tests
+        timeout-minutes: 10
+        run: >
+          dotnet test tests/VectorNNTP.NNTPD.Tests/VectorNNTP.NNTPD.Tests.csproj
+          --configuration Release
+          -p:Platform=x64
+          --no-build
+          --logger "trx;LogFileName=nntpd-test-results.trx"
+          --results-directory ./TestResults
+
+      - name: Run benchmark contract tests
+        timeout-minutes: 10
+        run: >
+          dotnet test tests/VectorNNTP.NNTPD.Bench.Tests/VectorNNTP.NNTPD.Bench.Tests.csproj
+          --configuration Release
+          -p:Platform=x64
+          --logger "trx;LogFileName=benchmark-test-results.trx"
+          --results-directory ./TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-test-results
+          path: TestResults/**/*.trx
+          retention-days: 14
+
+  windows-build:
+    name: Windows Build Validation
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET SDK (repo pin)
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore solution
+        run: dotnet restore VectorNNTP.NNTPD.sln
+
+      - name: Build solution
+        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release --no-restore -p:Platform=x64
+
+      - name: Publish NNTPD win-x64
+        run: >
+          dotnet publish src/VectorNNTP.NNTPD/VectorNNTP.NNTPD.csproj
+          --configuration Release
+          --runtime win-x64
+          --output ./artifacts/win-x64
+          --no-restore
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: nntpd-win-x64-ci-build
+          path: artifacts/win-x64/
+          retention-days: 7

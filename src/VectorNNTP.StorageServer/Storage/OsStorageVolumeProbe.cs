@@ -49,16 +49,48 @@ internal static class OsStorageVolumeProbe
         }
     }
 
-    private static bool TryResolveWindows(string fullPath, out StorageVolumeIdentity identity)
+    /// <summary>
+    /// Resolves the Windows mount point that contains <paramref name="directoryPath"/>.
+    /// </summary>
+    /// <remarks>
+    /// The result is the drive root for an ordinary letter path and the directory mount for an
+    /// NTFS volume mounted without a drive letter. <see cref="Path.GetPathRoot(string)"/> is not
+    /// used. Linux and other platforms return false; they do not invent a Windows mount.
+    /// </remarks>
+    /// <param name="directoryPath">Directory to locate. This method does not create it.</param>
+    /// <param name="mountPoint">Mount point with a trailing separator when this returns true.</param>
+    /// <returns>False when the path is invalid or Windows cannot name its mount point.</returns>
+    internal static bool TryGetMountPoint(string directoryPath, out string mountPoint)
     {
-        identity = default;
-        var mountPoint = new char[32768];
-        if (!GetVolumePathName(fullPath, mountPoint, (uint)mountPoint.Length))
+        mountPoint = "";
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(directoryPath))
         {
             return false;
         }
 
-        var mount = ToNullTerminated(mountPoint);
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(directoryPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+
+        return TryGetWindowsMountPoint(fullPath, out mountPoint);
+    }
+
+    private static bool TryGetWindowsMountPoint(string fullPath, out string mountPoint)
+    {
+        mountPoint = "";
+        var buffer = new char[32768];
+        if (!GetVolumePathName(fullPath, buffer, (uint)buffer.Length))
+        {
+            return false;
+        }
+
+        var mount = ToNullTerminated(buffer);
         if (mount.Length == 0)
         {
             return false;
@@ -67,6 +99,18 @@ internal static class OsStorageVolumeProbe
         if (!mount.EndsWith('\\'))
         {
             mount += "\\";
+        }
+
+        mountPoint = mount;
+        return true;
+    }
+
+    private static bool TryResolveWindows(string fullPath, out StorageVolumeIdentity identity)
+    {
+        identity = default;
+        if (!TryGetWindowsMountPoint(fullPath, out var mount))
+        {
+            return false;
         }
 
         var volumeName = new char[64];

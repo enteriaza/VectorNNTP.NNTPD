@@ -1,0 +1,162 @@
+name: Migrate forensic issue metadata
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type MIGRATE-FORENSIC-ISSUES to authorize the one-shot migration'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  migrate:
+    # Deliberately restricted to an explicit manual dispatch on master.
+    # The workflow never checks out or executes repository code.
+    if: github.ref == 'refs/heads/master' && inputs.confirm == 'MIGRATE-FORENSIC-ISSUES'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: enteriaza/VectorNNTP.NNTPD
+      PARENT_ISSUE: "45"
+
+    steps:
+      - name: Discover Priority issue field
+        id: priority-field
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fields_json="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            /orgs/VectorNNTP/issue-fields)"
+
+          priority_field="$(jq -r '
+            .[]
+            | select(.name == "Priority" and .data_type == "single_select")
+            | .id
+          ' <<<"$fields_json" | head -n 1)"
+
+          if [[ -z "$priority_field" || "$priority_field" == "null" ]]; then
+            echo "ERROR: Could not discover the organization-level single-select issue field named Priority." >&2
+            echo "The workflow requires organization Issue Fields read access on the Actions token." >&2
+            echo "No issue metadata has been migrated." >&2
+            exit 1
+          fi
+
+          echo "Priority field id: $priority_field"
+          echo "field_id=$priority_field" >> "$GITHUB_OUTPUT"
+
+      - name: Migrate issue Type, Priority, and parent relationship
+        shell: bash
+        env:
+          PRIORITY_FIELD_ID: ${{ steps.priority-field.outputs.field_id }}
+        run: |
+          set -euo pipefail
+
+          # Source of truth: docs/FORENSIC-REVIEW-2026-09-07.md.
+          # H01-H04, H09, and H10 were already remediated and are intentionally
+          # absent from this migration. The remaining findings are 44 issues.
+          declare -A priorities=(
+            [47]=High  [48]=High  [49]=High  [50]=High
+            [51]=Medium [52]=Medium [53]=Medium [54]=Medium [55]=Medium
+            [56]=Medium [57]=Medium [58]=Medium [59]=Medium [60]=Medium
+            [61]=Medium [62]=Medium [63]=Medium [64]=Medium [65]=Medium
+            [66]=Medium [67]=Medium [68]=Medium [69]=Medium [70]=Medium
+            [71]=Medium [72]=Medium [73]=Medium [74]=Medium [75]=Medium
+            [76]=Medium [77]=Medium [78]=Medium [79]=Medium [80]=Medium
+            [81]=Medium [82]=Medium [83]=Medium [84]=Medium
+            [85]=Low [86]=Low [87]=Low [88]=Low [89]=Low [90]=Low
+          )
+
+          for issue in "${!priorities[@]}"; do
+            priority="${priorities[$issue]}"
+
+            echo "Migrating #$issue: Type=Task, Priority=$priority, parent=#$PARENT_ISSUE"
+
+            gh issue edit "$issue" \
+              --repo "$REPO" \
+              --type Task \
+              --parent "$PARENT_ISSUE"
+
+            # For a single-select issue field, POST adds the requested field
+            # value without replacing any other native issue fields.
+            gh api \
+              --method POST \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "/repos/$REPO/issues/$issue/issue-field-values" \
+              --input - <<EOF
+          {"issue_field_values":[{"field_id":$PRIORITY_FIELD_ID,"value":"$priority"}]}
+          EOF
+          done
+
+      - name: Verify migrated metadata
+        shell: bash
+        env:
+          PRIORITY_FIELD_ID: ${{ steps.priority-field.outputs.field_id }}
+        run: |
+          set -euo pipefail
+
+          declare -A priorities=(
+            [47]=High  [48]=High  [49]=High  [50]=High
+            [51]=Medium [52]=Medium [53]=Medium [54]=Medium [55]=Medium
+            [56]=Medium [57]=Medium [58]=Medium [59]=Medium [60]=Medium
+            [61]=Medium [62]=Medium [63]=Medium [64]=Medium [65]=Medium
+            [66]=Medium [67]=Medium [68]=Medium [69]=Medium [70]=Medium
+            [71]=Medium [72]=Medium [73]=Medium [74]=Medium [75]=Medium
+            [76]=Medium [77]=Medium [78]=Medium [79]=Medium [80]=Medium
+            [81]=Medium [82]=Medium [83]=Medium [84]=Medium
+            [85]=Low [86]=Low [87]=Low [88]=Low [89]=Low [90]=Low
+          )
+
+          failures=0
+
+          for issue in "${!priorities[@]}"; do
+            expected_priority="${priorities[$issue]}"
+
+            issue_meta="$(gh issue view "$issue" --repo "$REPO" --json issueType,parent)"
+            actual_type="$(jq -r '.issueType.name // empty' <<<"$issue_meta")"
+            actual_parent="$(jq -r '.parent.number // empty' <<<"$issue_meta")"
+
+            values_json="$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "/repos/$REPO/issues/$issue/issue-field-values")"
+            actual_priority="$(jq -r --argjson field_id "$PRIORITY_FIELD_ID" '
+              .[]
+              | select(.issue_field_id == $field_id)
+              | .single_select_option.name // .value
+            ' <<<"$values_json" | head -n 1)"
+
+            if [[ "$actual_type" != "Task" ]]; then
+              echo "FAIL #$issue: Type='$actual_type', expected 'Task'" >&2
+              failures=$((failures + 1))
+            fi
+
+            if [[ "$actual_parent" != "$PARENT_ISSUE" ]]; then
+              echo "FAIL #$issue: parent='$actual_parent', expected '$PARENT_ISSUE'" >&2
+              failures=$((failures + 1))
+            fi
+
+            if [[ "$actual_priority" != "$expected_priority" ]]; then
+              echo "FAIL #$issue: Priority='$actual_priority', expected '$expected_priority'" >&2
+              failures=$((failures + 1))
+            fi
+
+            if [[ "$actual_type" == "Task" && "$actual_parent" == "$PARENT_ISSUE" && "$actual_priority" == "$expected_priority" ]]; then
+              echo "OK #$issue: Type=Task, Priority=$actual_priority, parent=#$actual_parent"
+            fi
+          done
+
+          if (( failures > 0 )); then
+            echo "Metadata verification failed with $failures mismatch(es)." >&2
+            exit 1
+          fi
+
+          echo "All 44 forensic issues verified: Type=Task, Priority mapped from the forensic review, parent=#45."

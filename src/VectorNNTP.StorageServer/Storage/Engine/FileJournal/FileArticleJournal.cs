@@ -739,6 +739,12 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
     internal Action? TestBeforeDurableFlush { get; set; }
 
     /// <summary>
+    /// Runs after <see cref="FileStream.Flush(bool)"/> with <c>flushToDisk: true</c> returns.
+    /// Tests and measurement only. The production path is null.
+    /// </summary>
+    internal Action? TestAfterDurableFlush { get; set; }
+
+    /// <summary>
     /// When set, checkpoint temp deletion leaves the file in place. Tests only.
     /// </summary>
     internal bool TestFailCheckpointTempDelete { get; set; }
@@ -1360,6 +1366,7 @@ public sealed partial class FileArticleJournal : IArticleJournal, IDisposable, I
         TestBeforeDurableFlush?.Invoke();
         var acceptFlush = IndexCommittedProbe.MarkAcceptFlush();
         _stream.Flush(flushToDisk: true);
+        TestAfterDurableFlush?.Invoke();
         IndexCommittedProbe.AddAcceptFlush(acceptFlush);
         _durableFlushCount++;
     }

@@ -242,6 +242,12 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     internal Action? TestBeforeDurableFlush { get; set; }
 
     /// <summary>
+    /// Runs after the index <see cref="FileStream.Flush(bool)"/> with <c>flushToDisk: true</c> returns.
+    /// Tests and measurement only. The production path is null.
+    /// </summary>
+    internal Action? TestAfterDurableFlush { get; set; }
+
+    /// <summary>
     /// Invoked after a checkpoint replacement is authoritative and the index gate is not held.
     /// Reports Present rows in the installed snapshot and the covered length of the retired prefix.
     /// </summary>
@@ -1870,6 +1876,7 @@ public sealed class FileArticleIndex : IArticleIndex, IDisposable, IAsyncDisposa
     {
         TestBeforeDurableFlush?.Invoke();
         _stream.Flush(flushToDisk: true);
+        TestAfterDurableFlush?.Invoke();
         _durableFlushCount++;
     }
 

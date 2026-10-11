@@ -156,6 +156,18 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal Action? TestBeforeDurableFlush { get; set; }
 
     /// <summary>
+    /// Runs after a deferred batch has appended every record and before its single durable flush.
+    /// Tests and measurement only. The production path is null.
+    /// </summary>
+    internal Action? TestAfterAppendBeforeDurableFlush { get; set; }
+
+    /// <summary>
+    /// Runs at the start of a deferred batch append, before the per-record writes.
+    /// Tests and measurement only. The production path is null.
+    /// </summary>
+    internal Action? TestBeforeBatchAppend { get; set; }
+
+    /// <summary>
     /// Invoked immediately after each durability <see cref="FileStream.Flush(bool)"/> returns.
     /// Tests only.
     /// </summary>
@@ -163,6 +175,12 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
     /// <summary>Number of durability flushes of an active segment stream. Tests only.</summary>
     internal long DurableFlushCount => Volatile.Read(ref _durableFlushCount);
+
+    /// <summary>
+    /// Counts payload XxHash3 calculations performed because the caller had no Accept hash.
+    /// Accept persistence does not increment this. Disk proofs do not use this counter.
+    /// </summary>
+    internal long DerivedPayloadArtHashCount => Volatile.Read(ref _derivedPayloadArtHashCount);
 
     /// <summary>
     /// Full-record read proofs performed by <see cref="TryProveStoredLocation"/>.
@@ -177,6 +195,9 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     internal long FlushedHeaderConfirmCount => Volatile.Read(ref _flushedHeaderConfirmCount);
 
     private long _durableFlushCount;
+
+    /// <summary>Payload hashes computed by <see cref="AuthoritativeArticleAppend.Derive"/>.</summary>
+    private long _derivedPayloadArtHashCount;
 
     private long _payloadLocationProofCount;
 
@@ -882,12 +903,85 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
         }
     }
 
-    private ActiveSegmentAppend AppendToActiveUnlocked(ReadOnlyMemory<byte> artData)
+    /// <summary>
+    /// Appends one Accept article using the hash the journal already stored.
+    /// Does not hash the payload. The frame CRC is still written.
+    /// </summary>
+    /// <param name="article">Accept payload and its authoritative ArtHash.</param>
+    /// <param name="cancellationToken">Cancels before the append lock is taken.</param>
+    /// <returns>The flushed location. The header stores <paramref name="article"/>'s ArtHash.</returns>
+    internal ValueTask<StoredArticleLocation> AppendAuthoritativeAsync(
+        AuthoritativeArticleAppend article,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_writeGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return ValueTask.FromResult(AppendPreparedUnlocked(article).Location);
+        }
+    }
+
+    /// <summary>
+    /// Hashes <paramref name="artData"/> because this caller has no Accept ArtHash.
+    /// </summary>
+    /// <param name="artData">Unproved payload. Relocation and raw append use this.</param>
+    /// <returns>An append carrying the computed XXH3-64.</returns>
+    private AuthoritativeArticleAppend DerivePayload(ReadOnlyMemory<byte> artData)
+    {
+        var derived = AuthoritativeArticleAppend.Derive(artData);
+        _ = Interlocked.Increment(ref _derivedPayloadArtHashCount);
+        return derived;
+    }
+
+    /// <summary>
+    /// Derives the Message-ID identity and requires it to match <paramref name="article"/>.
+    /// Does not hash the payload.
+    /// </summary>
+    /// <param name="article">Append whose ArtId must match the payload Message-ID.</param>
+    /// <returns>The article id written into the segment header.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the payload length is outside the article limit.</exception>
+    /// <exception cref="ArgumentException">Thrown when the Message-ID is missing or does not match <paramref name="article"/>.</exception>
+    private static ArticleId RequireMatchingArticleId(AuthoritativeArticleAppend article)
+    {
+        var artData = article.ArtData;
+        if (artData.Length is < 1 or > ArticleResourceLimits.MaxArticleBytes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(article), "ArtData length out of range.");
+        }
+
+        var messageStart = PhysicalProofProbe.MarkAppend();
+        if (!ArticleStorageIntegrity.TryExtractMessageIdValue(artData.Span, out var messageId))
+        {
+            throw new ArgumentException("ArtData must contain a Message-ID header value.", nameof(article));
+        }
+
+        PhysicalProofProbe.AddAppendMessage(messageStart);
+        var blakeStart = PhysicalProofProbe.MarkAppend();
+        var artId = ArticleId.FromMessageId(messageId);
+        PhysicalProofProbe.AddAppendBlake(blakeStart);
+        if (artId != article.ArtId)
+        {
+            throw new ArgumentException("ArtId does not match the payload Message-ID.", nameof(article));
+        }
+
+        return artId;
+    }
+
+    private ActiveSegmentAppend AppendToActiveUnlocked(ReadOnlyMemory<byte> artData) =>
+        AppendPreparedUnlocked(DerivePayload(artData));
+
+    /// <summary>
+    /// Frames <paramref name="article"/> without hashing its payload.
+    /// </summary>
+    /// <param name="article">Accept hash, or a hash <see cref="DerivePayload"/> just computed.</param>
+    /// <returns>The committed append. The receipt hash is <paramref name="article"/>'s ArtHash.</returns>
+    private ActiveSegmentAppend AppendPreparedUnlocked(AuthoritativeArticleAppend article)
     {
         PhysicalProofProbe.BeginAppend();
         try
         {
-            return AppendToActiveUnlockedCore(artData);
+            return AppendToActiveUnlockedCore(article);
         }
         finally
         {
@@ -897,35 +991,20 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
 
     /// <summary>
     /// Frames and appends one payload on the single active segment.
-    /// Identity and ArtHash are derived once from <paramref name="artData"/>.
+    /// ArtHash is taken from <paramref name="article"/> and is not recomputed.
+    /// Message-ID identity is still derived and must match <paramref name="article"/>.
     /// The frame CRC is always written. <see cref="SegmentRecordCodec.FramedHash"/> is computed
     /// only when a <see cref="PendingSegmentRecord"/> must be matched or created.
     /// </summary>
-    private ActiveSegmentAppend AppendToActiveUnlockedCore(ReadOnlyMemory<byte> artData)
+    private ActiveSegmentAppend AppendToActiveUnlockedCore(AuthoritativeArticleAppend article)
     {
-        if (artData.Length is < 1 or > ArticleResourceLimits.MaxArticleBytes)
-        {
-            throw new ArgumentOutOfRangeException(nameof(artData), "ArtData length out of range.");
-        }
+        var artData = article.ArtData;
+        var artId = RequireMatchingArticleId(article);
+        var artHash = article.ArtHash;
 
-        var messageStart = PhysicalProofProbe.MarkAppend();
-        if (!ArticleStorageIntegrity.TryExtractMessageIdValue(artData.Span, out var messageId))
-        {
-            throw new ArgumentException("ArtData must contain a Message-ID header value.", nameof(artData));
-        }
-
-        PhysicalProofProbe.AddAppendMessage(messageStart);
-        var blakeStart = PhysicalProofProbe.MarkAppend();
-        var artId = ArticleId.FromMessageId(messageId);
-        PhysicalProofProbe.AddAppendBlake(blakeStart);
-        var xxStart = PhysicalProofProbe.MarkAppend();
-        var artHash = XxHash3.HashToUInt64(artData.Span);
-        PhysicalProofProbe.AddAppendXx(xxStart);
-
-        // artId and artHash were just derived from this span on this thread. TryProve would
-        // extract the Message-ID, hash the payload, and derive the id again. Nothing in this
-        // method mutates the span before the write. Callers that already hold an expected
-        // identity compare the receipt, and disk reads prove the persisted record.
+        // The span is not mutated before the write. Accept persistence passes the journal
+        // ArtHash. A caller that only has bytes passes a hash Derive just computed.
+        // Disk reads prove the persisted record. This method does not hash the payload.
         Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
         Span<byte> crc = stackalloc byte[4];
         SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc);
@@ -1202,14 +1281,43 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// The payload is not read back. A failure leaves earlier durable journal state
     /// untouched and does not return these receipts.
     /// </summary>
-    /// <param name="articles">Payloads to frame and append, in order.</param>
+    /// <param name="articles">Payloads whose ArtHash must be derived before the write.</param>
     /// <returns>One receipt per article, in the same order.</returns>
+    /// <remarks>
+    /// Each payload is hashed once via <see cref="AuthoritativeArticleAppend.Derive"/>.
+    /// Accept persistence uses <see cref="AppendActiveBatch(IReadOnlyList{AuthoritativeArticleAppend})"/>
+    /// so that hash is not repeated. The journal is not touched.
+    /// </remarks>
+    internal FlushedSegmentAppend[] AppendActiveBatch(IReadOnlyList<ReadOnlyMemory<byte>> articles)
+    {
+        ArgumentNullException.ThrowIfNull(articles);
+        if (articles.Count == 0)
+        {
+            return [];
+        }
+
+        var prepared = new AuthoritativeArticleAppend[articles.Count];
+        for (var i = 0; i < articles.Count; i++)
+        {
+            prepared[i] = DerivePayload(articles[i]);
+        }
+
+        return AppendActiveBatch(prepared);
+    }
+
+    /// <summary>
+    /// Appends articles whose ArtHash is already authoritative.
+    /// Does not hash the payloads. The frame CRC is still written.
+    /// </summary>
+    /// <param name="articles">Accept articles, or other articles whose hash was proved by <see cref="AuthoritativeArticleAppend.TryMatch"/>.</param>
+    /// <returns>One receipt per article. Each receipt ArtHash is the supplied hash.</returns>
     /// <remarks>
     /// One configured writer runs the append on the single active segment.
     /// Two or four writers split the batch into contiguous groups, one group per active
     /// segment. Each group holds only that segment's writer lock. The journal is not touched.
+    /// Header confirm checks the durable header against the supplied hash and does not read the payload.
     /// </remarks>
-    internal FlushedSegmentAppend[] AppendActiveBatch(IReadOnlyList<ReadOnlyMemory<byte>> articles)
+    internal FlushedSegmentAppend[] AppendActiveBatch(IReadOnlyList<AuthoritativeArticleAppend> articles)
     {
         ArgumentNullException.ThrowIfNull(articles);
         if (articles.Count == 0)
@@ -1228,7 +1336,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// <summary>
     /// Appends the batch to the one active segment. Caller does not hold <see cref="_writeGate"/>.
     /// </summary>
-    private FlushedSegmentAppend[] AppendActiveBatchSingle(IReadOnlyList<ReadOnlyMemory<byte>> articles)
+    private FlushedSegmentAppend[] AppendActiveBatchSingle(IReadOnlyList<AuthoritativeArticleAppend> articles)
     {
 
         lock (_writeGate)
@@ -1238,11 +1346,13 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
             _deferDurableFlush++;
             try
             {
+                TestBeforeBatchAppend?.Invoke();
                 for (var i = 0; i < articles.Count; i++)
                 {
-                    appended[i] = AppendToActiveUnlocked(articles[i]);
+                    appended[i] = AppendPreparedUnlocked(articles[i]);
                 }
 
+                TestAfterAppendBeforeDurableFlush?.Invoke();
                 FlushActiveDurableUnlocked();
                 var receipts = new FlushedSegmentAppend[appended.Length];
                 for (var i = 0; i < appended.Length; i++)
@@ -1278,7 +1388,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// Splits <paramref name="articles"/> across the configured active segments and appends
     /// those groups concurrently. Each group locks only its segment. Journal state is unchanged.
     /// </summary>
-    private FlushedSegmentAppend[] AppendAcrossActiveSegments(IReadOnlyList<ReadOnlyMemory<byte>> articles)
+    private FlushedSegmentAppend[] AppendAcrossActiveSegments(IReadOnlyList<AuthoritativeArticleAppend> articles)
     {
         SegmentRuntime[] writers;
         int[] counts;
@@ -1295,7 +1405,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 var bytes = 0L;
                 for (var i = 0; i < counts[w]; i++)
                 {
-                    bytes += SegmentRecordCodec.RecordLengthForArtSize(articles[cursor + i].Length);
+                    bytes += SegmentRecordCodec.RecordLengthForArtSize(articles[cursor + i].ArtSize);
                 }
 
                 writers[w] = PrepareWriterForBytesUnlocked(writerIds[w], bytes);
@@ -1417,7 +1527,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     private void AppendGroup(
         SegmentRuntime runtime,
-        IReadOnlyList<ReadOnlyMemory<byte>> articles,
+        IReadOnlyList<AuthoritativeArticleAppend> articles,
         int start,
         int count,
         FlushedSegmentAppend[] receipts,
@@ -1439,7 +1549,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 var logical = committed;
                 try
                 {
-                    while (index < end && NextRecordFitsAt(runtime, logical, articles[index]))
+                    while (index < end && NextRecordFitsAt(runtime, logical, articles[index].ArtData))
                     {
                         var pinned = AppendPinned(runtime, articles[index], logical);
                         logical += pinned.Append.Location.Length;
@@ -1514,7 +1624,7 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
                 break;
             }
 
-            var cause = SealCauseForNext(runtime, articles[index]);
+            var cause = SealCauseForNext(runtime, articles[index].ArtData);
             lock (_writeGate)
             {
                 var closedId = runtime.SegmentId.Value;
@@ -1589,26 +1699,18 @@ public sealed class FileSegmentStore : ISegmentStore, IDisposable, IAsyncDisposa
     /// </summary>
     private PinnedChunkItem AppendPinned(
         SegmentRuntime runtime,
-        ReadOnlyMemory<byte> artData,
+        AuthoritativeArticleAppend article,
         long expectedOffset)
     {
         PhysicalProofProbe.BeginAppend();
         try
         {
-            if (artData.Length is < 1 or > ArticleResourceLimits.MaxArticleBytes)
-            {
-                throw new ArgumentOutOfRangeException(nameof(artData), "ArtData length out of range.");
-            }
+            var artData = article.ArtData;
+            var artId = RequireMatchingArticleId(article);
+            var artHash = article.ArtHash;
 
-            if (!ArticleStorageIntegrity.TryExtractMessageIdValue(artData.Span, out var messageId))
-            {
-                throw new ArgumentException("ArtData must contain a Message-ID header value.", nameof(artData));
-            }
-
-            var artId = ArticleId.FromMessageId(messageId);
-            var artHash = XxHash3.HashToUInt64(artData.Span);
-
-            // Same derivation as the single-writer path. The second proof would rescan this span.
+            // ArtHash is the supplied value. Message-ID identity must still match.
+            // The second proof would rescan this span. Disk recovery hashes on read.
             Span<byte> header = stackalloc byte[SegmentRecordCodec.FixedHeaderLength];
             Span<byte> crc = stackalloc byte[4];
             SegmentRecordCodec.PrepareProductionFrame(artId, artHash, artData.Span, header, crc);
@@ -4013,7 +4115,7 @@ internal sealed class PendingSegmentRecord
 /// <param name="Location">Segment, offset, and full record length.</param>
 /// <param name="AmbiguousComplete">True when a failed flush was reconciled from bytes already present.</param>
 /// <param name="ArtId">Article identity derived from the payload Message-ID.</param>
-/// <param name="ArtHash">XxHash3 of the payload that was written.</param>
+/// <param name="ArtHash">ArtHash written into the segment header. Accept appends reuse the journal ulong. Unproved buffers use a hash derived from the payload.</param>
 /// <param name="ArtSize">Payload length that was written.</param>
 internal readonly record struct ActiveSegmentAppend(
     StoredArticleLocation Location,
@@ -4028,7 +4130,7 @@ internal readonly record struct ActiveSegmentAppend(
 /// </summary>
 /// <param name="Location">Flushed record location.</param>
 /// <param name="ArtId">Identity written into the header.</param>
-/// <param name="ArtHash">Hash written into the header.</param>
+/// <param name="ArtHash">ArtHash read back from the flushed header. It is the hash the append was given, not a second payload traversal.</param>
 /// <param name="ArtSize">Payload size written into the header.</param>
 internal readonly record struct FlushedSegmentAppend(
     StoredArticleLocation Location,

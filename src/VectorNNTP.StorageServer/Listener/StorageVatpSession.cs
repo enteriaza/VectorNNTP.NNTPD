@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Transport.ArticleTransfer;
@@ -28,8 +29,10 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
     private readonly StoreAssemblyAdmission? _storeAdmission;
     private readonly NntpArticleParser? _storePathParser;
     private readonly Dictionary<uint, SendStream> _streams = [];
-    private readonly Dictionary<uint, StoreStream> _storeStreams = [];
+    private readonly ConcurrentDictionary<uint, StoreStream> _storeStreams = [];
     private readonly ArticleTransferReadyRing _readyRing = new();
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private Exception? _fatalSessionException;
     private uint _maxFramePayload = VatpProtocol.DefaultMaxFramePayload;
     private bool _clientHelloComplete;
     private bool _serverHelloSent;
@@ -86,11 +89,21 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
                 }
                 catch (TimeoutException)
                 {
+                    if (_fatalSessionException is not null)
+                    {
+                        throw _fatalSessionException;
+                    }
+
                     return;
                 }
 
                 if (bytesRead == 0)
                 {
+                    if (_fatalSessionException is not null)
+                    {
+                        throw _fatalSessionException;
+                    }
+
                     return;
                 }
 
@@ -144,6 +157,11 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
                     {
                         return;
                     }
+
+                    if (_fatalSessionException is not null)
+                    {
+                        throw _fatalSessionException;
+                    }
                 }
 
                 if (consumedTotal > 0)
@@ -179,6 +197,7 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
         }
 
         await _transport.DisposeAsync().ConfigureAwait(false);
+        _writeGate.Dispose();
     }
 
     private async Task<bool> HandleFrameAsync(VatpParsedFrame frame, CancellationToken cancellationToken)
@@ -462,14 +481,22 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
 
     private async Task WriteEncodedAsync(VatpFrameEncoder.EncodedFrame encoded, CancellationToken cancellationToken)
     {
-        if (!encoded.Header.IsEmpty)
+        await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            await WriteFullyAsync(encoded.Header, cancellationToken).ConfigureAwait(false);
-        }
+            if (!encoded.Header.IsEmpty)
+            {
+                await WriteFullyAsync(encoded.Header, cancellationToken).ConfigureAwait(false);
+            }
 
-        if (!encoded.Payload.IsEmpty)
+            if (!encoded.Payload.IsEmpty)
+            {
+                await WriteFullyAsync(encoded.Payload, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
         {
-            await WriteFullyAsync(encoded.Payload, cancellationToken).ConfigureAwait(false);
+            _writeGate.Release();
         }
     }
 
@@ -486,6 +513,11 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
 
             written += accepted;
         }
+    }
+
+    private void TrySetFatalSessionException(Exception exception)
+    {
+        _ = Interlocked.CompareExchange(ref _fatalSessionException, exception, null);
     }
 
     private enum SendPhase

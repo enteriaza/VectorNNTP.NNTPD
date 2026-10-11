@@ -22,6 +22,10 @@ namespace VectorNNTP.StorageServer.Storage;
 /// </remarks>
 public sealed class StorageEngineApplicationService : IApplicationService, IAsyncDisposable
 {
+    private const int JournalAcceptGroupLimit = 32;
+    private static readonly TimeSpan JournalAcceptGroupMaxDelay = TimeSpan.FromMilliseconds(2);
+    private const long JournalAcceptGroupMaxBytes = 4L * 1024 * 1024;
+
     private readonly StorageServerRuntimeOptions _runtime;
     private readonly IOptions<StorageServerOptions> _options;
     private readonly TimeProvider _timeProvider;
@@ -119,6 +123,11 @@ public sealed class StorageEngineApplicationService : IApplicationService, IAsyn
                 articleCache: cache,
                 maxConcurrentPhysicalReads: _runtime.Listener.MaxActiveConnections,
                 egressCache: egress);
+
+            engine.Journal.AcceptParallelPreparation = true;
+            engine.Journal.AcceptGroupLimit = JournalAcceptGroupLimit;
+            engine.Journal.AcceptGroupMaxDelay = JournalAcceptGroupMaxDelay;
+            engine.Journal.AcceptGroupMaxBytes = JournalAcceptGroupMaxBytes;
 
             var beforeRecover = TestBeforeRecover;
             TestBeforeRecover = null;

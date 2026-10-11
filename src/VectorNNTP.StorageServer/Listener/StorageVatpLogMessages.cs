@@ -117,7 +117,7 @@ internal static partial class StorageVatpSessionLogMessages
 
     [LoggerMessage(
         EventId = 5506,
-        Level = LogLevel.Information,
+        Level = LogLevel.Trace,
         Message = "Storage VATP STORE completed artId={ArtId} outcome={Outcome} attempt=1")]
     public static partial void StoreCompleted(ILogger logger, string ArtId, string Outcome);
 

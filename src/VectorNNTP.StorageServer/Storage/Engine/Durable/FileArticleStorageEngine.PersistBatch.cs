@@ -9,12 +9,20 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Durable;
 public sealed partial class FileArticleStorageEngine
 {
     /// <summary>
+    /// Receives one sample per persistence batch. Measurement only. The production path is null.
+    /// When null, batch execution does not take stage timestamps.
+    /// </summary>
+    internal Action<PersistBatchTiming>? TestPersistBatchTiming { get; set; }
+
+    /// <summary>
     /// Persists the sequences already taken from the pending queue.
     /// Accept frames are already durable. Segment, PhysicalWritten, Present, and
     /// IndexCommitted each flush once for the sequences that reach that stage.
     /// </summary>
     private async Task PersistBatchAsync(List<ulong> sequences, CancellationToken cancellationToken)
     {
+        var observe = TestPersistBatchTiming;
+        var started = observe is null ? 0 : Stopwatch.GetTimestamp();
         var incompleteBySequence = new Dictionary<ulong, JournalIncompleteSequence>();
         foreach (var incomplete in _journal.EnumerateIncomplete())
         {
@@ -50,26 +58,85 @@ public sealed partial class FileArticleStorageEngine
         Volatile.Write(ref _lastPersistBatchArticleCount, work.Count);
         Volatile.Write(ref _lastPersistBatchByteCount, bytes);
         _ = Interlocked.Increment(ref _persistBatchCount);
+        var prepared = observe is null ? 0 : Stopwatch.GetTimestamp();
 
         var segmentPhase = PhysicalProofProbe.MarkEnabled();
-        await PersistBatchSegmentsAsync(work, cancellationToken).ConfigureAwait(false);
-        PhysicalProofProbe.AddPhase(PhysicalProofProbe.StageSegment, segmentPhase, work.Count);
-        PhysicalProofProbe.NoteStage(PhysicalProofProbe.StageSegment);
-        cancellationToken.ThrowIfCancellationRequested();
-        var physicalWrittenPhase = PhysicalProofProbe.MarkEnabled();
-        PersistBatchPhysicalWritten(work);
-        PhysicalProofProbe.AddPhase(PhysicalProofProbe.StagePhysicalWritten, physicalWrittenPhase, work.Count);
-        PhysicalProofProbe.NoteStage(PhysicalProofProbe.StagePhysicalWritten);
-        cancellationToken.ThrowIfCancellationRequested();
-        var presentPhase = PhysicalProofProbe.MarkEnabled();
-        PersistBatchPresent(work);
-        PhysicalProofProbe.AddPhase(PhysicalProofProbe.StagePresentBegin, presentPhase, work.Count);
-        cancellationToken.ThrowIfCancellationRequested();
-        var indexCommittedPhase = PhysicalProofProbe.MarkEnabled();
-        PersistBatchIndexCommitted(work);
-        PhysicalProofProbe.AddPhase(PhysicalProofProbe.StageIndexCommitted, indexCommittedPhase, work.Count);
-        PhysicalProofProbe.NoteStage(PhysicalProofProbe.StageIndexCommitted);
+        var stages = observe is null ? null : new PersistStageMarks();
+        if (stages is not null)
+        {
+            stages.Install(_segments, _journal, _index);
+        }
+
+        try
+        {
+            await PersistBatchSegmentsAsync(work, cancellationToken).ConfigureAwait(false);
+            var segmentsDone = observe is null ? 0 : Stopwatch.GetTimestamp();
+            PhysicalProofProbe.AddPhase(PhysicalProofProbe.StageSegment, segmentPhase, work.Count);
+            PhysicalProofProbe.NoteStage(PhysicalProofProbe.StageSegment);
+            cancellationToken.ThrowIfCancellationRequested();
+            var physicalWrittenPhase = PhysicalProofProbe.MarkEnabled();
+            var physicalStarted = observe is null ? 0 : Stopwatch.GetTimestamp();
+            stages?.BeginJournalFlush();
+            PersistBatchPhysicalWritten(work);
+            var physicalFlushUs = stages?.EndJournalFlush() ?? 0;
+            var physicalDone = observe is null ? 0 : Stopwatch.GetTimestamp();
+            PhysicalProofProbe.AddPhase(PhysicalProofProbe.StagePhysicalWritten, physicalWrittenPhase, work.Count);
+            PhysicalProofProbe.NoteStage(PhysicalProofProbe.StagePhysicalWritten);
+            cancellationToken.ThrowIfCancellationRequested();
+            var presentPhase = PhysicalProofProbe.MarkEnabled();
+            var presentStarted = observe is null ? 0 : Stopwatch.GetTimestamp();
+            stages?.BeginIndexFlush();
+            PersistBatchPresent(work);
+            var presentFlushUs = stages?.EndIndexFlush() ?? 0;
+            var presentDone = observe is null ? 0 : Stopwatch.GetTimestamp();
+            PhysicalProofProbe.AddPhase(PhysicalProofProbe.StagePresentBegin, presentPhase, work.Count);
+            cancellationToken.ThrowIfCancellationRequested();
+            var indexCommittedPhase = PhysicalProofProbe.MarkEnabled();
+            var indexStarted = observe is null ? 0 : Stopwatch.GetTimestamp();
+            stages?.BeginJournalFlush();
+            PersistBatchIndexCommitted(work);
+            var indexFlushUs = stages?.EndJournalFlush() ?? 0;
+            var finished = observe is null ? 0 : Stopwatch.GetTimestamp();
+            PhysicalProofProbe.AddPhase(PhysicalProofProbe.StageIndexCommitted, indexCommittedPhase, work.Count);
+            PhysicalProofProbe.NoteStage(PhysicalProofProbe.StageIndexCommitted);
+            if (observe is null || stages is null)
+            {
+                return;
+            }
+
+            var recordBytes = 0L;
+            foreach (var item in work)
+            {
+                recordBytes += SegmentRecordCodec.RecordLengthForArtSize(item.Accept.ArtSize);
+            }
+
+            observe(new PersistBatchTiming(
+                work.Count,
+                bytes,
+                recordBytes,
+                stages.AppendStart == 0 ? 0 : 1,
+                Micros(started, stages.AppendStart == 0 ? prepared : stages.AppendStart),
+                Micros(stages.AppendStart, stages.AppendEnd),
+                Micros(stages.SegmentFlushStart, stages.SegmentFlushEnd),
+                Micros(stages.SegmentFlushEnd, segmentsDone),
+                Micros(physicalStarted, physicalDone),
+                physicalFlushUs,
+                Micros(presentStarted, presentDone),
+                presentFlushUs,
+                Micros(indexStarted, finished),
+                indexFlushUs,
+                Micros(started, finished)));
+        }
+        finally
+        {
+            stages?.Restore(_segments, _journal, _index);
+        }
     }
+
+    private static double Micros(long start, long end) =>
+        start == 0 || end == 0 || end < start
+            ? 0
+            : (end - start) * 1_000_000d / Stopwatch.Frequency;
 
     private async Task PersistBatchSegmentsAsync(List<PersistBatchItem> work, CancellationToken cancellationToken)
     {
@@ -140,13 +207,13 @@ public sealed partial class FileArticleStorageEngine
             FlushedSegmentAppend[] flushed;
             try
             {
-                var payloads = new ReadOnlyMemory<byte>[appending.Count];
+                var articles = new AuthoritativeArticleAppend[appending.Count];
                 for (var i = 0; i < appending.Count; i++)
                 {
-                    payloads[i] = appending[i].Accept.ArtData;
+                    articles[i] = AuthoritativeArticleAppend.FromAccept(appending[i].Accept);
                 }
 
-                flushed = _segments.AppendActiveBatch(payloads);
+                flushed = _segments.AppendActiveBatch(articles);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -171,6 +238,9 @@ public sealed partial class FileArticleStorageEngine
                     _ = Interlocked.Increment(ref _physicalAppendCount);
                     ThrowIfTestFault(PersistFaultPoint.AfterSataAppend, item.Sequence);
                     location = ApplyPhysicalLocationTestHooks(item.Sequence, location);
+                    // The receipt hash is the Accept ArtHash the writer stored. It is not a
+                    // second payload hash. Header confirm already matched the durable header
+                    // to that ulong. A read of the segment still proves the bytes on disk.
                     item.WritePathVerified = location == receipt.Location
                         && receipt.ArtId == item.Accept.ArtId
                         && receipt.ArtHash == item.Accept.ArtHash
@@ -663,5 +733,182 @@ public sealed partial class FileArticleStorageEngine
         /// Present then confirms the header instead of rereading the payload.
         /// </summary>
         public bool WritePathVerified { get; set; }
+    }
+
+    /// <summary>One persistence batch, timed on the worker that ran it.</summary>
+    /// <param name="Articles">Articles in the batch.</param>
+    /// <param name="PayloadBytes">Sum of ArtSize.</param>
+    /// <param name="RecordBytes">Sum of framed segment record lengths.</param>
+    /// <param name="Segments">1 when a segment append ran, otherwise 0.</param>
+    /// <param name="PreparationUs">Start of the batch until the segment write loop.</param>
+    /// <param name="AppendUs">Segment writes, excluding <c>Flush(true)</c>.</param>
+    /// <param name="SegmentFlushUs">The segment <c>Flush(true)</c> call.</param>
+    /// <param name="AfterFlushUs">Header confirm and the rest of the segment stage after the flush returns.</param>
+    /// <param name="PhysicalWrittenUs">PhysicalWritten stage, including its journal flush.</param>
+    /// <param name="PhysicalWrittenFlushUs">Journal <c>Flush(true)</c> inside PhysicalWritten, on this worker only.</param>
+    /// <param name="PresentUs">Present stage, including the index flush.</param>
+    /// <param name="PresentFlushUs">Index <c>Flush(true)</c> inside Present, on this worker only.</param>
+    /// <param name="IndexCommittedUs">IndexCommitted stage, including its journal flush and cache fill.</param>
+    /// <param name="IndexCommittedFlushUs">Journal <c>Flush(true)</c> inside IndexCommitted, on this worker only.</param>
+    /// <param name="TotalUs">Start of the batch until IndexCommitted returns.</param>
+    internal readonly record struct PersistBatchTiming(
+        int Articles,
+        long PayloadBytes,
+        long RecordBytes,
+        int Segments,
+        double PreparationUs,
+        double AppendUs,
+        double SegmentFlushUs,
+        double AfterFlushUs,
+        double PhysicalWrittenUs,
+        double PhysicalWrittenFlushUs,
+        double PresentUs,
+        double PresentFlushUs,
+        double IndexCommittedUs,
+        double IndexCommittedFlushUs,
+        double TotalUs);
+
+    /// <summary>Stamps persist-worker stage boundaries. Installed only while a timing callback is set.</summary>
+    private sealed class PersistStageMarks
+    {
+        public long AppendStart;
+        public long AppendEnd;
+        public long SegmentFlushStart;
+        public long SegmentFlushEnd;
+        private readonly int _thread = Environment.CurrentManagedThreadId;
+        private long _journalEntered;
+        private double _journalFlushUs;
+        private bool _journalArmed;
+        private long _indexEntered;
+        private double _indexFlushUs;
+        private bool _indexArmed;
+        private Action? _segmentBefore;
+        private Action? _segmentAfter;
+        private Action? _beforeAppend;
+        private Action? _afterAppend;
+        private Action? _journalBefore;
+        private Action? _journalAfter;
+        private Action? _indexBefore;
+        private Action? _indexAfter;
+
+        public void Install(FileSegmentStore segments, FileArticleJournal journal, FileArticleIndex index)
+        {
+            _segmentBefore = segments.TestBeforeDurableFlush;
+            _segmentAfter = segments.TestAfterDurableFlush;
+            _beforeAppend = segments.TestBeforeBatchAppend;
+            _afterAppend = segments.TestAfterAppendBeforeDurableFlush;
+            _journalBefore = journal.TestBeforeDurableFlush;
+            _journalAfter = journal.TestAfterDurableFlush;
+            _indexBefore = index.TestBeforeDurableFlush;
+            _indexAfter = index.TestAfterDurableFlush;
+            segments.TestBeforeBatchAppend = () =>
+            {
+                if (Mine())
+                {
+                    AppendStart = Stopwatch.GetTimestamp();
+                }
+
+                _beforeAppend?.Invoke();
+            };
+            segments.TestAfterAppendBeforeDurableFlush = () =>
+            {
+                if (Mine())
+                {
+                    AppendEnd = Stopwatch.GetTimestamp();
+                }
+
+                _afterAppend?.Invoke();
+            };
+            segments.TestBeforeDurableFlush = () =>
+            {
+                if (Mine())
+                {
+                    SegmentFlushStart = Stopwatch.GetTimestamp();
+                }
+
+                _segmentBefore?.Invoke();
+            };
+            segments.TestAfterDurableFlush = () =>
+            {
+                if (Mine())
+                {
+                    SegmentFlushEnd = Stopwatch.GetTimestamp();
+                }
+
+                _segmentAfter?.Invoke();
+            };
+            journal.TestBeforeDurableFlush = () =>
+            {
+                if (_journalArmed && Mine())
+                {
+                    _journalEntered = Stopwatch.GetTimestamp();
+                }
+
+                _journalBefore?.Invoke();
+            };
+            journal.TestAfterDurableFlush = () =>
+            {
+                if (_journalArmed && Mine() && _journalEntered != 0)
+                {
+                    _journalFlushUs += (Stopwatch.GetTimestamp() - _journalEntered) * 1_000_000d / Stopwatch.Frequency;
+                    _journalEntered = 0;
+                }
+
+                _journalAfter?.Invoke();
+            };
+            index.TestBeforeDurableFlush = () =>
+            {
+                if (_indexArmed && Mine())
+                {
+                    _indexEntered = Stopwatch.GetTimestamp();
+                }
+
+                _indexBefore?.Invoke();
+            };
+            index.TestAfterDurableFlush = () =>
+            {
+                if (_indexArmed && Mine() && _indexEntered != 0)
+                {
+                    _indexFlushUs += (Stopwatch.GetTimestamp() - _indexEntered) * 1_000_000d / Stopwatch.Frequency;
+                    _indexEntered = 0;
+                }
+
+                _indexAfter?.Invoke();
+            };
+        }
+
+        public void BeginJournalFlush() => _journalArmed = true;
+
+        public double EndJournalFlush()
+        {
+            _journalArmed = false;
+            var value = _journalFlushUs;
+            _journalFlushUs = 0;
+            return value;
+        }
+
+        public void BeginIndexFlush() => _indexArmed = true;
+
+        public double EndIndexFlush()
+        {
+            _indexArmed = false;
+            var value = _indexFlushUs;
+            _indexFlushUs = 0;
+            return value;
+        }
+
+        public void Restore(FileSegmentStore segments, FileArticleJournal journal, FileArticleIndex index)
+        {
+            segments.TestBeforeDurableFlush = _segmentBefore;
+            segments.TestAfterDurableFlush = _segmentAfter;
+            segments.TestBeforeBatchAppend = _beforeAppend;
+            segments.TestAfterAppendBeforeDurableFlush = _afterAppend;
+            journal.TestBeforeDurableFlush = _journalBefore;
+            journal.TestAfterDurableFlush = _journalAfter;
+            index.TestBeforeDurableFlush = _indexBefore;
+            index.TestAfterDurableFlush = _indexAfter;
+        }
+
+        private bool Mine() => Environment.CurrentManagedThreadId == _thread;
     }
 }

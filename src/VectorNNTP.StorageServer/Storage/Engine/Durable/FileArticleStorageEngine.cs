@@ -1600,6 +1600,12 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
             engine.RebuildSegmentAccountingFromIndex();
             FileArticleStorageEngineLogMessages.Opened(log, options.ControlDir, options.SegmentDir);
+            LogResolvedCapacity(log, "segment", capacity.Segment);
+            if (!ReferenceEquals(capacity.Segment, capacity.Control))
+            {
+                LogResolvedCapacity(log, "control", capacity.Control);
+            }
+
             return engine;
         }
         catch
@@ -1609,6 +1615,38 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             segments?.Dispose();
             journal?.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Logs one volume's identity and byte counts. A failed read is logged and does not fail open.
+    /// Later admission still rejects a new accept while the segment volume is unmeasured, and the
+    /// failed read does not substitute another volume.
+    /// </summary>
+    /// <param name="log">Engine logger. May be the null logger.</param>
+    /// <param name="role"><c>segment</c> or <c>control</c>.</param>
+    /// <param name="volume">Resolved volume. Ignored when null.</param>
+    private static void LogResolvedCapacity(ILogger log, string role, CapacityVolume? volume)
+    {
+        if (volume is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var snap = volume.Reader.Read();
+            FileArticleStorageEngineLogMessages.CapacityVolumeMeasured(
+                log,
+                role,
+                volume.Identity.Value,
+                snap.TotalBytes,
+                snap.AvailableBytes,
+                snap.UsedBytes);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            FileArticleStorageEngineLogMessages.CapacityVolumeUnreadable(log, role, volume.Identity.Value, ex);
         }
     }
 
@@ -2047,6 +2085,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// </summary>
     private void ValidatePresentLocationsAtStartup()
     {
+        var started = Stopwatch.GetTimestamp();
+        var proofsBefore = _segments.PayloadLocationProofCount;
         var present = new List<StoredArticleMetadata>();
         foreach (var row in _index.Snapshot())
         {
@@ -2056,6 +2096,8 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             }
         }
 
+        FileArticleStorageEngineLogMessages.StartupPresentValidationStarted(_logger, present.Count);
+        var invalidated = 0;
         foreach (var row in present)
         {
             if (PresentLocationProves(in row))
@@ -2065,6 +2107,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
 
             if (TryInvalidatePresentAt(in row))
             {
+                invalidated++;
                 FileArticleStorageEngineLogMessages.StartupPresentInvalidated(
                     _logger,
                     row.ArtId.ToLowerHexString(),
@@ -2083,6 +2126,15 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
                     $"Present article '{row.ArtId}' failed physical proof and could not be invalidated.");
             }
         }
+
+        var elapsedMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        var proofCount = _segments.PayloadLocationProofCount - proofsBefore;
+        FileArticleStorageEngineLogMessages.StartupPresentValidationCompleted(
+            _logger,
+            present.Count,
+            invalidated,
+            proofCount,
+            elapsedMs);
     }
 
     /// <summary>
@@ -2091,14 +2143,11 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// </summary>
     private bool PresentLocationProves(in StoredArticleMetadata metadata)
     {
-        // TryReadProven already proved this record: CRC, header identity, one XxHash3,
-        // and one Message-ID derivation. The returned copy is not used here.
-        return _segments.TryReadProven(
+        return _segments.TryProveStoredLocation(
             metadata.Location,
             metadata.ArtId,
             metadata.ArtHash,
-            metadata.ArtSize,
-            out _);
+            metadata.ArtSize);
     }
 
     /// <summary>
@@ -3956,7 +4005,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             var appended = false;
             try
             {
-                location = await AppendPhysicalAsync(accept.ArtData, cancellationToken).ConfigureAwait(false);
+                location = await AppendAcceptedPhysicalAsync(accept, cancellationToken).ConfigureAwait(false);
                 appended = true;
 
                 // The record is in the segment. A later PhysicalWritten failure must rediscover it.
@@ -4255,13 +4304,20 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
             accept.ArtSize);
     }
 
-    private async Task<StoredArticleLocation> AppendPhysicalAsync(
-        ReadOnlyMemory<byte> artData,
+    /// <summary>
+    /// Appends one Accept using the journal ArtHash. Does not hash the payload.
+    /// </summary>
+    /// <param name="accept">Accept whose payload and ArtHash were proved before the journal flush.</param>
+    /// <param name="cancellationToken">Cancels before the append lock is taken.</param>
+    /// <returns>The segment location of the written record.</returns>
+    private async Task<StoredArticleLocation> AppendAcceptedPhysicalAsync(
+        JournalAcceptRecord accept,
         CancellationToken cancellationToken)
     {
         ThrowIfTestFault(PersistFaultPoint.BeforeSataAppend, 0);
-        var appender = await _segments.GetActiveAppenderAsync(cancellationToken).ConfigureAwait(false);
-        var location = await appender.AppendAsync(artData, cancellationToken).ConfigureAwait(false);
+        var location = await _segments
+            .AppendAuthoritativeAsync(AuthoritativeArticleAppend.FromAccept(accept), cancellationToken)
+            .ConfigureAwait(false);
         _ = Interlocked.Increment(ref _physicalAppendCount);
         return location;
     }
@@ -4620,9 +4676,14 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
     /// Builds a CanonicalV1 cache record over the journal Accept buffer without copying it.
     /// </summary>
     /// <remarks>
-    /// Proves the attached payload, then <see cref="JournalAcceptRecord.DetachPayload"/>.
-    /// The returned record is the sole owner of that buffer. A proof failure leaves the payload
-    /// attached. Segment reads keep using <see cref="TryCreateCacheRecord"/>, which copies.
+    /// Checks that the attached buffer still has the indexed length, then
+    /// <see cref="JournalAcceptRecord.DetachPayload"/>. Does not hash the payload and does
+    /// not read the segment. Accept already proved this buffer. The segment writer stored
+    /// that ArtHash and the frame CRC, and Present confirmed the flushed header.
+    /// <see cref="ArticleMemoryCache"/> proves the buffer again before it retains an article.
+    /// A disabled cache retains nothing. A length mismatch leaves the payload attached.
+    /// Segment reads keep using <see cref="TryCreateCacheRecord"/>, which copies bytes a
+    /// segment read already proved.
     /// </remarks>
     private static bool TryCreateCacheRecordFromDetachedJournalPayload(
         in StoredArticleMetadata metadata,
@@ -4632,12 +4693,7 @@ public sealed partial class FileArticleStorageEngine : IArticleStorageEngine, IA
         record = default;
         var proveStart = IndexCommittedProbe.MarkArticle();
         var attached = accept.ArtData;
-        if (attached.Length != metadata.ArtSize
-            || !ArticleStorageIntegrity.TryProve(
-                attached.Span,
-                metadata.ArtId,
-                metadata.ArtHash,
-                metadata.ArtSize))
+        if (attached.Length != metadata.ArtSize)
         {
             IndexCommittedProbe.AddCreateProve(proveStart);
             return false;

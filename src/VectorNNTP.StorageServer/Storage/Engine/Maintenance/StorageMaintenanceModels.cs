@@ -55,8 +55,8 @@ public enum StorageMaintenanceOutcome : byte
 /// <param name="AdmissionRecoveryTargetBytes">
 /// Physical UsedBytes that must disappear before minimum-size admission can succeed.
 /// </param>
-/// <param name="CapacityUsedBytes">Observed DriveInfo UsedBytes when capacity admission is enabled.</param>
-/// <param name="CapacityTotalBytes">Observed DriveInfo TotalBytes when capacity admission is enabled.</param>
+/// <param name="CapacityUsedBytes">Observed used bytes of the segment filesystem when capacity admission is enabled.</param>
+/// <param name="CapacityTotalBytes">Observed total bytes of that same filesystem when capacity admission is enabled.</param>
 /// <param name="CapacityArticleReservedBytes">Observed process-local article reservations.</param>
 /// <param name="CapacityCompactionReservedBytes">Observed process-local compaction reservations.</param>
 /// <param name="DeferredOpenCompactionId">

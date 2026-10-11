@@ -270,7 +270,7 @@ public sealed class StorageMaintenanceCoordinator
             var reclaimed = await TryReclaimRetiredAsync(retiredVictim, cancellationToken)
                 .ConfigureAwait(false);
             // Re-observe after reclaim so recovery target reflects reduced UsedBytes when the
-            // capacity reader tracks deletions (tests / DriveInfo).
+            // capacity reader tracks deletions (tests / the segment filesystem).
             return AttachPressure(reclaimed, _engine.ObserveCapacityAdmissionPressure());
         }
 

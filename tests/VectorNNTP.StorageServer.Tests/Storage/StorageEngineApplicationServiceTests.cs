@@ -32,6 +32,10 @@ public sealed class StorageEngineApplicationServiceTests
         Assert.True(File.Exists(Path.Combine(dirs.ControlDir, FileArticleIndex.IndexFileName)));
         Assert.Equal(dirs.ControlDir, Path.GetDirectoryName(service.Engine.Journal.JournalPath));
         Assert.Equal(dirs.CacheDir, service.Engine.Segments.RootPath);
+        Assert.True(service.Engine.Journal.AcceptParallelPreparation);
+        Assert.Equal(32, service.Engine.Journal.AcceptGroupLimit);
+        Assert.Equal(TimeSpan.FromMilliseconds(2), service.Engine.Journal.AcceptGroupMaxDelay);
+        Assert.Equal(4L * 1024 * 1024, service.Engine.Journal.AcceptGroupMaxBytes);
         await service.StopAsync(CancellationToken.None);
     }
 

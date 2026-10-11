@@ -58,7 +58,18 @@ public sealed partial class StorageVatpSession
             StoreReceiveCorrelation,
             articleId,
             _limits);
-        _storeStreams.Add(streamId, new StoreStream(receive, held));
+        if (!_storeStreams.TryAdd(streamId, new StoreStream(receive, held)))
+        {
+            if (held)
+            {
+                _storeAdmission?.Exit();
+            }
+
+            await WriteFailAsync(streamId, VatpErrorCode.StreamTableError, cancellationToken)
+                .ConfigureAwait(false);
+            return true;
+        }
+
         return true;
     }
 
@@ -183,30 +194,41 @@ public sealed partial class StorageVatpSession
         }
 
         store.AcceptStarted = true;
-        ArticleAcceptResult accepted;
+        RemoveStore(streamId);
+        _ = ProcessStoreAcceptAsync(streamId, record);
+        return true;
+    }
+
+    private async Task ProcessStoreAcceptAsync(uint streamId, ArticleRecord record)
+    {
         try
         {
-            // Client disconnect must not cancel a journal accept already in progress.
-            accepted = await _placementEngine.AcceptAsync(record, CancellationToken.None).ConfigureAwait(false);
+            var accepted = await _placementEngine!.AcceptAsync(record, CancellationToken.None).ConfigureAwait(false);
+            StorageVatpSessionLogMessages.StoreCompleted(
+                _logger,
+                record.ArtId.ToLowerHexString(),
+                accepted.Outcome.ToString());
+            await WriteEncodedAsync(
+                    VatpFrameEncoder.EncodeResult(streamId, (byte)accepted.Outcome),
+                    CancellationToken.None)
+                .ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is ObjectDisposedException or IOException)
         {
-            RemoveStore(streamId);
-            StorageVatpSessionLogMessages.StoreFailed(_logger, record.ArtId.ToLowerHexString(), ex.GetType().Name);
-            await WriteFailAsync(streamId, VatpErrorCode.IncompleteTransfer, cancellationToken).ConfigureAwait(false);
-            return true;
+            TrySetFatalSessionException(ex);
         }
-
-        RemoveStore(streamId);
-        StorageVatpSessionLogMessages.StoreCompleted(
-            _logger,
-            record.ArtId.ToLowerHexString(),
-            accepted.Outcome.ToString());
-        await WriteEncodedAsync(
-                VatpFrameEncoder.EncodeResult(streamId, (byte)accepted.Outcome),
-                cancellationToken)
-            .ConfigureAwait(false);
-        return true;
+        catch (Exception ex) when (ex is not OperationCanceledException && ex is not ObjectDisposedException && ex is not IOException)
+        {
+            StorageVatpSessionLogMessages.StoreFailed(_logger, record.ArtId.ToLowerHexString(), ex.GetType().Name);
+            try
+            {
+                await WriteFailAsync(streamId, VatpErrorCode.IncompleteTransfer, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception writeEx) when (writeEx is ObjectDisposedException or IOException)
+            {
+                TrySetFatalSessionException(writeEx);
+            }
+        }
     }
 
     /// <summary>
@@ -262,7 +284,7 @@ public sealed partial class StorageVatpSession
 
     private void RemoveStore(uint streamId)
     {
-        if (_storeStreams.Remove(streamId, out var store) && store.SlotHeld)
+        if (_storeStreams.TryRemove(streamId, out var store) && store.SlotHeld)
         {
             store.SlotHeld = false;
             _storeAdmission?.Exit();

@@ -13,7 +13,7 @@ internal static partial class FileArticleStorageEngineLogMessages
 
     [LoggerMessage(
         EventId = 3401,
-        Level = LogLevel.Information,
+        Level = LogLevel.Trace,
         Message = "Article accepted (artId={ArtId}, sequence={Sequence}, artSize={ArtSize})")]
     public static partial void Accepted(ILogger logger, string ArtId, ulong Sequence, int ArtSize);
 
@@ -128,6 +128,23 @@ internal static partial class FileArticleStorageEngineLogMessages
         int ArtSize);
 
     [LoggerMessage(
+        EventId = 3446,
+        Level = LogLevel.Information,
+        Message = "Startup Present validation started (PresentRows={PresentRows})")]
+    public static partial void StartupPresentValidationStarted(ILogger logger, int PresentRows);
+
+    [LoggerMessage(
+        EventId = 3447,
+        Level = LogLevel.Information,
+        Message = "Startup Present validation completed (PresentRows={PresentRows}, Invalidated={Invalidated}, ProofReads={ProofReads}, DurationMs={DurationMs})")]
+    public static partial void StartupPresentValidationCompleted(
+        ILogger logger,
+        int PresentRows,
+        int Invalidated,
+        long ProofReads,
+        double DurationMs);
+
+    [LoggerMessage(
         EventId = 3406,
         Level = LogLevel.Warning,
         Message = "PhysicalWritten location failed integrity proof (sequence={Sequence}, segmentId={SegmentId}, offset={Offset}); journal forbids supersede — leaving outstanding")]
@@ -139,7 +156,7 @@ internal static partial class FileArticleStorageEngineLogMessages
 
     [LoggerMessage(
         EventId = 3407,
-        Level = LogLevel.Information,
+        Level = LogLevel.Trace,
         Message = "Recovery completed IndexCommitted (sequence={Sequence}, artId={ArtId})")]
     public static partial void RecoveredIndexCommitted(ILogger logger, ulong Sequence, string ArtId);
 
@@ -383,6 +400,37 @@ internal static partial class FileArticleStorageEngineLogMessages
         bool RecoveryAttempted,
         bool RecoveryReclaimedSpace,
         string Reason);
+
+    /// <summary>
+    /// Information for one resolved filesystem's capacity. Role is segment or control.
+    /// Volume is that directory's volume identity, not the path's drive-letter root.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 3444,
+        Level = LogLevel.Information,
+        Message = "Storage volume capacity resolved (Role={Role}, Volume={Volume}, TotalBytes={TotalBytes}, AvailableBytes={AvailableBytes}, UsedBytes={UsedBytes})")]
+    public static partial void CapacityVolumeMeasured(
+        ILogger logger,
+        string Role,
+        string Volume,
+        long TotalBytes,
+        long AvailableBytes,
+        long UsedBytes);
+
+    /// <summary>
+    /// Error when a volume's capacity cannot be measured during open. Open continues.
+    /// Admission still rejects new accepts while the segment volume is unmeasured, and no other
+    /// volume's capacity is substituted.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 3445,
+        Level = LogLevel.Error,
+        Message = "Storage volume capacity could not be measured at open (Role={Role}, Volume={Volume}). Another volume was not substituted.")]
+    public static partial void CapacityVolumeUnreadable(
+        ILogger logger,
+        string Role,
+        string Volume,
+        Exception exception);
 
     /// <summary>Error when the cache volume cannot be measured. Admission fails closed.</summary>
     [LoggerMessage(

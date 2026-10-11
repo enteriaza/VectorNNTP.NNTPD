@@ -11,9 +11,9 @@ namespace VectorNNTP.StorageServer.Storage.Engine.Maintenance;
 /// <param name="IsUnderAdmissionPressure">
 /// True when a minimum-size article admission would be rejected under MaximumUtilization.
 /// </param>
-/// <param name="UsedBytes">DriveInfo used bytes from the capacity snapshot.</param>
-/// <param name="TotalBytes">DriveInfo total bytes from the capacity snapshot.</param>
-/// <param name="AvailableBytes">DriveInfo available bytes from the capacity snapshot.</param>
+/// <param name="UsedBytes">Used bytes from the filesystem that contains the segment directory.</param>
+/// <param name="TotalBytes">Total bytes from that same filesystem.</param>
+/// <param name="AvailableBytes">Available bytes from that same filesystem.</param>
 /// <param name="ArticleReservedBytes">Unwritten segment-copy bytes on this volume's ledger. Written copies contribute zero.</param>
 /// <param name="CompactionReservedBytes">Unflushed compaction destination bytes. Bound destinations contribute zero.</param>
 /// <param name="MaximumUtilization">Article admission ceiling as an integer percent of TotalBytes.</param>

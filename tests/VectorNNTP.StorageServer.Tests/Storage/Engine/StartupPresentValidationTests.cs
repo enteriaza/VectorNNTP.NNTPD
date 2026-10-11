@@ -353,6 +353,28 @@ public sealed class StartupPresentValidationTests
     }
 
     [Fact]
+    public async Task Valid_present_emits_startup_validation_stage_counts()
+    {
+        var prepared = await PrepareAsync("<startup-log-stage@seg.test>");
+        using (prepared.Dir)
+        {
+            var sink = new CollectingSink();
+            await using var service = await StartReadyAsync(prepared.Dir, sink);
+            Assert.True(service.IsReady);
+
+            var started = Assert.Single(sink.Events, static e => IsEvent(e, StartupPresentValidationStartedEventId));
+            var completed = Assert.Single(sink.Events, static e => IsEvent(e, StartupPresentValidationCompletedEventId));
+
+            Assert.Equal(LogEventLevel.Information, started.Level);
+            Assert.Equal(LogEventLevel.Information, completed.Level);
+            Assert.Equal("1", Scalar(started, "PresentRows"));
+            Assert.Equal("1", Scalar(completed, "PresentRows"));
+            Assert.Equal("0", Scalar(completed, "Invalidated"));
+            Assert.Equal("1", Scalar(completed, "ProofReads"));
+        }
+    }
+
+    [Fact]
     public async Task Failed_proof_emits_one_invalidation_event_before_engine_ready()
     {
         var prepared = await PrepareAsync("<startup-log-missing@seg.test>");
@@ -448,6 +470,10 @@ public sealed class StartupPresentValidationTests
     }
 
     private const int StartupPresentInvalidatedEventId = 3412;
+
+    private const int StartupPresentValidationStartedEventId = 3446;
+
+    private const int StartupPresentValidationCompletedEventId = 3447;
 
     private const int EngineReadyEventId = 3002;
 
