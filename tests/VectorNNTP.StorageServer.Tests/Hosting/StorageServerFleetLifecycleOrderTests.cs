@@ -124,7 +124,8 @@ public sealed class StorageServerFleetLifecycleOrderTests
     public async Task StartupFailure_DoesNotAdvertise()
     {
         var port = GetFreePort();
-        using var occupied = new TcpListener(IPAddress.Loopback, port);
+        using var occupied = new TcpListener(IPAddress.IPv6Any, port);
+        occupied.Server.DualMode = true;
         occupied.Start();
         await using var session = await FleetSession.CreateAsync(port);
         var failure = await Record.ExceptionAsync(() => session.Manager.StartAsync(CancellationToken.None));
@@ -360,7 +361,6 @@ public sealed class StorageServerFleetLifecycleOrderTests
             var builder = Host.CreateApplicationBuilder([]);
             var pairs = StorageServerTestOptions.CreateValidConfigurationPairs();
             pairs["StorageServer:BindPortTls"] = port.ToString();
-            pairs["StorageServer:BindAddress:0"] = "127.0.0.1";
             builder.Configuration.AddInMemoryCollection(pairs);
             builder.Services.AddSingleton<ILocalIpAddressAssignee>(new FakeLocalIpAddressAssignee(assignAll: true));
             builder.Services.AddSingleton<ICloudflareDnsReconciler>(new NoOpCloudflareDnsReconciler());

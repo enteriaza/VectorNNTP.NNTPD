@@ -155,10 +155,9 @@ public sealed class DirectoryVolumeSpaceTests
                 return;
             }
 
-            Assert.True(OsDirectoryVolumeSpace.Shared.TryMeasure(dir, out var measured));
-            var snapshot = new CacheDirectoryCapacityReader(dir).Read();
-            Assert.Equal(measured.TotalBytes, snapshot.TotalBytes);
-            Assert.Equal(measured.AvailableBytes, snapshot.AvailableBytes);
+            Assert.True(
+                TryReadAgreedCapacity(dir, out var measured, out var snapshot),
+                $"probe total={measured.TotalBytes} available={measured.AvailableBytes}; reader total={snapshot.TotalBytes} available={snapshot.AvailableBytes}");
             Assert.Equal(Math.Max(0L, measured.TotalBytes - measured.AvailableBytes), snapshot.UsedBytes);
             Assert.True(measured.TotalBytes > 0);
 
@@ -195,8 +194,9 @@ public sealed class DirectoryVolumeSpaceTests
         var cache = Path.GetFullPath(Phase62CacheMount);
         var letterRoot = Path.GetPathRoot(cache)!;
         var letter = new DriveInfo(letterRoot);
-        Assert.True(OsDirectoryVolumeSpace.Shared.TryMeasure(cache, out var measured));
-        var snapshot = new CacheDirectoryCapacityReader(cache).Read();
+        Assert.True(
+            TryReadAgreedCapacity(cache, out var measured, out var snapshot),
+            $"probe total={measured.TotalBytes} available={measured.AvailableBytes}; reader total={snapshot.TotalBytes} available={snapshot.AvailableBytes}");
         var pressure = BulkStoragePressurePolicy.Default.Evaluate(
             snapshot.TotalBytes,
             snapshot.UsedBytes,
@@ -213,8 +213,6 @@ public sealed class DirectoryVolumeSpaceTests
             Assert.StartsWith(@"\\?\Volume{", measured.VolumeIdentity, StringComparison.Ordinal);
             Assert.NotEqual(control.VolumeIdentity, measured.VolumeIdentity);
             Assert.Equal(letter.TotalSize, control.TotalBytes);
-            Assert.Equal(measured.TotalBytes, snapshot.TotalBytes);
-            Assert.Equal(measured.AvailableBytes, snapshot.AvailableBytes);
             Assert.Equal(Math.Max(0L, snapshot.TotalBytes - snapshot.AvailableBytes), snapshot.UsedBytes);
             Assert.True(pressure.Measured);
             Assert.Equal(snapshot.TotalBytes, pressure.TotalBytes);
@@ -229,6 +227,35 @@ public sealed class DirectoryVolumeSpaceTests
         {
             Directory.Delete(controlDir);
         }
+    }
+
+    /// <summary>
+    /// Reads the probe and the capacity reader until both report the same total and available
+    /// bytes. Available space on a live volume changes between calls.
+    /// </summary>
+    private static bool TryReadAgreedCapacity(
+        string directory,
+        out DirectoryVolumeSpaceMeasurement measured,
+        out StorageCapacitySnapshot snapshot)
+    {
+        measured = default;
+        snapshot = default;
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            if (!OsDirectoryVolumeSpace.Shared.TryMeasure(directory, out measured))
+            {
+                return false;
+            }
+
+            snapshot = new CacheDirectoryCapacityReader(directory).Read();
+            if (measured.TotalBytes == snapshot.TotalBytes
+                && measured.AvailableBytes == snapshot.AvailableBytes)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private sealed class RecordingSpace : IDirectoryVolumeSpace

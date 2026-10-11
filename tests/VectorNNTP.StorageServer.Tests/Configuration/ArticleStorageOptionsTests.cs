@@ -442,13 +442,8 @@ public sealed class ArticleStorageOptionsTests
         };
         var root = FindRepositoryRoot();
         var hits = new List<string>();
-        foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        foreach (var path in EnumerateRepositoryFiles(root))
         {
-            if (IsHistoricalOrBuildPath(path))
-            {
-                continue;
-            }
-
             var extension = Path.GetExtension(path);
             if (extension is not (
                 ".cs" or ".json" or ".md" or ".csproj" or ".props" or ".targets" or ".yml" or ".yaml" or ".xml"))
@@ -470,18 +465,73 @@ public sealed class ArticleStorageOptionsTests
         Assert.Empty(hits);
     }
 
-    private static bool IsHistoricalOrBuildPath(string path)
+    private static IEnumerable<string> EnumerateRepositoryFiles(string root)
     {
-        var parts = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        foreach (var part in parts)
+        var pending = new Stack<string>();
+        pending.Push(root);
+        while (pending.Count > 0)
         {
-            if (part is "bin" or "obj" or ".git" or ".idea" or ".artifacts" or "TestResults" or "node_modules")
+            var directory = pending.Pop();
+            IEnumerable<string> entries;
+            try
             {
-                return true;
+                entries = Directory.EnumerateFileSystemEntries(directory);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                continue;
+            }
+            catch (IOException)
+            {
+                continue;
+            }
+
+            foreach (var entry in entries)
+            {
+                if (Directory.Exists(entry))
+                {
+                    if (IsSkippedRepositoryDirectory(entry))
+                    {
+                        continue;
+                    }
+
+                    pending.Push(entry);
+                    continue;
+                }
+
+                yield return entry;
             }
         }
+    }
 
-        return false;
+    private static bool IsSkippedRepositoryDirectory(string path)
+    {
+        var name = Path.GetFileName(path);
+        if (name is "bin"
+            or "obj"
+            or ".git"
+            or ".idea"
+            or ".artifacts"
+            or "TestResults"
+            or "node_modules"
+            or "spool"
+            or "System Volume Information")
+        {
+            return true;
+        }
+
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 
     private static string FindRepositoryRoot()

@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <Content Include="..\VectorNNTP.Common\RabbitMq.json" Link="RabbitMq.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Update="VectorNNTP.StorageServer.Development.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

@@ -108,12 +108,13 @@ public sealed class RetentionPressureSoakTests
         Assert.Equal(0, logical.Recovery.Value.NetPhysicalRecoveryBytes);
         Assert.Equal(0, logical.Recovery.Value.FullyDeadBytesReclaimed);
         Assert.NotEqual(logical.Recovery.Value.LogicalExpiredBytes, logical.Recovery.Value.NetPhysicalRecoveryBytes);
-        Assert.Equal(ArticleStorageState.Evicted, State(engine, cold.ArtId));
-        Assert.Equal(ArticleStorageState.Present, State(engine, unread.ArtId));
+        Assert.Equal(ArticleStorageState.Present, State(engine, cold.ArtId));
+        Assert.Equal(ArticleStorageState.Evicted, State(engine, unread.ArtId));
         Assert.Equal(ArticleStorageState.Present, State(engine, recent.ArtId));
         Assert.True(engine.TryRead(ingress.ArtId, out _));
         Assert.True(engine.TryRead(recent.ArtId, out _));
-        Assert.False(engine.TryRead(cold.ArtId, out _));
+        Assert.True(engine.TryRead(cold.ArtId, out _));
+        Assert.False(engine.TryRead(unread.ArtId, out _));
         Assert.Equal(outstanding, engine.Journal.OutstandingRecoverableBytes);
         Assert.True(File.Exists(ClosedPath(engine, closed)));
 
