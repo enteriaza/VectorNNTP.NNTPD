@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
@@ -20,7 +21,7 @@ jobs:
   linux-build-test:
     name: Linux Build and Test
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -33,30 +34,169 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Verify solution project set
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          disk_list="$(mktemp)"
+          sln_list="$(mktemp)"
+          find src tests tools -name '*.csproj' | sed 's|\\|/|g' | sed 's|^\./||' | sort -u > "$disk_list"
+          dotnet sln VectorNNTP.NNTPD.sln list | tr -d '\r' | sed 's|\\|/|g' | sed 's|^\./||' | grep '\.csproj$' | sort -u > "$sln_list"
+
+          if ! cmp -s "$disk_list" "$sln_list"; then
+            echo "Solution membership does not match every project under src/, tests/, and tools/."
+            echo "On disk but not in VectorNNTP.NNTPD.sln:"
+            comm -23 "$disk_list" "$sln_list"
+            echo "In VectorNNTP.NNTPD.sln but missing on disk:"
+            comm -13 "$disk_list" "$sln_list"
+            exit 1
+          fi
+
+          while IFS= read -r proj; do
+            grep -q '<IsTestProject>true</IsTestProject>' "$proj" || {
+              echo "Test project is not marked IsTestProject: $proj"
+              exit 1
+            }
+            grep -q 'Microsoft.NET.Test.Sdk' "$proj" || {
+              echo "Test project is missing Microsoft.NET.Test.Sdk: $proj"
+              exit 1
+            }
+          done < <(find tests -name '*.csproj' | sort)
+
+          while IFS= read -r proj; do
+            if grep -q '<IsTestProject>true</IsTestProject>' "$proj"; then
+              echo "Non-test project is marked IsTestProject: $proj"
+              exit 1
+            fi
+          done < <(find src tools -name '*.csproj' | sort)
+
+          echo "Solution projects:"
+          cat "$sln_list"
+          echo "Test projects:"
+          find tests -name '*.csproj' | sed 's|\\|/|g' | sort
+
       - name: Restore solution
         run: dotnet restore VectorNNTP.NNTPD.sln
 
       - name: Build solution
-        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release --no-restore -p:Platform=x64
+        # The solution maps Release|x64 to Release|Any CPU for every project.
+        # Passing -p:Platform=x64 does not change that build, but a later
+        # project-level dotnet test -p:Platform=x64 looks in bin/x64/Release.
+        # Ordinary CI stays on the solution configuration. win-x64 publishing
+        # is a separate runtime-identifier step in the Windows job.
+        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release --no-restore
 
-      - name: Run NNTPD tests
-        timeout-minutes: 10
-        run: >
-          dotnet test tests/VectorNNTP.NNTPD.Tests/VectorNNTP.NNTPD.Tests.csproj
-          --configuration Release
-          -p:Platform=x64
-          --no-build
-          --logger "trx;LogFileName=nntpd-test-results.trx"
-          --results-directory ./TestResults
+      - name: Test solution
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Only VectorNNTP.NNTPD.Tests references coverlet.collector. Passing
+          # --collect to a project without that package makes VSTest fail before
+          # the tests run. Coverage is collected for projects that already
+          # reference the collector. Adding it to the other test projects is a
+          # separate change.
+          failed=0
+          while IFS= read -r proj; do
+            name="$(basename "$proj" .csproj)"
+            echo "Testing $name"
+            if grep -q 'coverlet.collector' "$proj"; then
+              if ! dotnet test "$proj" \
+                --configuration Release \
+                --no-build \
+                --no-restore \
+                --collect:"XPlat Code Coverage" \
+                --results-directory ./TestResults \
+                --logger "trx;LogFileName=${name}.trx"; then
+                echo "Tests failed: $name"
+                failed=1
+              fi
+            else
+              if ! dotnet test "$proj" \
+                --configuration Release \
+                --no-build \
+                --no-restore \
+                --results-directory ./TestResults \
+                --logger "trx;LogFileName=${name}.trx"; then
+                echo "Tests failed: $name"
+                failed=1
+              fi
+            fi
+          done < <(find tests -name '*.csproj' | sort)
+          exit "$failed"
 
-      - name: Run benchmark contract tests
-        timeout-minutes: 10
-        run: >
-          dotnet test tests/VectorNNTP.NNTPD.Bench.Tests/VectorNNTP.NNTPD.Bench.Tests.csproj
-          --configuration Release
-          -p:Platform=x64
-          --logger "trx;LogFileName=benchmark-test-results.trx"
-          --results-directory ./TestResults
+      - name: Verify every test project reported results
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_count="$(find tests -name '*.csproj' | wc -l | tr -d '[:space:]')"
+          coverlet_count=0
+          while IFS= read -r proj; do
+            if grep -q 'coverlet.collector' "$proj"; then
+              coverlet_count=$((coverlet_count + 1))
+            fi
+          done < <(find tests -name '*.csproj' | sort)
+          trx_count=0
+          cov_count=0
+          if [ -d TestResults ]; then
+            trx_count="$(find TestResults -name '*.trx' | wc -l | tr -d '[:space:]')"
+            cov_count="$(find TestResults -name 'coverage.cobertura.xml' | wc -l | tr -d '[:space:]')"
+          fi
+          echo "test projects=$test_count coverlet projects=$coverlet_count trx=$trx_count coverage=$cov_count"
+          if [ "$trx_count" -lt "$test_count" ]; then
+            echo "Expected at least one TRX file per test project."
+            find TestResults -name '*.trx' -print || true
+            exit 1
+          fi
+          if [ "$coverlet_count" -eq 0 ]; then
+            echo "No test project references coverlet.collector, so coverage cannot be collected."
+            exit 1
+          fi
+          if [ "$cov_count" -lt "$coverlet_count" ]; then
+            echo "Expected at least one Cobertura file per test project that references coverlet.collector."
+            find TestResults -name 'coverage.cobertura.xml' -print || true
+            exit 1
+          fi
+
+      - name: Generate coverage report
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+          reportgenerator \
+            "-reports:TestResults/**/coverage.cobertura.xml" \
+            "-targetdir:TestResults/CoverageReport" \
+            "-reporttypes:Html;Cobertura;TextSummary"
+
+      - name: Add coverage summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f TestResults/CoverageReport/Summary.txt ]]; then
+            echo "Coverage summary was not produced."
+            exit 1
+          fi
+          cat TestResults/CoverageReport/Summary.txt
+          {
+            echo "## Code Coverage"
+            echo
+            echo '```text'
+            cat TestResults/CoverageReport/Summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: code-coverage-report
+          path: TestResults/CoverageReport/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload test results
         if: always()
@@ -64,12 +204,13 @@ jobs:
         with:
           name: linux-test-results
           path: TestResults/**/*.trx
+          if-no-files-found: error
           retention-days: 14
 
   windows-build:
     name: Windows Build Validation
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -86,19 +227,28 @@ jobs:
         run: dotnet restore VectorNNTP.NNTPD.sln
 
       - name: Build solution
-        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release --no-restore -p:Platform=x64
+        # Same Any CPU Release build as Linux. This job does not repeat tests.
+        # VectorNNTP.NNTPD.PostAllocBench is a benchmark tool with no test project;
+        # the solution build is its validation. Companion test projects cover
+        # VectorNNTP.NNTPD.Bench and VectorNNTP.StandaloneTxPoc.
+        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release --no-restore
 
       - name: Publish NNTPD win-x64
-        run: >
-          dotnet publish src/VectorNNTP.NNTPD/VectorNNTP.NNTPD.csproj
-          --configuration Release
-          --runtime win-x64
-          --output ./artifacts/win-x64
-          --no-restore
+        # Runtime identifier publish, including Native AOT from Directory.Build.targets.
+        # This is not the managed build used for tests. Solution restore already
+        # includes win-x64 because the production executables set RuntimeIdentifiers.
+        shell: pwsh
+        run: |
+          dotnet publish src/VectorNNTP.NNTPD/VectorNNTP.NNTPD.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --output ./artifacts/win-x64 `
+            --no-restore
 
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v7
         with:
           name: nntpd-win-x64-ci-build
           path: artifacts/win-x64/
+          if-no-files-found: error
           retention-days: 7

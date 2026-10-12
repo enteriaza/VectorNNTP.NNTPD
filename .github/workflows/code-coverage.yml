@@ -1,13 +1,17 @@
 name: Code Coverage
 
+# Automatic coverage runs once, inside Build and Validate, on pull requests and
+# pushes. This workflow remains for an explicit manual rerun and does not
+# subscribe to push, so master does not run the suite twice.
+# Coverage is collected only for test projects that already reference
+# coverlet.collector. Today that is VectorNNTP.NNTPD.Tests.
+
 on:
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: coverage-${{ github.workflow }}-${{ github.ref }}
@@ -17,7 +21,7 @@ jobs:
   coverage:
     name: Test and Code Coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -30,39 +34,99 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Restore
+      - name: Restore solution
         run: dotnet restore VectorNNTP.NNTPD.sln
 
-      - name: Build
-        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release --no-restore -p:Platform=x64
+      - name: Build solution
+        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release --no-restore
 
-      - name: Test with coverage
-        timeout-minutes: 10
-        run: >
-          dotnet test tests/VectorNNTP.NNTPD.Tests/VectorNNTP.NNTPD.Tests.csproj
-          --configuration Release
-          -p:Platform=x64
-          --no-build
-          --collect:"XPlat Code Coverage"
-          --results-directory ./TestResults
-          --logger "trx;LogFileName=test-results.trx"
-
-      - name: Install ReportGenerator
-        run: dotnet tool install --global dotnet-reportgenerator-globaltool
-
-      - name: Generate coverage report
-        run: >
-          reportgenerator
-          "-reports:TestResults/**/coverage.cobertura.xml"
-          "-targetdir:TestResults/CoverageReport"
-          "-reporttypes:Html;Cobertura;TextSummary"
-
-      - name: Display coverage summary
-        run: cat TestResults/CoverageReport/Summary.txt
-
-      - name: Add coverage summary to GitHub
+      - name: Test solution with coverage where the collector is already referenced
+        timeout-minutes: 25
         shell: bash
         run: |
+          set -euo pipefail
+          failed=0
+          while IFS= read -r proj; do
+            name="$(basename "$proj" .csproj)"
+            echo "Testing $name"
+            if grep -q 'coverlet.collector' "$proj"; then
+              if ! dotnet test "$proj" \
+                --configuration Release \
+                --no-build \
+                --no-restore \
+                --collect:"XPlat Code Coverage" \
+                --results-directory ./TestResults \
+                --logger "trx;LogFileName=${name}.trx"; then
+                echo "Tests failed: $name"
+                failed=1
+              fi
+            else
+              if ! dotnet test "$proj" \
+                --configuration Release \
+                --no-build \
+                --no-restore \
+                --results-directory ./TestResults \
+                --logger "trx;LogFileName=${name}.trx"; then
+                echo "Tests failed: $name"
+                failed=1
+              fi
+            fi
+          done < <(find tests -name '*.csproj' | sort)
+          exit "$failed"
+
+      - name: Verify every test project reported results
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_count="$(find tests -name '*.csproj' | wc -l | tr -d '[:space:]')"
+          coverlet_count=0
+          while IFS= read -r proj; do
+            if grep -q 'coverlet.collector' "$proj"; then
+              coverlet_count=$((coverlet_count + 1))
+            fi
+          done < <(find tests -name '*.csproj' | sort)
+          trx_count=0
+          cov_count=0
+          if [ -d TestResults ]; then
+            trx_count="$(find TestResults -name '*.trx' | wc -l | tr -d '[:space:]')"
+            cov_count="$(find TestResults -name 'coverage.cobertura.xml' | wc -l | tr -d '[:space:]')"
+          fi
+          echo "test projects=$test_count coverlet projects=$coverlet_count trx=$trx_count coverage=$cov_count"
+          if [ "$trx_count" -lt "$test_count" ]; then
+            echo "Expected at least one TRX file per test project."
+            exit 1
+          fi
+          if [ "$coverlet_count" -eq 0 ]; then
+            echo "No test project references coverlet.collector, so coverage cannot be collected."
+            exit 1
+          fi
+          if [ "$cov_count" -lt "$coverlet_count" ]; then
+            echo "Expected at least one Cobertura file per test project that references coverlet.collector."
+            exit 1
+          fi
+
+      - name: Generate coverage report
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+          reportgenerator \
+            "-reports:TestResults/**/coverage.cobertura.xml" \
+            "-targetdir:TestResults/CoverageReport" \
+            "-reporttypes:Html;Cobertura;TextSummary"
+
+      - name: Add coverage summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f TestResults/CoverageReport/Summary.txt ]]; then
+            echo "Coverage summary was not produced."
+            exit 1
+          fi
+          cat TestResults/CoverageReport/Summary.txt
           {
             echo "## Code Coverage"
             echo
@@ -72,10 +136,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage report
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: code-coverage-report
           path: TestResults/CoverageReport/
+          if-no-files-found: error
           retention-days: 14
 
       - name: Upload test results
@@ -84,4 +150,5 @@ jobs:
         with:
           name: test-results
           path: TestResults/**/*.trx
+          if-no-files-found: error
           retention-days: 14

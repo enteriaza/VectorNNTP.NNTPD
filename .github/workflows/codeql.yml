@@ -43,7 +43,7 @@ jobs:
           global-json-file: global.json
 
       - name: Build solution
-        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release -p:Platform=x64
+        run: dotnet build VectorNNTP.NNTPD.sln --configuration Release
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
