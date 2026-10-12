@@ -169,6 +169,175 @@ public sealed class StorageVatpQueueIngressTests
         Assert.Contains(seen, static text => text.Contains("beta\r\n", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Windows_cover_every_payload_byte_and_precede_result()
+    {
+        var body = new StringBuilder(300_000);
+        for (var line = 0; line < 3_000; line++)
+        {
+            body.Append('x', 98).Append("\r\n");
+        }
+
+        var built = Build("<store-window@seg.test>", body.ToString());
+        var queue = new AcceptedArticleQueue();
+        await using var harness = await Harness.StartAsync(queue);
+        await harness.SendRawAsync(StoreFrame(built.Record.ArtId, 1));
+        await harness.SendRawAsync(MetaFrame(built, 1));
+
+        var art = built.Record.ArtData;
+        var offset = 0;
+        while (offset < art.Length)
+        {
+            var length = Math.Min(64 * 1024, art.Length - offset);
+            var fin = offset + length == art.Length;
+            await harness.SendRawAsync(VatpFrameEncoder.ToSingleBuffer(
+                VatpFrameEncoder.EncodeData(1, art.Slice(offset, length), fin)));
+            offset += length;
+        }
+
+        await harness.SendRawAsync(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeEnd(1)));
+        var frames = await harness.ReadUntilAsync(static received =>
+            received.Any(frame => frame.Header.Type == VatpFrameType.Result));
+
+        long credit = 0;
+        var resultSeen = false;
+        foreach (var frame in frames)
+        {
+            if (frame.Header.Type == VatpFrameType.Window)
+            {
+                Assert.False(resultSeen);
+                Assert.Equal(1u, frame.Header.StreamId);
+                Assert.True(VatpControlPayload.TryDecodeWindow(frame.Payload, out var add));
+                credit += add;
+            }
+
+            if (frame.Header.Type == VatpFrameType.Result)
+            {
+                resultSeen = true;
+                Assert.Equal(VatpStoreOutcome.Accepted, frame.Payload[0]);
+            }
+        }
+
+        Assert.Equal(built.Record.ArtSize, credit);
+        Assert.Equal(1, queue.EnqueuedCount);
+    }
+
+    [Fact]
+    public async Task Split_reads_enqueue_a_large_article()
+    {
+        var body = new StringBuilder(768_000);
+        for (var line = 0; line < 7_680; line++)
+        {
+            body.Append('y', 98).Append("\r\n");
+        }
+
+        var built = Build("<store-split@seg.test>", body.ToString());
+        var framed = EncodeStore(built, 1);
+
+        await AssertChunkedEnqueueAsync(built, framed, chunkSize: 7);
+        await AssertChunkedEnqueueAsync(built, framed, chunkSize: 16 * 1024);
+        await AssertChunkedEnqueueAsync(built, framed, chunkSize: framed.Length);
+        await AssertExactFrameReadsAsync(built);
+    }
+
+    [Fact]
+    public async Task Interleaved_streams_split_across_reads_both_enqueue()
+    {
+        var first = Build("<store-left@seg.test>", "left-body\r\n");
+        var second = Build("<store-right@seg.test>", "right-body\r\n");
+        var framed = EncodeStore(first, 1).Concat(EncodeStore(second, 2)).ToArray();
+        var queue = new AcceptedArticleQueue();
+        await using var harness = await Harness.StartAsync(queue);
+        await harness.Transport.ClientWriteChunkedAsync(framed, 5);
+        var frames = await harness.ReadUntilAsync(static received =>
+            received.Count(static frame => frame.Header.Type == VatpFrameType.Result) == 2);
+
+        Assert.Equal(2, frames.Count(static frame => frame.Header.Type == VatpFrameType.Result && frame.Payload[0] == VatpStoreOutcome.Accepted));
+        Assert.Equal(2, queue.EnqueuedCount);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < 2; i++)
+        {
+            var delivery = await queue.DequeueAsync(CancellationToken.None);
+            Assert.True(delivery.HasArticle);
+            seen.Add(Encoding.ASCII.GetString(delivery.Article.ArtData.Span));
+        }
+
+        Assert.Contains(seen, static text => text.Contains("left-body\r\n", StringComparison.Ordinal));
+        Assert.Contains(seen, static text => text.Contains("right-body\r\n", StringComparison.Ordinal));
+    }
+
+    private static async Task AssertChunkedEnqueueAsync(Built built, byte[] framed, int chunkSize)
+    {
+        var queue = new AcceptedArticleQueue();
+        await using var harness = await Harness.StartAsync(queue);
+        await harness.Transport.ClientWriteChunkedAsync(framed, chunkSize);
+        var frames = await harness.ReadUntilAsync(static received =>
+            received.Any(frame => frame.Header.Type == VatpFrameType.Result));
+        Assert.Equal(VatpStoreOutcome.Accepted, Outcome(frames));
+        var delivery = await queue.DequeueAsync(CancellationToken.None);
+        Assert.True(delivery.HasArticle);
+        Assert.True(delivery.Article.ArtData.Span.SequenceEqual(built.Record.ArtData.Span));
+        Assert.Equal(1, queue.EnqueuedCount);
+    }
+
+    private static async Task AssertExactFrameReadsAsync(Built built)
+    {
+        var queue = new AcceptedArticleQueue();
+        await using var harness = await Harness.StartAsync(queue);
+        foreach (var frame in EnumerateStoreFrames(built, 1))
+        {
+            await harness.SendRawAsync(frame);
+        }
+
+        var frames = await harness.ReadUntilAsync(static received =>
+            received.Any(frame => frame.Header.Type == VatpFrameType.Result));
+        Assert.Equal(VatpStoreOutcome.Accepted, Outcome(frames));
+        var delivery = await queue.DequeueAsync(CancellationToken.None);
+        Assert.True(delivery.HasArticle);
+        Assert.True(delivery.Article.ArtData.Span.SequenceEqual(built.Record.ArtData.Span));
+    }
+
+    private static byte[] EncodeStore(Built built, uint streamId)
+    {
+        var parts = EnumerateStoreFrames(built, streamId);
+        var length = 0;
+        foreach (var part in parts)
+        {
+            length += part.Length;
+        }
+
+        var framed = new byte[length];
+        var offset = 0;
+        foreach (var part in parts)
+        {
+            part.CopyTo(framed.AsSpan(offset));
+            offset += part.Length;
+        }
+
+        return framed;
+    }
+
+    private static List<byte[]> EnumerateStoreFrames(Built built, uint streamId)
+    {
+        var parts = new List<byte[]>
+        {
+            StoreFrame(built.Record.ArtId, streamId),
+            MetaFrame(built, streamId),
+        };
+        var art = built.Record.ArtData;
+        var offset = 0;
+        while (offset < art.Length)
+        {
+            var length = Math.Min(64 * 1024, art.Length - offset);
+            var fin = offset + length == art.Length;
+            parts.Add(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeData(streamId, art.Slice(offset, length), fin)));
+            offset += length;
+        }
+
+        parts.Add(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeEnd(streamId)));
+        return parts;
+    }
+
     private static int CountHop(string article, string hop) =>
         article.Split(hop, StringSplitOptions.None).Length - 1;
 
@@ -356,6 +525,20 @@ public sealed class StorageVatpQueueIngressTests
         }
 
         public Task ClientWriteAsync(byte[] frame) => _toServer.Writer.WriteAsync(frame).AsTask();
+
+        public async Task ClientWriteChunkedAsync(byte[] frame, int chunkSize)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSize);
+            var offset = 0;
+            while (offset < frame.Length)
+            {
+                var count = Math.Min(chunkSize, frame.Length - offset);
+                var slice = new byte[count];
+                frame.AsSpan(offset, count).CopyTo(slice);
+                await _toServer.Writer.WriteAsync(slice).ConfigureAwait(false);
+                offset += count;
+            }
+        }
 
         public Task<byte[]> ReadServerAsync(CancellationToken cancellationToken) =>
             _toClient.Reader.ReadAsync(cancellationToken).AsTask();

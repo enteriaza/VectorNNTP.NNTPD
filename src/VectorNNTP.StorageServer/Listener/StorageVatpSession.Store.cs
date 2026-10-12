@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.StorageServer.Ingress;
@@ -120,7 +121,14 @@ public sealed partial class StorageVatpSession
             return false;
         }
 
+        var dataStarted = Stopwatch.GetTimestamp();
         var apply = store.Receive.TryAcceptData(frame.Payload, frame.Header.HasFin);
+        Interlocked.Add(ref _dataAcceptTicks, Stopwatch.GetTimestamp() - dataStarted);
+        Interlocked.Increment(ref _dataAcceptCount);
+        if (apply.Success)
+        {
+            Interlocked.Add(ref _dataCopyBytes, frame.Payload.Length);
+        }
         if (!apply.Success)
         {
             var error = store.Receive.Failure;
@@ -132,8 +140,11 @@ public sealed partial class StorageVatpSession
         var payloadLength = checked((uint)frame.Payload.Length);
         if (payloadLength > 0 && store.Receive.TryAcceptWindow(payloadLength).Success)
         {
+            var windowStarted = Stopwatch.GetTimestamp();
             await WriteEncodedAsync(VatpFrameEncoder.EncodeWindow(streamId, payloadLength), cancellationToken)
                 .ConfigureAwait(false);
+            Interlocked.Add(ref _windowWriteTicks, Stopwatch.GetTimestamp() - windowStarted);
+            Interlocked.Increment(ref _windowWriteCount);
         }
 
         if (store.Receive.IsTerminal)
@@ -157,8 +168,18 @@ public sealed partial class StorageVatpSession
             return false;
         }
 
+        var endStarted = Stopwatch.GetTimestamp();
         var apply = store.Receive.TryAcceptEnd();
-        if (!apply.Success || !store.Receive.TryTakeRecord(out var record))
+        var tookRecord = false;
+        ArticleRecord record = default;
+        if (apply.Success)
+        {
+            tookRecord = store.Receive.TryTakeRecord(out record);
+        }
+
+        Interlocked.Add(ref _endValidateTicks, Stopwatch.GetTimestamp() - endStarted);
+        Interlocked.Increment(ref _endValidateCount);
+        if (!tookRecord)
         {
             var error = store.Receive.Failure == VatpErrorCode.None
                 ? VatpErrorCode.IncompleteTransfer
@@ -191,6 +212,7 @@ public sealed partial class StorageVatpSession
             return true;
         }
 
+        var resultStarted = Stopwatch.GetTimestamp();
         store.AcceptStarted = true;
         RemoveStore(streamId);
         StorageVatpSessionLogMessages.StoreCompleted(
@@ -201,6 +223,8 @@ public sealed partial class StorageVatpSession
                 VatpFrameEncoder.EncodeResult(streamId, VatpStoreOutcome.Accepted),
                 cancellationToken)
             .ConfigureAwait(false);
+        Interlocked.Add(ref _enqueueToResultTicks, Stopwatch.GetTimestamp() - resultStarted);
+        Interlocked.Increment(ref _enqueueToResultCount);
         return true;
     }
 

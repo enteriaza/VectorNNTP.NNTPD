@@ -38,6 +38,12 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
     private int _disposed;
     private int _activeConnections;
 
+    /// <summary>Send buffer of the most recently accepted socket, in bytes. Zero before the first accept.</summary>
+    internal static int LastAcceptedSendBuffer { get; private set; }
+
+    /// <summary>Receive buffer of the most recently accepted socket, in bytes. Zero before the first accept.</summary>
+    internal static int LastAcceptedReceiveBuffer { get; private set; }
+
     /// <summary>Initializes the Listener service for isolated tests with a pre-ready certificate gate.</summary>
     public StorageVatpListenerService(
         StorageServerRuntimeOptions runtime,
@@ -386,6 +392,8 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         try
         {
             await using var network = new NetworkStream(accepted, ownsSocket: true);
+            LastAcceptedSendBuffer = accepted.SendBufferSize;
+            LastAcceptedReceiveBuffer = accepted.ReceiveBufferSize;
             using var lease = _certificates.Acquire();
             await using var ssl = new SslStream(network, leaveInnerStreamOpen: true);
             var options = new SslServerAuthenticationOptions

@@ -43,6 +43,36 @@ public sealed class AcceptedArticleQueueTests
     }
 
     [Fact]
+    public async Task Counters_track_enqueue_and_dequeue_without_copying_the_buffer()
+    {
+        var bytes = new byte[] { 9, 8, 7 };
+        var queue = new AcceptedArticleQueue();
+        Assert.Equal(0, queue.EnqueuedCount);
+        Assert.Equal(0, queue.DequeuedCount);
+        Assert.Equal(0, queue.QueuedBytes);
+
+        Assert.True(queue.TryEnqueue(new AcceptedArticle(default, 1, bytes.Length, bytes)));
+        Assert.Equal(1, queue.EnqueuedCount);
+        Assert.Equal(0, queue.DequeuedCount);
+        Assert.Equal(bytes.Length, queue.QueuedBytes);
+
+        var delivery = await queue.DequeueAsync(CancellationToken.None);
+        Assert.True(delivery.HasArticle);
+        Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(delivery.Article.ArtData, out var segment));
+        Assert.Same(bytes, segment.Array);
+        Assert.Equal(1, queue.EnqueuedCount);
+        Assert.Equal(1, queue.DequeuedCount);
+        Assert.Equal(0, queue.QueuedBytes);
+
+        queue.Complete();
+        Assert.False(queue.TryEnqueue(new AcceptedArticle(default, 1, bytes.Length, bytes)));
+        Assert.Equal(1, queue.EnqueuedCount);
+        var empty = await queue.DequeueAsync(CancellationToken.None);
+        Assert.False(empty.HasArticle);
+        Assert.Equal(1, queue.DequeuedCount);
+    }
+
+    [Fact]
     public async Task Dequeue_returns_the_same_buffer_the_producer_enqueued()
     {
         var bytes = new byte[] { 1, 2, 3, 4 };

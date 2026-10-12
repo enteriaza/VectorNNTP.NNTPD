@@ -28,6 +28,22 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
             AllowSynchronousContinuations = false,
         });
 
+    private long _enqueued;
+    private long _dequeued;
+    private long _queuedBytes;
+
+    /// <summary>Articles successfully written to the channel.</summary>
+    public long EnqueuedCount => Volatile.Read(ref _enqueued);
+
+    /// <summary>Articles removed by <see cref="DequeueAsync"/>.</summary>
+    public long DequeuedCount => Volatile.Read(ref _dequeued);
+
+    /// <summary>
+    /// Bytes currently held by the channel. A snapshot can tear relative to
+    /// <see cref="EnqueuedCount"/> and <see cref="DequeuedCount"/>.
+    /// </summary>
+    public long QueuedBytes => Volatile.Read(ref _queuedBytes);
+
     /// <inheritdoc />
     public bool TryEnqueue(AcceptedArticle article)
     {
@@ -36,7 +52,14 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
             throw new ArgumentException("ArtSize must match ArtData.Length and be at least 1.", nameof(article));
         }
 
-        return _channel.Writer.TryWrite(article);
+        if (!_channel.Writer.TryWrite(article))
+        {
+            return false;
+        }
+
+        Interlocked.Increment(ref _enqueued);
+        Interlocked.Add(ref _queuedBytes, article.ArtSize);
+        return true;
     }
 
     /// <inheritdoc />
@@ -45,6 +68,8 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
         try
         {
             var article = await _channel.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Increment(ref _dequeued);
+            Interlocked.Add(ref _queuedBytes, -article.ArtSize);
             return new AcceptedArticleDelivery(true, article);
         }
         catch (ChannelClosedException)
