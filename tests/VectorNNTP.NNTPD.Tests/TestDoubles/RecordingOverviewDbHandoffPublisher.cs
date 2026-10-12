@@ -26,6 +26,27 @@ internal sealed class RecordingOverviewDbHandoffPublisher : IOverviewDbHandoffPu
     /// <summary>Completes when the first payload is recorded as confirmed.</summary>
     public Task Confirmed => _confirmed.Task;
 
+    private int _confirmWaitCount;
+    private TaskCompletionSource? _confirmWait;
+
+    /// <summary>
+    /// Completes when at least <paramref name="count"/> payloads have been confirmed.
+    /// </summary>
+    public Task WaitUntilConfirmedAsync(int count, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            if (Payloads.Count >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            _confirmWaitCount = count;
+            _confirmWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _confirmWait.Task.WaitAsync(cancellationToken);
+        }
+    }
+
     /// <summary>Remaining attempts that enqueue a failure instead of confirming.</summary>
     public int RemainingFailures { get; set; }
 
@@ -147,9 +168,13 @@ internal sealed class RecordingOverviewDbHandoffPublisher : IOverviewDbHandoffPu
             lock (_gate)
             {
                 Payloads.Add(item.Payload.ToArray());
+                _confirmed.TrySetResult();
+                if (_confirmWait is not null && Payloads.Count >= _confirmWaitCount)
+                {
+                    _confirmWait.TrySetResult();
+                    _confirmWait = null;
+                }
             }
-
-            _confirmed.TrySetResult();
         }
         finally
         {

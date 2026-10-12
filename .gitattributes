@@ -1,0 +1,3 @@
+# INN corpus hashes are the committed bytes. Mark the tree binary so
+# core.autocrlf cannot rewrite LF fixtures to CRLF on Windows checkout.
+tests/VectorNNTP.NNTPD.Tests/Data/InnArticles/** -text

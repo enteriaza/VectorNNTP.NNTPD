@@ -10,6 +10,8 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
     {
         private readonly ConcurrentQueue<ScriptedNntpServer> _servers = new();
 
+        private readonly object _attemptsGate = new();
+
         private int _currentConnects;
 
         private int _maxObservedConnects;
@@ -42,7 +44,10 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(provider);
-            ConnectAttempts.Add(provider);
+            lock (_attemptsGate)
+            {
+                ConnectAttempts.Add(provider);
+            }
             var current = Interlocked.Increment(ref _currentConnects);
             try
             {

@@ -325,7 +325,10 @@ namespace VectorNNTP.BackFiller.Tests.Logging
                 logger.Information("console-should-stay-off");
                 Log.CloseAndFlush();
                 Assert.DoesNotContain("console-should-stay-off", captured.ToString(), StringComparison.Ordinal);
-                Assert.DoesNotContain(Sinks(logger), static sink => sink.GetType().Name.Contains("Console", StringComparison.Ordinal));
+                Assert.DoesNotContain(
+                    Sinks(logger),
+                    static sink => sink is ILogEventSink
+                        && sink.GetType().Name.Contains("Console", StringComparison.Ordinal));
             }
             finally
             {

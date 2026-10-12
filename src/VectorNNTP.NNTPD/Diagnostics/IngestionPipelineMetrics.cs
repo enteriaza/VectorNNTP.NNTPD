@@ -86,6 +86,9 @@ public sealed class IngestionPipelineMetrics
     /// <summary>Records news-log <c>Write</c> duration.</summary>
     public void RecordNews(long startTimestamp) => _news.Record(startTimestamp);
 
+    /// <summary>Records an exact news-log duration. Tests use this so the sample is not the wall clock.</summary>
+    internal void RecordNews(TimeSpan elapsed) => _news.RecordExact(elapsed);
+
     /// <summary>Records one worker item from dequeue return through finish or requeue.</summary>
     public void RecordWorkerItem(long startTimestamp)
     {
@@ -587,6 +590,9 @@ internal sealed class DurationHistogram
 
     public void Record(long startTimestamp) =>
         RecordElapsed(Stopwatch.GetElapsedTime(startTimestamp));
+
+    /// <summary>Records <paramref name="elapsed"/> without reading the clock again.</summary>
+    internal void RecordExact(TimeSpan elapsed) => RecordElapsed(elapsed);
 
     public void RecordStopwatchTicks(long stopwatchTicks)
     {

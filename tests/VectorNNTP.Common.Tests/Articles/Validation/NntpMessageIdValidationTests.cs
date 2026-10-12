@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using VectorNNTP.Common.Articles.Validation;
 
@@ -157,15 +158,24 @@ namespace VectorNNTP.Common.Tests.Articles.Validation
             var vector = Build(NntpMessageIdValidation.MaxMessageIdLength);
             var literal = RepeatLiteral((byte)'1', 32);
             var invalid = "<double..dot@example.com>"u8.ToArray();
-            for (var i = 0; i < 64; i++)
-            {
-                _ = NntpMessageIdValidation.IsValidMessageId(scalar);
-                _ = NntpMessageIdValidation.IsValidMessageId(vector);
-                _ = NntpMessageIdValidation.IsValidMessageId(literal);
-                _ = NntpMessageIdValidation.IsValidMessageId(invalid);
-            }
+            // Exercise compiles the measured body, including the inlined validator, before the
+            // counter starts. The window is one call of that body. GetAllocatedBytesForCurrentThread
+            // counts only this thread, so the window must not contain the test method's own hot loop:
+            // tiered compilation can charge a one-time JIT cost to that loop.
+            Exercise(scalar, vector, literal, invalid);
 
             var before = GC.GetAllocatedBytesForCurrentThread();
+            Exercise(scalar, vector, literal, invalid);
+            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+
+        /// <summary>
+        /// Runs the four validator inputs. Optimized on the first call so the measured call is not
+        /// a tier-0 body being replaced.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.AggressiveOptimization)]
+        private static void Exercise(byte[] scalar, byte[] vector, byte[] literal, byte[] invalid)
+        {
             for (var i = 0; i < 2_000; i++)
             {
                 _ = NntpMessageIdValidation.IsValidMessageId(scalar);
@@ -173,8 +183,6 @@ namespace VectorNNTP.Common.Tests.Articles.Validation
                 _ = NntpMessageIdValidation.IsValidMessageId(literal);
                 _ = NntpMessageIdValidation.IsValidMessageId(invalid);
             }
-
-            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
         }
 
         private static byte[] RepeatLeft(byte value, int count)

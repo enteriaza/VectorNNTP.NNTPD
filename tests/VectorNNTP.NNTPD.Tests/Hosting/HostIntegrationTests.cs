@@ -146,7 +146,11 @@ public sealed class HostIntegrationTests
         service.CompleteExecution(new InvalidOperationException("boom"));
 
         await lifecycle.UnexpectedTermination.WaitAsync(TimeSpan.FromSeconds(5));
-        await shutdown.WaitAsync(TimeSpan.FromSeconds(10));
+        var shutdownError = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => shutdown.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(
+            "An application service terminated unexpectedly while the application was Running.",
+            shutdownError.Message);
 
         Assert.Equal(ApplicationState.Stopped, lifecycle.State);
     }

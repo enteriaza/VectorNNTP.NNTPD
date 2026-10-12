@@ -124,7 +124,13 @@ public sealed class NewsgroupCatalogueServiceTests
 
         factory.Newsgroups = [new NntpGroupRow("new.group", "", 8, 3, (byte)'n')];
         clock.Advance(TimeSpan.FromMinutes(5));
-        await WaitUntilAsync(() => factory.QueryNewsgroupsCount >= 2);
+        await WaitUntilAsync(() =>
+        {
+            var current = catalogue.Current;
+            return !ReferenceEquals(current, first)
+                && current.Groups.Count == 1
+                && current.Groups[0].GroupName == "new.group";
+        });
 
         var second = catalogue.Current;
         Assert.NotSame(first, second);

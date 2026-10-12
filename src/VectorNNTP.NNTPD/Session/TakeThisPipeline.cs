@@ -248,10 +248,7 @@ internal sealed class TakeThisPipeline
 
         AfterReceiveStarted?.Invoke();
         var reads = Interlocked.Increment(ref _activeArticleReads);
-        if (reads > _maxActiveArticleReads)
-        {
-            _maxActiveArticleReads = reads;
-        }
+        ObservePeak(ref _maxActiveArticleReads, reads);
 
         try
         {
@@ -916,10 +913,7 @@ internal sealed class TakeThisPipeline
         }
 
         var processing = Interlocked.Increment(ref _activeArticleProcessing);
-        if (processing > _maxActiveArticleProcessing)
-        {
-            _maxActiveArticleProcessing = processing;
-        }
+        ObservePeak(ref _maxActiveArticleProcessing, processing);
 
         AfterProcessStarted?.Invoke(slot.MessageId);
         try
@@ -1055,6 +1049,27 @@ internal sealed class TakeThisPipeline
         var previous = _progress;
         _progress = NewProgress();
         previous.TrySetResult();
+    }
+
+    /// <summary>
+    /// Records <paramref name="observed"/> when it exceeds <paramref name="peak"/>.
+    /// Concurrent observers cannot publish a lower peak over a higher one.
+    /// </summary>
+    private static void ObservePeak(ref int peak, int observed)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref peak);
+            if (observed <= current)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref peak, observed, current) == current)
+            {
+                return;
+            }
+        }
     }
 
     private static string SlotMessageId(Slot slot) =>

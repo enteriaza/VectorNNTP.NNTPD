@@ -1,6 +1,4 @@
 using System.Net;
-using System.Net.Sockets;
-using System.Text;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.PostFilter;
@@ -14,7 +12,7 @@ public sealed class SpamdTransportTests
     [Fact]
     public async Task SequentialChecks_ReuseOneConnection()
     {
-        await using var server = await FakeSpamd.StartAsync(keepOpen: true);
+        await using var server = await LocalSpamdServer.StartAsync(keepOpen: true);
         var metrics = new SpamdTransportMetrics();
         await using var client = new SpamdCheckClient(metrics);
         var target = Target(server.Port, maxConnections: 1);
@@ -30,7 +28,7 @@ public sealed class SpamdTransportTests
     [Fact]
     public async Task BrokenConnection_IsEvictedAndReplaced()
     {
-        await using var server = await FakeSpamd.StartAsync(keepOpen: false);
+        await using var server = await LocalSpamdServer.StartAsync(keepOpen: false);
         var metrics = new SpamdTransportMetrics();
         await using var client = new SpamdCheckClient(metrics);
         var target = Target(server.Port, maxConnections: 1);
@@ -45,7 +43,7 @@ public sealed class SpamdTransportTests
     [Fact]
     public async Task ProtocolError_DoesNotReuseConnection()
     {
-        await using var server = await FakeSpamd.StartAsync(keepOpen: true, response: "NOPE\r\n\r\n"u8.ToArray());
+        await using var server = await LocalSpamdServer.StartAsync(keepOpen: true, response: "NOPE\r\n\r\n"u8.ToArray());
         var metrics = new SpamdTransportMetrics();
         await using var client = new SpamdCheckClient(metrics);
         var result = await CheckAsync(client, Target(server.Port, maxConnections: 1));
@@ -57,7 +55,7 @@ public sealed class SpamdTransportTests
     [Fact]
     public async Task Timeout_IsClassifiedAndEvicts()
     {
-        await using var server = await FakeSpamd.StartAsync(keepOpen: true, hang: true);
+        await using var server = await LocalSpamdServer.StartAsync(keepOpen: true, hang: true);
         var metrics = new SpamdTransportMetrics();
         await using var client = new SpamdCheckClient(metrics);
         var target = Target(server.Port, maxConnections: 1, operation: TimeSpan.FromMilliseconds(200));
@@ -70,7 +68,7 @@ public sealed class SpamdTransportTests
     [Fact]
     public async Task Cancellation_IsRethrown()
     {
-        await using var server = await FakeSpamd.StartAsync(keepOpen: true, hang: true);
+        await using var server = await LocalSpamdServer.StartAsync(keepOpen: true, hang: true);
         await using var client = new SpamdCheckClient();
         using var cts = new CancellationTokenSource();
         var check = CheckAsync(client, Target(server.Port, operation: TimeSpan.FromSeconds(5)), cts.Token);
@@ -95,7 +93,7 @@ public sealed class SpamdTransportTests
     [Fact]
     public async Task Failover_SkipsUnreachableHost()
     {
-        await using var good = await FakeSpamd.StartAsync(keepOpen: true);
+        await using var good = await LocalSpamdServer.StartAsync(keepOpen: true);
         await using var client = new SpamdCheckClient();
         var result = await client.CheckAsync(
             Article(),
@@ -116,7 +114,7 @@ public sealed class SpamdTransportTests
     [Fact]
     public async Task ConcurrentChecks_HonorPoolSize()
     {
-        await using var server = await FakeSpamd.StartAsync(keepOpen: true, delay: TimeSpan.FromMilliseconds(80));
+        await using var server = await LocalSpamdServer.StartAsync(keepOpen: true, delay: TimeSpan.FromMilliseconds(80));
         var metrics = new SpamdTransportMetrics();
         await using var client = new SpamdCheckClient(metrics);
         var target = Target(server.Port, maxConnections: 2);
@@ -142,7 +140,7 @@ public sealed class SpamdTransportTests
     public async Task LeftoverBytes_AreProtocolFailure()
     {
         var extra = "SPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\nEXTRA"u8.ToArray();
-        await using var server = await FakeSpamd.StartAsync(keepOpen: true, response: extra);
+        await using var server = await LocalSpamdServer.StartAsync(keepOpen: true, response: extra);
         await using var client = new SpamdCheckClient();
         var result = await CheckAsync(client, Target(server.Port));
         Assert.Equal(PostFilterSpamAssassinStatus.Failed, result.Status);
@@ -154,7 +152,7 @@ public sealed class SpamdTransportTests
     {
         var leftover = "SPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\nSPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\n"u8.ToArray();
         var ham = "SPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\n"u8.ToArray();
-        await using var server = await FakeSpamd.StartAsync(
+        await using var server = await LocalSpamdServer.StartAsync(
             keepOpen: true,
             response: leftover,
             subsequentResponse: ham);
@@ -204,204 +202,5 @@ public sealed class SpamdTransportTests
             parseStatus: ArticleParseStatus.CanonicalV1,
             artData: bytes,
             fields: default);
-    }
-
-    private sealed class FakeSpamd : IAsyncDisposable
-    {
-        private readonly TcpListener _listener;
-        private readonly CancellationTokenSource _cts = new();
-        private readonly Task _accept;
-        private readonly TaskCompletionSource _accepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _connections;
-        private int _checks;
-        private int _inflight;
-        private int _peak;
-
-        private FakeSpamd(
-            TcpListener listener,
-            bool keepOpen,
-            bool hang,
-            TimeSpan delay,
-            byte[]? response,
-            byte[]? subsequentResponse)
-        {
-            _listener = listener;
-            Port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            _accept = AcceptLoopAsync(keepOpen, hang, delay, response, subsequentResponse);
-        }
-
-        public int Port { get; }
-
-        public int Connections => Volatile.Read(ref _connections);
-
-        public int Checks => Volatile.Read(ref _checks);
-
-        public int PeakConnections => Volatile.Read(ref _peak);
-
-        public Task Accepted => _accepted.Task;
-
-        public static async Task<FakeSpamd> StartAsync(
-            bool keepOpen,
-            bool hang = false,
-            TimeSpan delay = default,
-            byte[]? response = null,
-            byte[]? subsequentResponse = null)
-        {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var server = new FakeSpamd(listener, keepOpen, hang, delay, response, subsequentResponse);
-            await Task.Yield();
-            return server;
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await _cts.CancelAsync().ConfigureAwait(false);
-            _listener.Stop();
-            try
-            {
-                await _accept.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-
-            _cts.Dispose();
-        }
-
-        private async Task AcceptLoopAsync(
-            bool keepOpen,
-            bool hang,
-            TimeSpan delay,
-            byte[]? response,
-            byte[]? subsequentResponse)
-        {
-            while (!_cts.IsCancellationRequested)
-            {
-                TcpClient client;
-                try
-                {
-                    client = await _listener.AcceptTcpClientAsync(_cts.Token).ConfigureAwait(false);
-                }
-                catch (Exception) when (_cts.IsCancellationRequested)
-                {
-                    return;
-                }
-
-                Interlocked.Increment(ref _connections);
-                _accepted.TrySetResult();
-                _ = Task.Run(
-                    () => ServeAsync(client, keepOpen, hang, delay, response, subsequentResponse),
-                    _cts.Token);
-            }
-        }
-
-        private async Task ServeAsync(
-            TcpClient client,
-            bool keepOpen,
-            bool hang,
-            TimeSpan delay,
-            byte[]? response,
-            byte[]? subsequentResponse)
-        {
-            var inflight = Interlocked.Increment(ref _inflight);
-            UpdatePeak(inflight);
-            try
-            {
-                await using var stream = client.GetStream();
-                do
-                {
-                    if (hang)
-                    {
-                        await Task.Delay(Timeout.Infinite, _cts.Token).ConfigureAwait(false);
-                    }
-
-                    if (!await TryReadCheckAsync(stream).ConfigureAwait(false))
-                    {
-                        return;
-                    }
-
-                    if (delay > TimeSpan.Zero)
-                    {
-                        await Task.Delay(delay, _cts.Token).ConfigureAwait(false);
-                    }
-
-                    var check = Interlocked.Increment(ref _checks);
-                    var bytes = check == 1 || subsequentResponse is null
-                        ? response ?? "SPAMD/1.1 0 EX_OK\r\nSpam: False ; 0.0 / 5.0\r\n\r\n"u8.ToArray()
-                        : subsequentResponse;
-                    await stream.WriteAsync(bytes, _cts.Token).ConfigureAwait(false);
-                    await stream.FlushAsync(_cts.Token).ConfigureAwait(false);
-                }
-                while (keepOpen);
-            }
-            catch (Exception)
-            {
-            }
-            finally
-            {
-                Interlocked.Decrement(ref _inflight);
-                client.Dispose();
-            }
-        }
-
-        private void UpdatePeak(int inflight)
-        {
-            while (true)
-            {
-                var peak = Volatile.Read(ref _peak);
-                if (inflight <= peak || Interlocked.CompareExchange(ref _peak, inflight, peak) == peak)
-                {
-                    return;
-                }
-            }
-        }
-
-        private async Task<bool> TryReadCheckAsync(NetworkStream stream)
-        {
-            var buffer = new byte[8192];
-            var total = 0;
-            while (total < buffer.Length)
-            {
-                var read = await stream.ReadAsync(buffer.AsMemory(total), _cts.Token).ConfigureAwait(false);
-                if (read == 0)
-                {
-                    return total > 0 && buffer.AsSpan(0, total).IndexOf("\r\n\r\n"u8) >= 0;
-                }
-
-                total += read;
-                var headers = buffer.AsSpan(0, total).IndexOf("\r\n\r\n"u8);
-                if (headers < 0)
-                {
-                    continue;
-                }
-
-                var headerText = Encoding.ASCII.GetString(buffer.AsSpan(0, headers));
-                var length = 0;
-                foreach (var line in headerText.Split("\r\n"))
-                {
-                    if (line.StartsWith("Content-length:", StringComparison.OrdinalIgnoreCase))
-                    {
-                        length = int.Parse(line["Content-length:".Length..].Trim());
-                    }
-                }
-
-                var bodyStart = headers + 4;
-                while (total - bodyStart < length)
-                {
-                    var readBody = await stream.ReadAsync(buffer.AsMemory(total), _cts.Token).ConfigureAwait(false);
-                    if (readBody == 0)
-                    {
-                        return false;
-                    }
-
-                    total += readBody;
-                }
-
-                return true;
-            }
-
-            return false;
-        }
     }
 }

@@ -12,12 +12,12 @@ public sealed class IngestionPipelineMetricsTests
         var metrics = new IngestionPipelineMetrics();
         for (var i = 0; i < 94; i++)
         {
-            RecordAgo(metrics.RecordNews, TimeSpan.FromMilliseconds(1));
+            metrics.RecordNews(TimeSpan.FromMilliseconds(1));
         }
 
         for (var i = 0; i < 6; i++)
         {
-            RecordAgo(metrics.RecordNews, TimeSpan.FromMilliseconds(100));
+            metrics.RecordNews(TimeSpan.FromMilliseconds(100));
         }
 
         var snapshot = metrics.CaptureInterval();

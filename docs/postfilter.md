@@ -575,3 +575,5 @@ POST-boundary coverage lives in `PostFilterProductionPolicyMatrixTests` (test-lo
 - `ArticleRecord` immutability and disposable SPAMD representation
 
 Additional suites: `PostFilterEvaluatorTests`, `PostFilterPostCommandTests`, quota Lua/engine/live-cluster tests, SPAMD transport/eligibility/builder tests.
+
+Ordinary CI talks to a loopback SPAMC listener (`LocalSpamdServer`) through `SpamdCheckClient`. It does not dial a SpamAssassin host. Compatibility with a real `spamd` is opt-in: set `VECTORNNTP_SPAMD_INTEGRATION=host:port` before running `PostFilterSpamdLiveTests` methods marked `SpamdIntegrationFact`. When the variable is absent those tests are skipped. When it is present they use that endpoint only and fail if it is unreachable. There is no built-in address.

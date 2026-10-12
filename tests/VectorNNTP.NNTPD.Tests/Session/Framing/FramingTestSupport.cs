@@ -495,6 +495,8 @@ internal static class InnArticleCorpus
     {
         var bytes = ReadAllBytes(entry.RelativePath);
         var hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        // Hash the raw file bytes. InnArticles is marked binary in .gitattributes so
+        // core.autocrlf cannot rewrite LF fixtures before this comparison.
         if (!string.Equals(hash, entry.Sha256, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(

@@ -43,7 +43,7 @@ public sealed class InnArticleCorpusFramerTests
         Assert.Equal("tests/data/articles", manifest.SourcePath);
         Assert.Equal(25, manifest.FileCount);
         Assert.Equal(25, manifest.Files.Count);
-        Assert.Equal(19554, manifest.TotalBytes);
+        Assert.Equal(19544, manifest.TotalBytes);
     }
 
     [Theory]

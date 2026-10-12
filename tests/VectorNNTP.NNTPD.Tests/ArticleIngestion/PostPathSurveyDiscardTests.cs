@@ -83,7 +83,13 @@ public sealed class PostPathSurveyDiscardTests
         }
 
         queue.Complete();
-        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        // Confirms are recorded after PublishAsync returns, while the worker is still
+        // running. Waiting here, before StopAsync, observes that signal. StopAsync's
+        // own budget must not be the observation window: once it expires, StopAsync
+        // abandons outstanding OverviewDB work and the confirm never arrives.
+        using var confirmed = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await overview.WaitUntilConfirmedAsync(articles.Length, confirmed.Token);
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await writer.StopAsync(stop.Token);
         return new Observed(queue, placement, registry, paths, overview);
     }
