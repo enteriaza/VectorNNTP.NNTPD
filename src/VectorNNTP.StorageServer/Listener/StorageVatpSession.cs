@@ -4,7 +4,7 @@ using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.StorageServer.Configuration;
-using VectorNNTP.StorageServer.Storage.Engine;
+using VectorNNTP.StorageServer.Ingress;
 
 namespace VectorNNTP.StorageServer.Listener;
 
@@ -12,8 +12,8 @@ namespace VectorNNTP.StorageServer.Listener;
 /// VATP server session: client HELLO, then OPEN served from
 /// <see cref="IStorageArticleOpenBoundary"/> as META, credit-paced DATA/FIN, and END.
 /// STORE is a separate receive stream. After META matches the inbound bytes, Path is
-/// rematerialized with <see cref="StorageServerOptions.Fqdn"/> and that record is passed to
-/// <see cref="IArticleStorageEngine.AcceptAsync"/>. Retrieval does not rewrite Path.
+/// rematerialized with <see cref="StorageServerOptions.Fqdn"/> and that record is enqueued.
+/// Retrieval does not rewrite Path.
 /// </summary>
 public sealed partial class StorageVatpSession : IAsyncDisposable
 {
@@ -25,7 +25,7 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
     private readonly StorageServerListenerRuntimeOptions _listener;
     private readonly ArticleTransferLimits _limits;
     private readonly ILogger _logger;
-    private readonly IArticleStorageEngine? _placementEngine;
+    private readonly IAcceptedArticleQueue? _acceptedArticles;
     private readonly StoreAssemblyAdmission? _storeAdmission;
     private readonly NntpArticleParser? _storePathParser;
     private readonly Dictionary<uint, SendStream> _streams = [];
@@ -45,7 +45,7 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
         StorageServerListenerRuntimeOptions listener,
         ILogger logger,
         ArticleTransferLimits? limits = null,
-        IArticleStorageEngine? placementEngine = null,
+        IAcceptedArticleQueue? acceptedArticles = null,
         StoreAssemblyAdmission? storeAdmission = null,
         string? storePathIdentity = null)
     {
@@ -58,7 +58,7 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
         _listener = listener;
         _limits = limits ?? ArticleTransferLimits.Default;
         _logger = logger;
-        _placementEngine = placementEngine;
+        _acceptedArticles = acceptedArticles;
         _storeAdmission = storeAdmission;
         _storePathParser = string.IsNullOrWhiteSpace(storePathIdentity)
             ? null

@@ -12,6 +12,28 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// </remarks>
 public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServerOptions>
 {
+    private readonly string? _applicationBaseDirectory;
+
+    /// <summary>
+    /// Validates options. Relative directories resolve against <see cref="AppContext.BaseDirectory"/>.
+    /// </summary>
+    public StorageServerOptionsValidator()
+        : this(applicationBaseDirectory: null)
+    {
+    }
+
+    /// <summary>
+    /// Validates options. Relative directories resolve against
+    /// <paramref name="applicationBaseDirectory"/>, or <see cref="AppContext.BaseDirectory"/> when
+    /// that argument is null or whitespace. This is the same rule as
+    /// <see cref="ApplicationLocalPath.ResolveApplicationLocalPath"/>.
+    /// </summary>
+    /// <param name="applicationBaseDirectory">Application binary directory. Not the process working directory.</param>
+    internal StorageServerOptionsValidator(string? applicationBaseDirectory)
+    {
+        _applicationBaseDirectory = applicationBaseDirectory;
+    }
+
     /// <inheritdoc />
     public ValidateOptionsResult Validate(string? name, StorageServerOptions options)
     {
@@ -21,7 +43,7 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         ValidateIdentity(options, failures);
         ValidateBindPorts(options, failures);
         ValidateAcme(options, failures);
-        ValidateDirectories(options, failures);
+        ValidateDirectories(options, failures, _applicationBaseDirectory);
         ValidateLifecycle(options, failures);
         ValidateListener(options, failures);
         ValidateSystemd(options, failures);
@@ -142,354 +164,23 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         }
     }
 
-    private static void ValidateDirectories(StorageServerOptions options, List<string> failures)
+    private static void ValidateDirectories(
+        StorageServerOptions options,
+        List<string> failures,
+        string? applicationBaseDirectory)
     {
         ValidateFilesystemPath(
             options.LogDir,
             "StorageServer:LogDir",
-            failures);
-        ValidateStorage(options, failures);
+            failures,
+            applicationBaseDirectory);
     }
 
-    private static void ValidateStorage(StorageServerOptions options, List<string> failures)
-    {
-        if (options.Storage is null)
-        {
-            failures.Add("StorageServer:Storage must be provided.");
-            return;
-        }
-
-        ValidateFilesystemPath(
-            options.Storage.ControlDir,
-            "StorageServer:Storage:ControlDir",
-            failures);
-        ValidateSegmentPools(options, failures);
-
-        if (options.Storage.JournalSoftLimitBytes < 1)
-        {
-            failures.Add("StorageServer:Storage:JournalSoftLimitBytes must be at least 1.");
-        }
-
-        if (options.Storage.JournalHardLimitBytes < 1)
-        {
-            failures.Add("StorageServer:Storage:JournalHardLimitBytes must be at least 1.");
-        }
-        else if (options.Storage.JournalSoftLimitBytes >= 1
-                 && options.Storage.JournalHardLimitBytes < options.Storage.JournalSoftLimitBytes)
-        {
-            failures.Add(
-                "StorageServer:Storage:JournalHardLimitBytes must be greater than or equal to JournalSoftLimitBytes.");
-        }
-
-        if (options.Storage.SegmentTargetSizeBytes < 1)
-        {
-            failures.Add("StorageServer:Storage:SegmentTargetSizeBytes must be at least 1.");
-        }
-
-        if (options.Storage.ActiveSegmentCount is not 1 and not 2 and not 4)
-        {
-            failures.Add("StorageServer:Storage:ActiveSegmentCount must be 1, 2, or 4.");
-        }
-
-        if (options.Storage.MaxSegmentSealDelay < TimeSpan.Zero)
-        {
-            failures.Add(
-                "StorageServer:Storage:MaxSegmentSealDelay must be greater than or equal to 00:00:00. 00:00:00 disables age sealing.");
-        }
-
-        if (options.Storage.MaxRetentionAge < TimeSpan.Zero)
-        {
-            failures.Add(
-                "StorageServer:Storage:MaxRetentionAge must be greater than or equal to 00:00:00. 00:00:00 disables age-based retention.");
-        }
-
-        if (options.Storage.JournalCheckpointThresholdBytes < 0)
-        {
-            failures.Add(
-                "StorageServer:Storage:JournalCheckpointThresholdBytes must be greater than or equal to 0.");
-        }
-
-        if (options.Storage.IndexCheckpointThresholdBytes < 0)
-        {
-            failures.Add(
-                "StorageServer:Storage:IndexCheckpointThresholdBytes must be greater than or equal to 0.");
-        }
-
-        var articleCache = options.Storage.ArticleCache ?? new ArticleMemoryCacheOptions();
-        if (articleCache.MaxBytes < 0)
-        {
-            failures.Add("StorageServer:Storage:ArticleCache:MaxBytes must be greater than or equal to 0.");
-        }
-
-        ValidateEgressCache(options.Storage.EgressCache, failures);
-        ValidateCompactionPolicy(options.Storage.Compaction, failures);
-        ValidateCapacityPolicy(options.Storage.Capacity, failures);
-        ValidateSegmentPoolWatermarks(options.Storage.SegmentPools, failures);
-    }
-
-    private static void ValidateEgressCache(EgressCacheOptions? egress, List<string> failures)
-    {
-        egress ??= new EgressCacheOptions();
-        if (egress.CapacityBytes < 0)
-        {
-            failures.Add(
-                "StorageServer:Storage:EgressCache:CapacityBytes must be greater than or equal to 0.");
-        }
-
-        if (egress.ReserveBytes < 0)
-        {
-            failures.Add(
-                "StorageServer:Storage:EgressCache:ReserveBytes must be greater than or equal to 0.");
-        }
-    }
-
-    private static void ValidateCapacityPolicy(
-        ArticleCapacityOptions? capacity,
-        List<string> failures)
-    {
-        capacity ??= new ArticleCapacityOptions();
-        ValidatePercent(
-            capacity.MaximumUtilization,
-            "StorageServer:Storage:Capacity:MaximumUtilization",
-            failures);
-        ValidatePercent(
-            capacity.CompactionHeadroom,
-            "StorageServer:Storage:Capacity:CompactionHeadroom",
-            failures);
-        ValidatePercent(
-            capacity.MaximumUsageCapacity,
-            "StorageServer:Storage:Capacity:MaximumUsageCapacity",
-            failures);
-        ValidatePercent(
-            capacity.FreeCapacity,
-            "StorageServer:Storage:Capacity:FreeCapacity",
-            failures);
-
-        if (capacity.MaximumUtilization is < 1 or > 100)
-        {
-            failures.Add(
-                "StorageServer:Storage:Capacity:MaximumUtilization must be an integer from 1 to 100.");
-        }
-
-        if (capacity.CompactionHeadroom < 1)
-        {
-            failures.Add(
-                "StorageServer:Storage:Capacity:CompactionHeadroom must be an integer from 1 to 100.");
-        }
-        else if (capacity.MaximumUtilization is >= 1 and <= 100
-                 && capacity.MaximumUtilization + capacity.CompactionHeadroom > 100)
-        {
-            failures.Add(
-                "StorageServer:Storage:Capacity:MaximumUtilization + CompactionHeadroom must be less than or equal to 100.");
-        }
-
-        if (capacity.MaximumUsageCapacity < 1)
-        {
-            failures.Add(
-                "StorageServer:Storage:Capacity:MaximumUsageCapacity must be an integer from 1 to 100.");
-        }
-        else if (capacity.MaximumUtilization is >= 1 and <= 100
-                 && capacity.MaximumUsageCapacity >= capacity.MaximumUtilization)
-        {
-            failures.Add(
-                "StorageServer:Storage:Capacity:MaximumUsageCapacity must be less than MaximumUtilization.");
-        }
-
-        if (capacity.FreeCapacity < 1)
-        {
-            failures.Add(
-                "StorageServer:Storage:Capacity:FreeCapacity must be an integer from 1 to 100.");
-        }
-        else if (capacity.FreeCapacity > capacity.MaximumUsageCapacity)
-        {
-            failures.Add(
-                "StorageServer:Storage:Capacity:FreeCapacity must be less than or equal to MaximumUsageCapacity.");
-        }
-    }
-
-    private static void ValidateSegmentPools(StorageServerOptions options, List<string> failures)
-    {
-        var pools = options.Storage?.SegmentPools;
-        if (pools?.Directories is not { Count: > 0 })
-        {
-            failures.Add(
-                "StorageServer:Storage:SegmentPools:Directories must contain at least one spool.");
-            return;
-        }
-
-        var normalized = new List<string>(pools.Directories.Count);
-        for (var i = 0; i < pools.Directories.Count; i++)
-        {
-            var entry = pools.Directories[i];
-            var key = $"StorageServer:Storage:SegmentPools:Directories:{i}:CacheDir";
-            if (entry is null)
-            {
-                failures.Add($"{key} is required.");
-                normalized.Add("");
-                continue;
-            }
-
-            ValidateFilesystemPath(entry.CacheDir, key, failures);
-            if (entry.MaxCapacity <= 0)
-            {
-                failures.Add(
-                    $"StorageServer:Storage:SegmentPools:Directories:{i}:MaxCapacity must be a positive number of bytes.");
-            }
-
-            normalized.Add(NormalizeDirectory(entry.CacheDir));
-        }
-
-        for (var i = 0; i < normalized.Count; i++)
-        {
-            if (normalized[i].Length == 0)
-            {
-                continue;
-            }
-
-            for (var j = i + 1; j < normalized.Count; j++)
-            {
-                if (normalized[j].Length == 0 || !SpoolPathsConflict(normalized[i], normalized[j]))
-                {
-                    continue;
-                }
-
-                failures.Add(
-                    "StorageServer:Storage:SegmentPools:Directories contains duplicate or nested paths. Each spool directory must have unambiguous ownership.");
-                return;
-            }
-        }
-    }
-
-    private static void ValidateSegmentPoolWatermarks(SegmentPoolOptions? pools, List<string> failures)
-    {
-        pools ??= new SegmentPoolOptions();
-        ValidatePercent(
-            pools.WarningPercent,
-            "StorageServer:Storage:SegmentPools:WarningPercent",
-            failures);
-        ValidatePercent(
-            pools.PressurePercent,
-            "StorageServer:Storage:SegmentPools:PressurePercent",
-            failures);
-        ValidatePercent(
-            pools.HighPercent,
-            "StorageServer:Storage:SegmentPools:HighPercent",
-            failures);
-        ValidatePercent(
-            pools.CriticalPercent,
-            "StorageServer:Storage:SegmentPools:CriticalPercent",
-            failures);
-        ValidatePercent(
-            pools.EmergencyPercent,
-            "StorageServer:Storage:SegmentPools:EmergencyPercent",
-            failures);
-        ValidatePercent(
-            pools.OperationalReservePercent,
-            "StorageServer:Storage:SegmentPools:OperationalReservePercent",
-            failures);
-        ValidatePercent(
-            pools.RecoveryReservePercent,
-            "StorageServer:Storage:SegmentPools:RecoveryReservePercent",
-            failures);
-        ValidatePercent(
-            pools.RewriteReservePercent,
-            "StorageServer:Storage:SegmentPools:RewriteReservePercent",
-            failures);
-        ValidatePercent(
-            pools.PressureRecoveryMarginPercent,
-            "StorageServer:Storage:SegmentPools:PressureRecoveryMarginPercent",
-            failures);
-        if (pools.PressurePercent is >= 0 and <= 100
-            && pools.PressureRecoveryMarginPercent is >= 0 and <= 100
-            && pools.PressureRecoveryMarginPercent > pools.PressurePercent)
-        {
-            failures.Add(
-                "StorageServer:Storage:SegmentPools:PressureRecoveryMarginPercent must be less than or equal to PressurePercent.");
-        }
-
-        if (pools.WarningPercent is >= 0 and <= 100
-            && pools.PressurePercent is >= 0 and <= 100
-            && pools.HighPercent is >= 0 and <= 100
-            && pools.CriticalPercent is >= 0 and <= 100
-            && pools.EmergencyPercent is >= 0 and <= 100
-            && (pools.WarningPercent >= pools.PressurePercent
-                || pools.PressurePercent >= pools.HighPercent
-                || pools.HighPercent >= pools.CriticalPercent
-                || pools.CriticalPercent >= pools.EmergencyPercent))
-        {
-            failures.Add(
-                "StorageServer:Storage:SegmentPools watermarks must be strictly increasing: WarningPercent < PressurePercent < HighPercent < CriticalPercent < EmergencyPercent.");
-        }
-    }
-
-    private static string NormalizeDirectory(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return "";
-        }
-
-        try
-        {
-            var full = Path.GetFullPath(path.Trim());
-            return full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return "";
-        }
-    }
-
-    private static bool SpoolPathsConflict(string left, string right)
-    {
-        if (string.Equals(left, right, PathComparison))
-        {
-            return true;
-        }
-
-        var prefix = left.Length < right.Length ? left : right;
-        var longer = left.Length < right.Length ? right : left;
-        return longer.StartsWith(prefix + Path.DirectorySeparatorChar, PathComparison);
-    }
-
-    private static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
-    private static void ValidatePercent(int percent, string key, List<string> failures)
-    {
-        if (percent is < 0 or > 100)
-        {
-            failures.Add($"{key} must be an integer from 0 to 100.");
-        }
-    }
-
-    private static void ValidateCompactionPolicy(
-        ArticleCompactionPolicyOptions? compaction,
-        List<string> failures)
-    {
-        compaction ??= new ArticleCompactionPolicyOptions();
-
-        if (compaction.MinimumDeadBytes < 0)
-        {
-            failures.Add(
-                "StorageServer:Storage:Compaction:MinimumDeadBytes must be greater than or equal to 0.");
-        }
-
-        if (compaction.MinimumDeadRatio is < 0 or > 100)
-        {
-            failures.Add(
-                "StorageServer:Storage:Compaction:MinimumDeadRatio must be an integer from 0 to 100.");
-        }
-
-        var interval = compaction.Interval;
-        if (interval <= TimeSpan.Zero)
-        {
-            failures.Add(
-                "StorageServer:Storage:Compaction:Interval must be greater than 00:00:00 (zero and negative values are invalid).");
-        }
-    }
-
-    private static void ValidateFilesystemPath(string? path, string configurationKey, List<string> failures)
+    private static void ValidateFilesystemPath(
+        string? path,
+        string configurationKey,
+        List<string> failures,
+        string? applicationBaseDirectory)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -506,7 +197,7 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
 
         try
         {
-            _ = Path.GetFullPath(trimmed);
+            _ = ApplicationLocalPath.ResolveApplicationLocalPath(trimmed, applicationBaseDirectory);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {

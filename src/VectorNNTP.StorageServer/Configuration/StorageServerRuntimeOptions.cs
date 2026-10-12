@@ -20,70 +20,12 @@ public sealed record StorageServerRuntimeOptions(
     int BindPort,
     int BindPortTls,
     string LogDir,
-    string CacheDir,
-    string ControlDir,
-    ArticleStorageRuntimeOptions Storage,
     string CertificateDirectory,
     TimeSpan GracefulShutdownTimeout,
     TimeSpan? StartupTimeout,
     bool StopHostOnUnexpectedServiceTermination,
     StorageServerListenerRuntimeOptions Listener,
     IReadOnlyList<string> CertificateDomainNames);
-
-/// <summary>Validated article-storage engine runtime bounds.</summary>
-/// <param name="ControlDir">Resolved NVMe control-tier root.</param>
-/// <param name="SegmentDir">Resolved directory of the first segment spool.</param>
-/// <param name="JournalSoftLimitBytes">Journal soft pressure threshold.</param>
-/// <param name="JournalHardLimitBytes">Journal hard reject threshold.</param>
-/// <param name="SegmentTargetSizeBytes">Target closed-segment size.</param>
-/// <param name="CapacityMaximumUtilization">
-/// Hard article-admission ceiling as an integer percent of volume <c>TotalBytes</c>.
-/// </param>
-/// <param name="CapacityCompactionHeadroom">
-/// Utilisation delta, in percentage points, added to <paramref name="CapacityMaximumUtilization"/>
-/// for compaction destination appends only.
-/// </param>
-/// <param name="CapacityMaximumUsageCapacity">
-/// Physical usage percent at which pressure recovery becomes active.
-/// </param>
-/// <param name="CapacityFreeCapacity">
-/// Percentage points of physical usage pressure recovery must reclaim below
-/// <paramref name="CapacityMaximumUsageCapacity"/>.
-/// </param>
-/// <param name="MaxSegmentSealDelay">
-/// Maximum time an active segment may stay open after its first durable article.
-/// <see cref="TimeSpan.Zero"/> disables age sealing. Size rollover is unchanged.
-/// </param>
-/// <param name="ActiveSegmentCount">
-/// How many segment files may accept appends at once. <c>1</c>, <c>2</c>, or <c>4</c>.
-/// <c>1</c> is a single active writer.
-/// </param>
-/// <param name="BulkPressure">
-/// Watermarks copied from <c>Storage:SegmentPools</c>. Null uses the documented defaults.
-/// </param>
-/// <param name="SegmentPools">
-/// Resolved segment spools. Null means one uncapped spool at <paramref name="SegmentDir"/>.
-/// </param>
-public sealed record ArticleStorageRuntimeOptions(
-    string ControlDir,
-    string SegmentDir,
-    long JournalSoftLimitBytes,
-    long JournalHardLimitBytes,
-    long SegmentTargetSizeBytes,
-    int CapacityMaximumUtilization = ArticleCapacityOptions.DefaultMaximumUtilization,
-    int CapacityCompactionHeadroom = ArticleCapacityOptions.DefaultCompactionHeadroom,
-    int CapacityMaximumUsageCapacity = ArticleCapacityOptions.DefaultMaximumUsageCapacity,
-    int CapacityFreeCapacity = ArticleCapacityOptions.DefaultFreeCapacity,
-    TimeSpan MaxSegmentSealDelay = default,
-    int ActiveSegmentCount = ArticleStorageOptions.DefaultActiveSegmentCount,
-    BulkStoragePressureOptions? BulkPressure = null,
-    IReadOnlyList<SegmentPoolRuntime>? SegmentPools = null);
-
-/// <summary>One resolved segment spool.</summary>
-/// <param name="Index">Configuration index.</param>
-/// <param name="Directory">Absolute or resolved directory.</param>
-/// <param name="MaxCapacity">Hard byte ceiling.</param>
-public sealed record SegmentPoolRuntime(int Index, string Directory, long MaxCapacity);
 
 /// <summary>Validated listener bounds.</summary>
 public sealed record StorageServerListenerRuntimeOptions(

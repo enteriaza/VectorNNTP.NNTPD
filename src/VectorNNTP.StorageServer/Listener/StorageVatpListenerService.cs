@@ -8,8 +8,7 @@ using VectorNNTP.Common.Acme;
 using VectorNNTP.Common.Core;
 using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.StorageServer.Configuration;
-using VectorNNTP.StorageServer.Storage;
-using VectorNNTP.StorageServer.Storage.Engine;
+using VectorNNTP.StorageServer.Ingress;
 using VectorNNTP.Common.Networking.Listeners;
 
 namespace VectorNNTP.StorageServer.Listener;
@@ -25,7 +24,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
     private readonly IStorageArticleOpenBoundary _openBoundary;
     private readonly IAcmeCertificateReadiness _readiness;
     private readonly ILogger<StorageVatpListenerService> _logger;
-    private readonly StorageEngineApplicationService? _placementHost;
+    private readonly IAcceptedArticleQueue? _acceptedArticles;
     private readonly StoreAssemblyAdmission? _storeAdmission;
     private readonly object _gate = new();
     private readonly List<Socket> _listenSockets = [];
@@ -55,7 +54,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         IStorageArticleOpenBoundary openBoundary,
         IAcmeCertificateReadiness readiness,
         ILogger<StorageVatpListenerService> logger,
-        StorageEngineApplicationService? placementHost = null,
+        IAcceptedArticleQueue? acceptedArticles = null,
         StoreAssemblyAdmission? storeAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
@@ -68,7 +67,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         _openBoundary = openBoundary;
         _readiness = readiness;
         _logger = logger;
-        _placementHost = placementHost;
+        _acceptedArticles = acceptedArticles;
         _storeAdmission = storeAdmission;
     }
 
@@ -210,6 +209,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         }
 
         await DrainConnectionsAsync().ConfigureAwait(false);
+        _acceptedArticles?.Complete();
         await DisposeBoundResourcesAsync().ConfigureAwait(false);
         _runCts.Dispose();
         lock (_gate)
@@ -378,15 +378,12 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
                 ssl,
                 _runtime.Listener.IoProgressTimeout,
                 leaveInnerStreamOpen: true);
-            IArticleStorageEngine? placementEngine = _placementHost is { IsReady: true } host
-                ? host.Engine
-                : null;
             await using var vatpSession = new StorageVatpSession(
                 transport,
                 _openBoundary,
                 _runtime.Listener,
                 _logger,
-                placementEngine: placementEngine,
+                acceptedArticles: _acceptedArticles,
                 storeAdmission: _storeAdmission,
                 storePathIdentity: _runtime.Fqdn);
             await vatpSession.RunAsync(cancellationToken).ConfigureAwait(false);

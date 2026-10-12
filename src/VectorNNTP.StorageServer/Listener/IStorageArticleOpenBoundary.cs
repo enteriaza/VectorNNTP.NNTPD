@@ -4,13 +4,11 @@ using VectorNNTP.Common.Articles.Parsing;
 namespace VectorNNTP.StorageServer.Listener;
 
 /// <summary>
-/// Boundary between the VATP OPEN path and article storage.
+/// Boundary between the VATP OPEN path and article bytes.
 /// </summary>
 /// <remarks>
-/// <see cref="StorageArticleOpenBoundary"/> is the host implementation. It reads through
-/// <c>IArticleStorageEngine.TryRead</c> and returns one canonical record. RequestId is
-/// correlation metadata and is not a storage key. Null and rejecting implementations
-/// remain for tests that have no engine.
+/// This server does not retain articles, so the host registration rejects OPEN.
+/// RequestId is correlation metadata. Null and rejecting implementations remain for tests.
 /// </remarks>
 public interface IStorageArticleOpenBoundary
 {
@@ -26,7 +24,7 @@ public interface IStorageArticleOpenBoundary
 }
 
 /// <summary>Result of an article-open attempt.</summary>
-/// <param name="Accepted">Whether storage accepted the OPEN.</param>
+    /// <param name="Accepted">Whether OPEN can be served.</param>
 /// <param name="Reason">Optional human-readable rejection reason (ASCII-safe, no secrets).</param>
 /// <param name="Record">Canonical record when <paramref name="Accepted"/> is true; otherwise default.</param>
 /// <param name="SelectedDateHeaderName">Date-family header used to build VATP META when accepted.</param>

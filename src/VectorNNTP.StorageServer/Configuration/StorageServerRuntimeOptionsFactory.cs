@@ -80,26 +80,6 @@ public static class StorageServerRuntimeOptionsFactory
         }
 
         var listener = options.Listener ?? throw new InvalidOperationException("StorageServer:Listener is required.");
-        var storage = options.Storage ?? throw new InvalidOperationException("StorageServer:Storage is required.");
-        var directories = storage.SegmentPools?.Directories;
-        if (directories is not { Count: > 0 })
-        {
-            throw new InvalidOperationException(
-                "StorageServer:Storage:SegmentPools:Directories must contain at least one spool.");
-        }
-
-        var pools = new SegmentPoolRuntime[directories.Count];
-        for (var i = 0; i < directories.Count; i++)
-        {
-            var entry = directories[i]
-                ?? throw new InvalidOperationException(
-                    $"StorageServer:Storage:SegmentPools:Directories:{i} is required.");
-            var directory = ApplicationLocalPath.ResolveApplicationLocalPath(entry.CacheDir, contentRootPath);
-            pools[i] = new SegmentPoolRuntime(i, directory, entry.MaxCapacity);
-        }
-
-        var cacheDir = pools[0].Directory;
-        var controlDir = ApplicationLocalPath.ResolveApplicationLocalPath(storage.ControlDir, contentRootPath);
 
         return new StorageServerRuntimeOptions(
             ServerId: serverId,
@@ -110,26 +90,6 @@ public static class StorageServerRuntimeOptionsFactory
             BindPort: options.BindPort,
             BindPortTls: bindPortTls,
             LogDir: ApplicationLocalPath.ResolveApplicationLocalPath(options.LogDir, contentRootPath),
-            CacheDir: cacheDir,
-            ControlDir: controlDir,
-            Storage: new ArticleStorageRuntimeOptions(
-                ControlDir: controlDir,
-                SegmentDir: cacheDir,
-                JournalSoftLimitBytes: storage.JournalSoftLimitBytes,
-                JournalHardLimitBytes: storage.JournalHardLimitBytes,
-                SegmentTargetSizeBytes: storage.SegmentTargetSizeBytes,
-                CapacityMaximumUtilization: storage.Capacity?.MaximumUtilization
-                    ?? ArticleCapacityOptions.DefaultMaximumUtilization,
-                CapacityCompactionHeadroom: storage.Capacity?.CompactionHeadroom
-                    ?? ArticleCapacityOptions.DefaultCompactionHeadroom,
-                CapacityMaximumUsageCapacity: storage.Capacity?.MaximumUsageCapacity
-                    ?? ArticleCapacityOptions.DefaultMaximumUsageCapacity,
-                CapacityFreeCapacity: storage.Capacity?.FreeCapacity
-                    ?? ArticleCapacityOptions.DefaultFreeCapacity,
-                MaxSegmentSealDelay: storage.MaxSegmentSealDelay,
-                ActiveSegmentCount: storage.ActiveSegmentCount,
-                BulkPressure: storage.SegmentPools?.ToBulkPressure(),
-                SegmentPools: pools),
             CertificateDirectory: ApplicationLocalPath.ResolveApplicationLocalPath(acme.AcmeStateDir, contentRootPath),
             GracefulShutdownTimeout: options.GracefulShutdownTimeout,
             StartupTimeout: options.StartupTimeout,

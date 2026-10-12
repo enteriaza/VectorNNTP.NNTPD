@@ -5,8 +5,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
-using VectorNNTP.Common.Articles;
-using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Messaging.Cache;
 using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.Cloudflare;
@@ -16,7 +14,6 @@ using VectorNNTP.StorageServer.Hosting;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.StorageServer.Storage;
-using VectorNNTP.StorageServer.Storage.Engine;
 using VectorNNTP.StorageServer.Tests.Fixtures;
 using VectorNNTP.StorageServer.Tests.TestDoubles;
 using VectorNNTP.Common.Configuration;
@@ -24,7 +21,7 @@ using VectorNNTP.Common.Configuration;
 namespace VectorNNTP.StorageServer.Tests.Hosting;
 
 /// <summary>
-/// Proves advertisement and presence follow the VATP listener in
+/// Proves the advertisement publisher follows the VATP listener in
 /// <see cref="ApplicationServiceManager"/> registration order.
 /// </summary>
 public sealed class StorageServerFleetLifecycleOrderTests
@@ -42,16 +39,6 @@ public sealed class StorageServerFleetLifecycleOrderTests
     }
 
     [Fact]
-    public async Task PresenceConsumer_DoesNotAnswerBeforeVatpListener()
-    {
-        await using var session = await FleetSession.StartHeldAtListenerAsync();
-        Assert.NotEqual(StorageVatpListenerState.Running, session.Listener.State);
-        Assert.Null(session.Lookup.CurrentQueueName);
-        Assert.Empty(session.Connection.ManualAckChannels);
-        Assert.Empty(session.Connection.PublishChannels.SelectMany(static channel => channel.Publications));
-    }
-
-    [Fact]
     public async Task AdvertisementPublisher_StartsAfterVatpListener()
     {
         await using var session = await FleetSession.StartAsync();
@@ -60,50 +47,6 @@ public sealed class StorageServerFleetLifecycleOrderTests
         var publications = session.Connection.PublishChannels.SelectMany(static channel => channel.Publications).ToArray();
         Assert.Contains(publications, static publication => IsAdvertisement(publication));
         Assert.DoesNotContain(publications, static publication => IsDraining(publication));
-    }
-
-    [Fact]
-    public async Task PresenceConsumer_StartsAfterVatpListener()
-    {
-        await using var session = await FleetSession.StartAsync();
-        Assert.Equal(StorageVatpListenerState.Running, session.Listener.State);
-        Assert.False(string.IsNullOrWhiteSpace(session.Lookup.CurrentQueueName));
-
-        var record = CreateRecord("<fleet-order-present@seg.test>");
-        var engine = session.AppHost.Services.GetRequiredService<StorageEngineApplicationService>();
-        Assert.Equal(
-            ArticleAcceptOutcome.Accepted,
-            (await engine.Engine.AcceptAsync(record, CancellationToken.None)).Outcome);
-        await engine.Engine.DrainPendingAsync(CancellationToken.None);
-
-        var channel = Assert.Single(session.Connection.ManualAckChannels);
-        var request = new StorageArticleLookupRequest(1, Guid.NewGuid(), record.ArtId);
-        await channel.DeliverAsync(
-            11,
-            StorageArticleLookupWireProtocol.SerializeRequestV1(request),
-            "corr-fleet-order",
-            "nntpd.reply");
-
-        var responsePublication = session.Connection.PublishChannels
-            .SelectMany(static item => item.Publications)
-            .Single(static publication => publication.RoutingKey == "nntpd.reply");
-        Assert.True(StorageArticleLookupWireProtocol.TryParseResponseV1(
-            responsePublication.Body.Span,
-            out var response,
-            out _));
-        Assert.NotNull(response);
-        Assert.Equal(record.ArtId, response.ArticleId);
-    }
-
-    [Fact]
-    public async Task PresenceConsumer_StopsBeforeVatpListener()
-    {
-        await using var session = await FleetSession.StartAsync(traceStops: true);
-        await session.StopAsync();
-        var lookupEnd = session.StopEvents.IndexOf("end:StorageArticleLookupConsumer");
-        var listenerBegin = session.StopEvents.IndexOf("begin:StorageVatpListener");
-        Assert.True(lookupEnd >= 0);
-        Assert.True(listenerBegin > lookupEnd);
     }
 
     [Fact]
@@ -150,22 +93,6 @@ public sealed class StorageServerFleetLifecycleOrderTests
         Assert.Null(session.Publisher.Execution);
     }
 
-    private static ArticleRecord CreateRecord(string messageId)
-    {
-        var parser = new NntpArticleParser("cache01.usenet.ninja");
-        var builder = new StringBuilder();
-        _ = builder.Append("Path: peer.example\r\n");
-        _ = builder.Append("Date: Fri, 23 Aug 2024 07:30:10 +0000\r\n");
-        _ = builder.Append("Message-ID: ").Append(messageId).Append("\r\n");
-        _ = builder.Append("Newsgroups: alt.test\r\n");
-        _ = builder.Append("From: user@example.test\r\n");
-        _ = builder.Append("Subject: fleet-order\r\n");
-        _ = builder.Append("\r\nline1\r\n");
-        var created = ArticleRecordFactory.TryCreate(parser, Encoding.ASCII.GetBytes(builder.ToString()));
-        Assert.True(created.IsAccepted, created.ParseFailure.ToString());
-        return created.Record;
-    }
-
     private static async Task WaitForAsync(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -210,14 +137,12 @@ public sealed class StorageServerFleetLifecycleOrderTests
             IHost host,
             StorageVatpListenerService listener,
             StorageServerAdvertisementPublisherService publisher,
-            StorageArticleLookupConsumerService lookup,
             RecordingStorageServerRabbitMqConnectionFactory factory,
             bool held)
         {
             AppHost = host;
             Listener = listener;
             Publisher = publisher;
-            Lookup = lookup;
             _factory = factory;
             _held = held;
         }
@@ -229,8 +154,6 @@ public sealed class StorageServerFleetLifecycleOrderTests
         public StorageVatpListenerService Listener { get; }
 
         public StorageServerAdvertisementPublisherService Publisher { get; }
-
-        public StorageArticleLookupConsumerService Lookup { get; }
 
         public RecordingStorageServerRabbitMqConnection Connection =>
             _factory.LastConnection ?? throw new InvalidOperationException("RabbitMQ connection was not created.");
@@ -310,8 +233,7 @@ public sealed class StorageServerFleetLifecycleOrderTests
             AssertProductionOrder(ordered);
             var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
             var publisher = host.Services.GetRequiredService<StorageServerAdvertisementPublisherService>();
-            var lookup = host.Services.GetRequiredService<StorageArticleLookupConsumerService>();
-            var session = new FleetSession(host, listener, publisher, lookup, factory, holdListener);
+            var session = new FleetSession(host, listener, publisher, factory, holdListener);
             var services = ordered.Select(service => service switch
             {
                 StorageVatpListenerService when holdListener => (IApplicationService)new HoldListener(
@@ -345,15 +267,11 @@ public sealed class StorageServerFleetLifecycleOrderTests
             var publisherIndex = Array.FindIndex(
                 ordered,
                 static service => service is StorageServerAdvertisementPublisherService);
-            var lookupIndex = Array.FindIndex(
-                ordered,
-                static service => service is StorageArticleLookupConsumerService);
             var rabbitIndex = Array.FindIndex(ordered, static service => service is RabbitMqService);
             var acmeIndex = Array.FindIndex(ordered, static service => service is ImmediateAcmeReadyApplicationService);
             Assert.True(rabbitIndex >= 0 && rabbitIndex < acmeIndex);
             Assert.True(acmeIndex < listenerIndex);
             Assert.True(listenerIndex < publisherIndex);
-            Assert.True(publisherIndex < lookupIndex);
         }
 
         private static IHost CreateHost(int port, RecordingStorageServerRabbitMqConnectionFactory factory)

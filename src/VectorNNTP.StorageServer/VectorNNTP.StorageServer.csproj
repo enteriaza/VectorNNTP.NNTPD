@@ -7,7 +7,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>VectorNNTP.StorageServer</RootNamespace>
     <AssemblyName>VectorNNTP.StorageServer</AssemblyName>
-    <Description>Usenet article cache storage server (VectorNNTP.StorageServer).</Description>
+    <Description>VATP article ingress and cache advertisement host (VectorNNTP.StorageServer).</Description>
     <IsPackable>false</IsPackable>
     <UserSecretsId>dotnet-VectorNNTP.StorageServer-01550cb7-f86e-48f0-add1-591ca009f74f</UserSecretsId>
   </PropertyGroup>

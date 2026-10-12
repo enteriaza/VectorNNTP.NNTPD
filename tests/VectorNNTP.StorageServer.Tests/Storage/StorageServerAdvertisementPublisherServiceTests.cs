@@ -82,6 +82,42 @@ public sealed class StorageServerAdvertisementPublisherServiceTests
     }
 
     [Fact]
+    public async Task NoSpoolCapacity_PublishesZeroBytes_OnCacheBroadcast_WithThePlacementPort()
+    {
+        var factory = new RecordingStorageServerRabbitMqConnectionFactory();
+        await using var rabbit = CreateRabbitMq(factory);
+        var runtime = StorageServerRuntimeOptionsFactory.Create(StorageServerTestOptions.CreateValid());
+        var publisher = new StorageServerAdvertisementPublisherService(
+            rabbit,
+            runtime,
+            new NoSpoolCapacityReader(),
+            NullLogger<StorageServerAdvertisementPublisherService>.Instance,
+            new FakeTimeProvider(DateTimeOffset.Parse("2026-09-29T12:00:00Z")));
+
+        await rabbit.StartAsync(CancellationToken.None);
+        await publisher.StartAsync(CancellationToken.None);
+        await WaitForAsync(() => publisher.PublishedCount >= 1, TimeSpan.FromSeconds(2));
+        await publisher.StopAsync(CancellationToken.None);
+
+        var channel = Assert.Single(factory.LastConnection!.PublishChannels);
+        var heartbeat = Assert.Single(channel.Publications, static publication => !IsLifecycle(publication));
+        Assert.Equal(CacheFleetTopology.BroadcastExchangeName, heartbeat.Exchange);
+        Assert.Equal(CacheFleetTopology.BroadcastExchangeName, heartbeat.RoutingKey);
+        Assert.True(StorageServerAdvertisementWireProtocol.TryParseV1(
+            heartbeat.Body.Span,
+            out var advertisement,
+            out var reason));
+        Assert.True(string.IsNullOrEmpty(reason));
+        Assert.NotNull(advertisement);
+        Assert.Equal(0, advertisement.TotalBytes);
+        Assert.Equal(0, advertisement.UsedBytes);
+        Assert.Equal(0, advertisement.AvailableBytes);
+        Assert.Equal(runtime.BindPortTls, advertisement.VatpPort);
+        Assert.Equal(runtime.ServerId, advertisement.ServerId);
+        Assert.Equal(runtime.Fqdn, advertisement.Fqdn);
+    }
+
+    [Fact]
     public async Task StopAsync_EndsPublishLoop_WithoutOrphanedExecution()
     {
         var factory = new RecordingStorageServerRabbitMqConnectionFactory();

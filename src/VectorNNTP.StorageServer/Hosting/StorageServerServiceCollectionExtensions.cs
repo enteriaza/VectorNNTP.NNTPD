@@ -3,7 +3,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
-using VectorNNTP.Common.Articles;
 using VectorNNTP.Common.Hosting;
 using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.Acme;
@@ -12,10 +11,9 @@ using VectorNNTP.Common.Core;
 using VectorNNTP.StorageServer.Acme;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting.Systemd;
+using VectorNNTP.StorageServer.Ingress;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.Storage;
-using VectorNNTP.StorageServer.Storage.Engine.Maintenance;
-using VectorNNTP.StorageServer.Storage.Engine.Policy;
 using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Hosting;
@@ -30,9 +28,8 @@ public static class StorageServerServiceCollectionExtensions
     /// </summary>
     /// <remarks>
     /// Application service start order:
-    /// StorageEngine → StorageMaintenance → Cloudflare DNS → RabbitMQ (connectivity only) →
-    /// ACME → VATP listener → AdvertisementPublisher → LookupConsumer.
-    /// Shutdown is that order reversed, so presence and advertisement stop before the listener.
+    /// Cloudflare DNS → RabbitMQ (connectivity only) → ACME → VATP listener → AdvertisementPublisher.
+    /// Shutdown is that order reversed, so advertisement stops before the listener.
     /// Topology, queues, and consumers are not registered here.
     /// </remarks>
     public static HostApplicationBuilder AddStorageServerHosting(this HostApplicationBuilder builder)
@@ -101,7 +98,8 @@ public static class StorageServerServiceCollectionExtensions
                 host.ShutdownTimeout = runtime.GracefulShutdownTimeout;
             });
 
-        builder.Services.TryAddSingleton<IStorageArticleOpenBoundary, StorageArticleOpenBoundary>();
+        builder.Services.TryAddSingleton<IAcceptedArticleQueue, AcceptedArticleQueue>();
+        builder.Services.TryAddSingleton<IStorageArticleOpenBoundary, RejectingStorageArticleOpenBoundary>();
 
         builder.Services.TryAddSingleton<IRabbitMqConnectionNameProvider>(static sp =>
             new DelegateRabbitMqConnectionNameProvider(() =>
@@ -110,47 +108,11 @@ public static class StorageServerServiceCollectionExtensions
                     sp.GetRequiredService<IOptions<StorageServerOptions>>().Value.Fqdn)));
         builder.Services.AddRabbitMqInfrastructure();
 
-        builder.Services.TryAddSingleton<IStorageCapacityReader>(static sp =>
-            new EngineFleetCapacityReader(sp));
+        builder.Services.TryAddSingleton<IStorageCapacityReader, NoSpoolCapacityReader>();
         builder.Services.TryAddSingleton<StorageServerAdvertisementPublisherService>();
-        builder.Services.TryAddSingleton<IStorageArticlePresence, DurableIndexArticlePresence>();
-        builder.Services.TryAddSingleton<StorageArticleLookupConsumerService>();
 
-        // Owns Open+Recover+Dispose. Resolve via this singleton only (no second engine factory).
-        builder.Services.AddSingleton<StorageEngineApplicationService>();
-        builder.Services.AddSingleton(static sp =>
-            sp.GetRequiredService<StorageEngineApplicationService>().Engine);
-
-        builder.Services.AddSingleton(static sp =>
-        {
-            var compaction = sp.GetRequiredService<IOptions<StorageServerOptions>>().Value.Storage.Compaction
-                ?? new ArticleCompactionPolicyOptions();
-            return new ArticleSegmentPolicy(compaction);
-        });
-        // Lazy: first resolve after StorageEngine StartAsync (registration order).
-        builder.Services.AddSingleton(static sp => new Lazy<StorageMaintenanceCoordinator>(() =>
-        {
-            var storage = sp.GetRequiredService<IOptions<StorageServerOptions>>().Value.Storage;
-            return new StorageMaintenanceCoordinator(
-                sp.GetRequiredService<StorageEngineApplicationService>().Engine,
-                sp.GetRequiredService<ArticleSegmentPolicy>(),
-                storage?.JournalCheckpointThresholdBytes ?? 0,
-                sp.GetRequiredService<ILogger<StorageMaintenanceCoordinator>>(),
-                storage?.IndexCheckpointThresholdBytes ?? 0,
-                storage?.MaxRetentionAge ?? TimeSpan.Zero,
-                storage?.SegmentPools?.ToBulkPressure());
-        }));
-        builder.Services.AddSingleton<StorageMaintenanceService>();
-
-        // Startup order: StorageEngine → StorageMaintenance → Cloudflare → RabbitMQ →
-        // ACME → Listener → AdvertisementPublisher → LookupConsumer.
-        // ApplicationServiceManager stops in reverse, so presence and advertisement stop first.
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IApplicationService, StorageEngineApplicationService>(static sp =>
-                sp.GetRequiredService<StorageEngineApplicationService>()));
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IApplicationService, StorageMaintenanceService>(static sp =>
-                sp.GetRequiredService<StorageMaintenanceService>()));
+        // Startup order: Cloudflare → RabbitMQ → ACME → Listener → AdvertisementPublisher.
+        // ApplicationServiceManager stops in reverse, so advertisement stops first.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationApplicationService>());
         builder.Services.TryAddEnumerable(
@@ -161,25 +123,14 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.AddSingleton(static provider =>
         {
             var runtime = provider.GetRequiredService<StorageServerRuntimeOptions>();
-            var slots = runtime.Storage.JournalHardLimitBytes / ArticleResourceLimits.MaxArticleBytes;
-            if (slots < 1)
-            {
-                slots = 1;
-            }
-
-            if (slots > int.MaxValue)
-            {
-                slots = int.MaxValue;
-            }
-
             return new StorageVatpListenerService(
                 runtime,
                 provider.GetRequiredService<VectorNNTP.Common.Networking.Certificates.ITlsCertificateContextProvider>(),
                 provider.GetRequiredService<IStorageArticleOpenBoundary>(),
                 provider.GetRequiredService<IAcmeCertificateReadiness>(),
                 provider.GetRequiredService<ILogger<StorageVatpListenerService>>(),
-                provider.GetRequiredService<StorageEngineApplicationService>(),
-                new StoreAssemblyAdmission((int)slots));
+                provider.GetRequiredService<IAcceptedArticleQueue>(),
+                new StoreAssemblyAdmission(runtime.Listener.MaxActiveConnections));
         });
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, StorageVatpListenerService>(static provider =>
@@ -187,9 +138,6 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, StorageServerAdvertisementPublisherService>(static sp =>
                 sp.GetRequiredService<StorageServerAdvertisementPublisherService>()));
-        builder.Services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IApplicationService, StorageArticleLookupConsumerService>(static sp =>
-                sp.GetRequiredService<StorageArticleLookupConsumerService>()));
 
         builder.Services.AddSingleton<IApplicationLifecycleOptions>(static sp =>
             sp.GetRequiredService<IOptions<StorageServerOptions>>().Value);

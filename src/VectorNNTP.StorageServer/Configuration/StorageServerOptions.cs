@@ -130,12 +130,6 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     public string LogDir { get; set; } = DefaultLogDir;
 
     /// <summary>
-    /// Gets or sets article-storage engine options (NVMe control tier, SATA cache tier, and journal bounds).
-    /// </summary>
-    [Required]
-    public ArticleStorageOptions Storage { get; set; } = new();
-
-    /// <summary>
     /// Gets or sets the directory used for ACME and TLS certificate artifacts.
     /// </summary>
     public string CertificateDirectory { get; set; } = DefaultCertificateDirectory;

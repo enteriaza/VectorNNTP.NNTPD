@@ -21,52 +21,6 @@
     "LogDir": "logs",
     "ServerId": 1,
     "StopHostOnUnexpectedServiceTermination": true,
-    "Storage": {
-      "ArticleCache": {
-        "MaxBytes": 1073741824
-      },
-      "EgressCache": {
-        "CapacityBytes": 0,
-        "ReserveBytes": 0
-      },
-      "SegmentPools": {
-        "CriticalPercent": 90,
-        "EmergencyPercent": 95,
-        "HighPercent": 85,
-        "OperationalReservePercent": 5,
-        "PressurePercent": 80,
-        "PressureRecoveryMarginPercent": 5,
-        "RecoveryReservePercent": 5,
-        "RewriteReservePercent": 10,
-        "WarningPercent": 75,
-        "Directories": [
-          {
-            "CacheDir": "spool/cache",
-            "MaxCapacity": 53687091200
-          }
-        ]
-      },
-      "Capacity": {
-        "CompactionHeadroom": 10,
-        "FreeCapacity": 5,
-        "MaximumUsageCapacity": 50,
-        "MaximumUtilization": 70
-      },
-      "Compaction": {
-        "Interval": "00:01:00",
-        "MinimumDeadBytes": 67108864,
-        "MinimumDeadRatio": 10
-      },
-      "ControlDir": "spool/",
-      "IndexCheckpointThresholdBytes": 134217728,
-      "JournalCheckpointThresholdBytes": 33554432,
-      "JournalHardLimitBytes": 134217728,
-      "JournalSoftLimitBytes": 67108864,
-      "ActiveSegmentCount": 1,
-      "MaxRetentionAge": "00:00:00",
-      "MaxSegmentSealDelay": "00:01:00",
-      "SegmentTargetSizeBytes": 10737418240
-    },
     "Systemd": {
       "EnableWatchdog": true,
       "NotifyReadyOnApplicationRunning": true,

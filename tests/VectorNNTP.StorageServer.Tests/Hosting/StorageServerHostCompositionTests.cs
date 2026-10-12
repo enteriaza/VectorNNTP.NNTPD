@@ -12,6 +12,7 @@ using VectorNNTP.StorageServer.Acme;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting;
 using VectorNNTP.StorageServer.Hosting.Systemd;
+using VectorNNTP.StorageServer.Ingress;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.StorageServer.Storage;
@@ -49,22 +50,20 @@ public sealed class StorageServerHostCompositionTests
             host.Services.GetRequiredService<IRabbitMqService>());
 
         var application = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(8, application.Length);
-        Assert.IsType<StorageEngineApplicationService>(application[0]);
-        Assert.IsType<StorageMaintenanceService>(application[1]);
-        Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
-        Assert.IsType<RabbitMqService>(application[3]);
-        Assert.IsType<AcmeCertificateApplicationService>(application[4]);
-        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[5]);
-        Assert.IsType<StorageServerAdvertisementPublisherService>(application[6]);
-        Assert.IsType<StorageArticleLookupConsumerService>(application[7]);
-        Assert.IsType<StorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
-        Assert.NotNull(host.Services.GetRequiredService<IStorageCapacityReader>());
-        Assert.NotNull(host.Services.GetRequiredService<IStorageArticlePresence>());
+        Assert.Equal(5, application.Length);
+        Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[0]);
+        Assert.IsType<RabbitMqService>(application[1]);
+        Assert.IsType<AcmeCertificateApplicationService>(application[2]);
+        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[3]);
+        Assert.IsType<StorageServerAdvertisementPublisherService>(application[4]);
+        Assert.IsType<RejectingStorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
+        Assert.IsType<NoSpoolCapacityReader>(host.Services.GetRequiredService<IStorageCapacityReader>());
+        Assert.IsType<AcceptedArticleQueue>(host.Services.GetRequiredService<IAcceptedArticleQueue>());
         Assert.NotNull(host.Services.GetRequiredService<StorageServerAdvertisementPublisherService>());
-        Assert.NotNull(host.Services.GetRequiredService<StorageEngineApplicationService>());
-        Assert.NotNull(host.Services.GetRequiredService<StorageMaintenanceService>());
-        Assert.False(host.Services.GetRequiredService<StorageEngineApplicationService>().IsReady);
+        Assert.DoesNotContain(
+            typeof(StorageServerServiceCollectionExtensions).Assembly.GetTypes(),
+            static type => type.Name.Contains("Journal", StringComparison.Ordinal)
+                || type.Name.Contains("Segment", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -115,28 +114,15 @@ public sealed class StorageServerHostCompositionTests
                 ApplicationState.Running,
                 host.Services.GetRequiredService<ApplicationLifecycle>().State);
             var application = host.Services.GetServices<IApplicationService>().ToArray();
-            Assert.IsType<StorageEngineApplicationService>(application[0]);
-            Assert.IsType<StorageMaintenanceService>(application[1]);
-            Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
-            Assert.IsType<RabbitMqService>(application[3]);
-            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[4]);
+            Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[0]);
+            Assert.IsType<RabbitMqService>(application[1]);
+            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[2]);
             var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
-            Assert.Same(listener, application[5]);
-            Assert.IsType<StorageServerAdvertisementPublisherService>(application[6]);
-            Assert.IsType<StorageArticleLookupConsumerService>(application[7]);
+            Assert.Same(listener, application[3]);
+            Assert.IsType<StorageServerAdvertisementPublisherService>(application[4]);
             Assert.Equal(StorageVatpListenerState.Running, listener.State);
             Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
-
-            var storageService = host.Services.GetRequiredService<StorageEngineApplicationService>();
-            Assert.True(storageService.IsReady);
-            var engine = host.Services.GetRequiredService<VectorNNTP.StorageServer.Storage.Engine.Durable.FileArticleStorageEngine>();
-            Assert.Same(storageService.Engine, engine);
-            Assert.Same(
-                storageService,
-                host.Services.GetServices<IApplicationService>().OfType<StorageEngineApplicationService>().Single());
-            Assert.Same(
-                host.Services.GetRequiredService<StorageMaintenanceService>(),
-                host.Services.GetServices<IApplicationService>().OfType<StorageMaintenanceService>().Single());
+            Assert.NotNull(host.Services.GetRequiredService<IAcceptedArticleQueue>());
         }
         finally
         {
@@ -146,6 +132,8 @@ public sealed class StorageServerHostCompositionTests
         Assert.Equal(
             ApplicationState.Stopped,
             host.Services.GetRequiredService<ApplicationLifecycle>().State);
+        var queue = host.Services.GetRequiredService<IAcceptedArticleQueue>();
+        Assert.False(queue.TryEnqueue(new AcceptedArticle(default, 1, 1, new byte[] { 1 })));
     }
 
     [Fact]
