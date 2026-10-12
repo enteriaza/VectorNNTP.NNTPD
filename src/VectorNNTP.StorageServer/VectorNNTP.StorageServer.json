@@ -15,6 +15,14 @@
       "TlsHandshakeTimeoutSeconds": 30
     },
     "LogDir": "logs",
+    "SegmentPools": {
+      "CriticalPercent": 85,
+      "HighPercent": 79,
+      "LowPercent": 75,
+      "Directories": [
+        "spool/cache"
+      ]
+    },
     "ServerId": 1,
     "StopHostOnUnexpectedServiceTermination": true,
     "Systemd": {

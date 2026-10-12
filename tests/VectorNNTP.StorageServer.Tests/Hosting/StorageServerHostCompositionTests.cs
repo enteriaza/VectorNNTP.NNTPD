@@ -18,6 +18,7 @@ using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.Common.NntpDb;
 using VectorNNTP.StorageServer.NntpDb;
 using VectorNNTP.StorageServer.Storage;
+using VectorNNTP.StorageServer.Storage.SegmentPools;
 using VectorNNTP.StorageServer.Tests.Fixtures;
 using VectorNNTP.StorageServer.Tests.TestDoubles;
 using VectorNNTP.Common.Configuration;
@@ -53,15 +54,17 @@ public sealed class StorageServerHostCompositionTests
             host.Services.GetRequiredService<IRabbitMqService>());
 
         var application = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(8, application.Length);
+        Assert.Equal(10, application.Length);
         Assert.IsType<NntpDbService>(application[0]);
         Assert.IsType<StorageServerSharedConfigurationService>(application[1]);
         Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
         Assert.IsType<RabbitMqService>(application[3]);
         Assert.IsType<AcmeCertificateApplicationService>(application[4]);
-        Assert.Same(host.Services.GetRequiredService<AcceptedArticleWorker>(), application[5]);
-        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[6]);
-        Assert.IsType<StorageServerAdvertisementPublisherService>(application[7]);
+        Assert.IsType<SegmentPoolValidationService>(application[5]);
+        Assert.IsType<BlockDeviceMonitorService>(application[6]);
+        Assert.Same(host.Services.GetRequiredService<AcceptedArticleWorker>(), application[7]);
+        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[8]);
+        Assert.IsType<StorageServerAdvertisementPublisherService>(application[9]);
         Assert.Equal(1, application.Count(static service => service is AcceptedArticleWorker));
         Assert.IsType<RejectingStorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
         Assert.IsType<NoSpoolCapacityReader>(host.Services.GetRequiredService<IStorageCapacityReader>());
@@ -70,7 +73,9 @@ public sealed class StorageServerHostCompositionTests
         Assert.DoesNotContain(
             typeof(StorageServerServiceCollectionExtensions).Assembly.GetTypes(),
             static type => type.Name.Contains("Journal", StringComparison.Ordinal)
-                || type.Name.Contains("Segment", StringComparison.Ordinal));
+                || type.Name.Contains("SegmentStore", StringComparison.Ordinal)
+                || type.Name.Contains("SegmentWriter", StringComparison.Ordinal)
+                || type.Name.Contains("SegmentFile", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -124,6 +129,27 @@ public sealed class StorageServerHostCompositionTests
     }
 
     [Fact]
+    public async Task Pool_validation_failure_stops_the_host_before_the_listener_and_advertisement()
+    {
+        using var host = CreateHost(permitPools: false);
+        var error = await Record.ExceptionAsync(() => host.StartAsync());
+        Assert.NotNull(error);
+        Assert.Contains("does not exist", error.ToString(), StringComparison.Ordinal);
+
+        var lifecycle = host.Services.GetRequiredService<ApplicationLifecycle>();
+        Assert.NotEqual(ApplicationState.Running, lifecycle.State);
+        Assert.Equal(ApplicationState.Stopped, lifecycle.State);
+
+        var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
+        Assert.Equal(StorageVatpListenerState.Created, listener.State);
+        Assert.Equal(0, host.Services.GetRequiredService<StorageServerAdvertisementPublisherService>().PublishedCount);
+
+        var application = host.Services.GetServices<IApplicationService>().ToArray();
+        Assert.Null(application.OfType<AcceptedArticleWorker>().Single().Execution);
+        Assert.Null(application.OfType<BlockDeviceMonitorService>().Single().Execution);
+    }
+
+    [Fact]
     public async Task Host_starts_application_services_in_order_when_acme_and_rabbitmq_are_stubbed()
     {
         using var host = CreateHost(replaceAcme: true, replaceRabbitMq: true);
@@ -139,10 +165,12 @@ public sealed class StorageServerHostCompositionTests
             Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
             Assert.IsType<RabbitMqService>(application[3]);
             Assert.IsType<ImmediateAcmeReadyApplicationService>(application[4]);
-            Assert.IsType<AcceptedArticleWorker>(application[5]);
+            Assert.IsType<SegmentPoolValidationService>(application[5]);
+            Assert.IsType<BlockDeviceMonitorService>(application[6]);
+            Assert.IsType<AcceptedArticleWorker>(application[7]);
             var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
-            Assert.Same(listener, application[6]);
-            Assert.IsType<StorageServerAdvertisementPublisherService>(application[7]);
+            Assert.Same(listener, application[8]);
+            Assert.IsType<StorageServerAdvertisementPublisherService>(application[9]);
             Assert.Equal(StorageVatpListenerState.Running, listener.State);
             Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
             Assert.NotNull(host.Services.GetRequiredService<IAcceptedArticleQueue>());
@@ -196,7 +224,7 @@ public sealed class StorageServerHostCompositionTests
         Assert.DoesNotContain("VectorNNTP.NNTPD", referenced);
     }
 
-    private static IHost CreateHost(bool replaceAcme = true, bool replaceRabbitMq = true)
+    private static IHost CreateHost(bool replaceAcme = true, bool replaceRabbitMq = true, bool permitPools = true)
     {
         var builder = Host.CreateApplicationBuilder([]);
         var pairs = StorageServerTestOptions.CreateValidConfigurationPairs();
@@ -209,6 +237,14 @@ public sealed class StorageServerHostCompositionTests
         builder.ConfigureStorageServerLogging();
         builder.ConfigureStorageServerPlatformHosting();
         builder.AddStorageServerHosting();
+        if (permitPools)
+        {
+            SegmentPoolTestSupport.UsePermissiveInspector(builder.Services);
+        }
+        else
+        {
+            SegmentPoolTestSupport.UseFailingInspector(builder.Services);
+        }
         builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
         if (replaceRabbitMq)
         {

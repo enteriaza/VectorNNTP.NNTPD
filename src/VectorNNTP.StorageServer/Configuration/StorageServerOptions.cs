@@ -168,6 +168,11 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     public StorageServerListenerOptions Listener { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets dedicated segment-pool directories and future occupancy thresholds.
+    /// </summary>
+    public SegmentPoolsOptions SegmentPools { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets Linux systemd notify/watchdog options.
     /// </summary>
     [Required]

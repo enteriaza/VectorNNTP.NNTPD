@@ -16,6 +16,7 @@ using VectorNNTP.StorageServer.Ingress;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.NntpDb;
 using VectorNNTP.StorageServer.Storage;
+using VectorNNTP.StorageServer.Storage.SegmentPools;
 using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Hosting;
@@ -58,6 +59,8 @@ public static class StorageServerServiceCollectionExtensions
                     }
                 }
             })
+            .PostConfigure<IConfiguration>(static (options, configuration) =>
+                SegmentPoolsOptions.ReplaceConfiguredDirectories(options, configuration))
             .ValidateOnStart();
         builder.Services.AddSingleton<IValidateOptions<StorageServerOptions>, StorageServerOptionsValidator>();
 
@@ -129,6 +132,13 @@ public static class StorageServerServiceCollectionExtensions
 
         builder.Services.TryAddSingleton<IStorageCapacityReader, NoSpoolCapacityReader>();
         builder.Services.TryAddSingleton<StorageServerAdvertisementPublisherService>();
+        builder.Services.TryAddSingleton<SegmentPoolCatalog>();
+        builder.Services.TryAddSingleton<ISegmentPoolWriteProbe, FileSegmentPoolWriteProbe>();
+        builder.Services.TryAddSingleton<ILinuxSysfs, LinuxSysfsReader>();
+        builder.Services.TryAddSingleton<ISegmentPoolInspector, PlatformSegmentPoolInspector>();
+        builder.Services.TryAddSingleton<IBlockDeviceCounterSource, PlatformBlockDeviceCounterSource>();
+        builder.Services.TryAddSingleton<SegmentPoolValidationService>();
+        builder.Services.TryAddSingleton<BlockDeviceMonitorService>();
 
         builder.Services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
         builder.Services.TryAddSingleton<NntpDbService>();
@@ -136,7 +146,9 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddSingleton<INntpSharedConfigurationCatalogue>(static provider =>
             provider.GetRequiredService<StorageServerSharedConfigurationService>());
 
-        // Startup order: NntpDB → nntpsharedconfig → Cloudflare → RabbitMQ → ACME → accepted-article worker → Listener → AdvertisementPublisher.
+        // Startup order: NntpDB → nntpsharedconfig → Cloudflare → RabbitMQ → ACME →
+        // segment-pool validation → block-device monitor → accepted-article worker → Listener → AdvertisementPublisher.
+        // Validation throws before the worker, listener, or advertisement publisher start.
         // ApplicationServiceManager stops in reverse, so advertisement stops first and the worker stops after the listener completes the queue.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, NntpDbService>(static provider =>
@@ -151,6 +163,12 @@ public static class StorageServerServiceCollectionExtensions
                 sp.GetRequiredService<RabbitMqService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateApplicationService>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, SegmentPoolValidationService>(static provider =>
+                provider.GetRequiredService<SegmentPoolValidationService>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, BlockDeviceMonitorService>(static provider =>
+                provider.GetRequiredService<BlockDeviceMonitorService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, AcceptedArticleWorker>(static provider =>
                 provider.GetRequiredService<AcceptedArticleWorker>()));

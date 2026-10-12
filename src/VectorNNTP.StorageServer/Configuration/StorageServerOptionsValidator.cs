@@ -129,7 +129,84 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             "StorageServer:LogDir",
             failures,
             applicationBaseDirectory);
+        ValidateSegmentPools(options.SegmentPools, failures, applicationBaseDirectory);
     }
+
+    private static void ValidateSegmentPools(
+        SegmentPoolsOptions? pools,
+        List<string> failures,
+        string? applicationBaseDirectory)
+    {
+        if (pools is null)
+        {
+            failures.Add("StorageServer:SegmentPools is required.");
+            return;
+        }
+
+        var percentCount = failures.Count;
+        ValidatePercent("StorageServer:SegmentPools:LowPercent", pools.LowPercent, failures);
+        ValidatePercent("StorageServer:SegmentPools:HighPercent", pools.HighPercent, failures);
+        ValidatePercent("StorageServer:SegmentPools:CriticalPercent", pools.CriticalPercent, failures);
+        if (failures.Count == percentCount
+            && (pools.LowPercent >= pools.HighPercent || pools.HighPercent >= pools.CriticalPercent))
+        {
+            failures.Add(
+                "StorageServer:SegmentPools requires LowPercent < HighPercent < CriticalPercent "
+                + $"(LowPercent={pools.LowPercent}, HighPercent={pools.HighPercent}, CriticalPercent={pools.CriticalPercent}).");
+        }
+
+        if (pools.Directories is null || pools.Directories.Length == 0)
+        {
+            failures.Add("StorageServer:SegmentPools:Directories must contain at least one directory.");
+            return;
+        }
+
+        var seen = new HashSet<string>(PathComparer);
+        for (var index = 0; index < pools.Directories.Length; index++)
+        {
+            var key = $"StorageServer:SegmentPools:Directories:{index}";
+            var entry = pools.Directories[index];
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                failures.Add($"{key} is required and cannot be empty.");
+                continue;
+            }
+
+            var trimmed = entry.Trim();
+            if (trimmed.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+            {
+                failures.Add($"{key} contains invalid path characters.");
+                continue;
+            }
+
+            string resolved;
+            try
+            {
+                resolved = ApplicationLocalPath.ResolveApplicationLocalPath(trimmed, applicationBaseDirectory);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                failures.Add($"{key} is not a valid filesystem path.");
+                continue;
+            }
+
+            if (!seen.Add(resolved))
+            {
+                failures.Add($"{key} duplicates another SegmentPools directory after canonicalization ('{resolved}').");
+            }
+        }
+    }
+
+    private static void ValidatePercent(string key, int value, List<string> failures)
+    {
+        if (value is < 0 or > 100)
+        {
+            failures.Add($"{key} must be an integer in the inclusive range 0–100.");
+        }
+    }
+
+    private static StringComparer PathComparer { get; } =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     private static void ValidateFilesystemPath(
         string? path,
