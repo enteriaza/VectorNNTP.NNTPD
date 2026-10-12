@@ -418,8 +418,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
                 Runtime.Listener,
                 _logger,
                 acceptedArticles: _acceptedArticles,
-                storeAdmission: _storeAdmission,
-                storePathIdentity: Runtime.Fqdn);
+                storeAdmission: _storeAdmission);
             await vatpSession.RunAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

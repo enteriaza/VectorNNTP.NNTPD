@@ -17,7 +17,7 @@ public sealed class StorageVatpQueueIngressTests
     private static readonly TimeSpan Safety = TimeSpan.FromSeconds(10);
 
     [Fact]
-    public async Task Store_enqueues_path_rewritten_article_and_preserves_the_body()
+    public async Task Store_enqueues_the_original_article_without_this_servers_path_hop()
     {
         var inbound = Build("<store-path@seg.test>", "body-line\r\n");
         var queue = new AcceptedArticleQueue();
@@ -27,17 +27,15 @@ public sealed class StorageVatpQueueIngressTests
 
         var delivery = await queue.DequeueAsync(CancellationToken.None);
         Assert.True(delivery.HasArticle);
-        var expected = Rewrite(inbound);
-        Assert.Equal(expected.ArtId, delivery.Article.ArtId);
-        Assert.Equal(expected.ArtHash, delivery.Article.ArtHash);
-        Assert.Equal(expected.ArtSize, delivery.Article.ArtSize);
-        Assert.True(delivery.Article.ArtData.Span.SequenceEqual(expected.ArtData.Span));
-        var path = Encoding.ASCII.GetString(expected.Path);
-        Assert.StartsWith("cache01.usenet.ninja!", path, StringComparison.Ordinal);
-        Assert.Contains("!nntpd01.usenet.ninja!", path, StringComparison.Ordinal);
-        Assert.Equal(1, CountHop(path, "cache01.usenet.ninja"));
-        Assert.Contains("news.usenet.ninja", path, StringComparison.Ordinal);
-        Assert.Contains("body-line\r\n", Encoding.ASCII.GetString(delivery.Article.ArtData.Span), StringComparison.Ordinal);
+        Assert.Equal(inbound.Record.ArtId, delivery.Article.ArtId);
+        Assert.Equal(inbound.Record.ArtHash, delivery.Article.ArtHash);
+        Assert.Equal(inbound.Record.ArtSize, delivery.Article.ArtSize);
+        Assert.True(delivery.Article.ArtData.Span.SequenceEqual(inbound.Record.ArtData.Span));
+        var queued = Encoding.ASCII.GetString(delivery.Article.ArtData.Span);
+        Assert.Equal(0, CountHop(queued, CacheFqdn));
+        Assert.Contains("Path: ", queued, StringComparison.Ordinal);
+        Assert.Contains("body-line\r\n", queued, StringComparison.Ordinal);
+        Assert.Contains("news.usenet.ninja", queued, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -54,14 +52,14 @@ public sealed class StorageVatpQueueIngressTests
         var delivery = await queue.DequeueAsync(CancellationToken.None);
         Assert.True(delivery.HasArticle);
         var queued = Encoding.ASCII.GetString(delivery.Article.ArtData.Span);
-        Assert.False(delivery.Article.ArtData.Span.SequenceEqual(inbound.Record.ArtData.Span));
-        Assert.Equal(2, CountHop(queued, CacheFqdn));
+        Assert.True(delivery.Article.ArtData.Span.SequenceEqual(inbound.Record.ArtData.Span));
+        Assert.Equal(1, CountHop(queued, CacheFqdn));
         Assert.Equal(Body(inboundText), Body(queued));
         Assert.Contains("news.usenet.ninja", queued, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Second_store_of_the_same_bytes_enqueues_another_copy_with_one_cache_hop()
+    public async Task Second_store_of_the_same_bytes_enqueues_another_unmodified_copy()
     {
         var inbound = Build("<store-again@seg.test>", "body\r\n");
         var queue = new AcceptedArticleQueue();
@@ -69,14 +67,13 @@ public sealed class StorageVatpQueueIngressTests
         Assert.Equal(VatpStoreOutcome.Accepted, Outcome(await harness.StoreAndReadAsync(inbound)));
         Assert.Equal(VatpStoreOutcome.Accepted, Outcome(await harness.StoreAndReadAsync(inbound, streamId: 2)));
 
-        var expected = Rewrite(inbound);
         var first = await queue.DequeueAsync(CancellationToken.None);
         var second = await queue.DequeueAsync(CancellationToken.None);
         Assert.True(first.HasArticle && second.HasArticle);
-        Assert.True(first.Article.ArtData.Span.SequenceEqual(expected.ArtData.Span));
-        Assert.True(second.Article.ArtData.Span.SequenceEqual(expected.ArtData.Span));
-        Assert.Equal(1, CountHop(Encoding.ASCII.GetString(first.Article.ArtData.Span), "cache01.usenet.ninja"));
-        Assert.Equal(1, CountHop(Encoding.ASCII.GetString(second.Article.ArtData.Span), "cache01.usenet.ninja"));
+        Assert.True(first.Article.ArtData.Span.SequenceEqual(inbound.Record.ArtData.Span));
+        Assert.True(second.Article.ArtData.Span.SequenceEqual(inbound.Record.ArtData.Span));
+        Assert.Equal(0, CountHop(Encoding.ASCII.GetString(first.Article.ArtData.Span), CacheFqdn));
+        Assert.Equal(0, CountHop(Encoding.ASCII.GetString(second.Article.ArtData.Span), CacheFqdn));
     }
 
     [Fact]
@@ -172,13 +169,6 @@ public sealed class StorageVatpQueueIngressTests
         Assert.Contains(seen, static text => text.Contains("beta\r\n", StringComparison.Ordinal));
     }
 
-    private static ArticleRecord Rewrite(Built inbound)
-    {
-        var created = ArticleRecordFactory.TryCreate(new NntpArticleParser(CacheFqdn), inbound.Record.ArtData);
-        Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
-        return created.Record;
-    }
-
     private static int CountHop(string article, string hop) =>
         article.Split(hop, StringSplitOptions.None).Length - 1;
 
@@ -255,8 +245,7 @@ public sealed class StorageVatpQueueIngressTests
                 new StorageServerListenerRuntimeOptions(262144, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30), 8),
                 NullLogger.Instance,
                 acceptedArticles: queue,
-                storeAdmission: new StoreAssemblyAdmission(8),
-                storePathIdentity: CacheFqdn);
+                storeAdmission: new StoreAssemblyAdmission(8));
             var harness = new Harness(transport, session);
             await harness.Transport.ClientWriteAsync(VatpFrameEncoder.ToSingleBuffer(
                 VatpFrameEncoder.EncodeHello(VatpProtocol.DefaultMaxFramePayload)));

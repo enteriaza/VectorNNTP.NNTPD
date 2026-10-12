@@ -53,14 +53,16 @@ public sealed class StorageServerHostCompositionTests
             host.Services.GetRequiredService<IRabbitMqService>());
 
         var application = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(7, application.Length);
+        Assert.Equal(8, application.Length);
         Assert.IsType<NntpDbService>(application[0]);
         Assert.IsType<StorageServerSharedConfigurationService>(application[1]);
         Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
         Assert.IsType<RabbitMqService>(application[3]);
         Assert.IsType<AcmeCertificateApplicationService>(application[4]);
-        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[5]);
-        Assert.IsType<StorageServerAdvertisementPublisherService>(application[6]);
+        Assert.Same(host.Services.GetRequiredService<AcceptedArticleWorker>(), application[5]);
+        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[6]);
+        Assert.IsType<StorageServerAdvertisementPublisherService>(application[7]);
+        Assert.Equal(1, application.Count(static service => service is AcceptedArticleWorker));
         Assert.IsType<RejectingStorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
         Assert.IsType<NoSpoolCapacityReader>(host.Services.GetRequiredService<IStorageCapacityReader>());
         Assert.IsType<AcceptedArticleQueue>(host.Services.GetRequiredService<IAcceptedArticleQueue>());
@@ -137,9 +139,10 @@ public sealed class StorageServerHostCompositionTests
             Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
             Assert.IsType<RabbitMqService>(application[3]);
             Assert.IsType<ImmediateAcmeReadyApplicationService>(application[4]);
+            Assert.IsType<AcceptedArticleWorker>(application[5]);
             var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
-            Assert.Same(listener, application[5]);
-            Assert.IsType<StorageServerAdvertisementPublisherService>(application[6]);
+            Assert.Same(listener, application[6]);
+            Assert.IsType<StorageServerAdvertisementPublisherService>(application[7]);
             Assert.Equal(StorageVatpListenerState.Running, listener.State);
             Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
             Assert.NotNull(host.Services.GetRequiredService<IAcceptedArticleQueue>());

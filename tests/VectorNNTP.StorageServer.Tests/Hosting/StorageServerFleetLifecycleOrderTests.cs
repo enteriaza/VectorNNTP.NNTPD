@@ -272,10 +272,13 @@ public sealed class StorageServerFleetLifecycleOrderTests
             var sharedIndex = Array.FindIndex(ordered, static service => service is VectorNNTP.StorageServer.NntpDb.StorageServerSharedConfigurationService);
             var rabbitIndex = Array.FindIndex(ordered, static service => service is RabbitMqService);
             var acmeIndex = Array.FindIndex(ordered, static service => service is ImmediateAcmeReadyApplicationService);
+            var workerIndex = Array.FindIndex(ordered, static service => service is VectorNNTP.StorageServer.Ingress.AcceptedArticleWorker);
             Assert.True(databaseIndex >= 0 && databaseIndex < sharedIndex);
             Assert.True(sharedIndex < rabbitIndex);
             Assert.True(rabbitIndex < acmeIndex);
-            Assert.True(acmeIndex < listenerIndex);
+            Assert.True(acmeIndex < workerIndex);
+            Assert.True(workerIndex < listenerIndex);
+            Assert.Equal(1, ordered.Count(static service => service is VectorNNTP.StorageServer.Ingress.AcceptedArticleWorker));
             Assert.True(listenerIndex < publisherIndex);
         }
 

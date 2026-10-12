@@ -1,7 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using VectorNNTP.Common.Articles;
-using VectorNNTP.Common.Articles.Parsing;
 using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Ingress;
@@ -11,9 +10,8 @@ namespace VectorNNTP.StorageServer.Listener;
 /// <summary>
 /// VATP server session: client HELLO, then OPEN served from
 /// <see cref="IStorageArticleOpenBoundary"/> as META, credit-paced DATA/FIN, and END.
-/// STORE is a separate receive stream. After META matches the inbound bytes, Path is
-/// rematerialized with <see cref="StorageServerOptions.Fqdn"/> and that record is enqueued.
-/// Retrieval does not rewrite Path.
+/// STORE is a separate receive stream. After META matches the inbound bytes, the original
+/// article is enqueued. Path is not rewritten here. Retrieval does not rewrite Path.
 /// </summary>
 public sealed partial class StorageVatpSession : IAsyncDisposable
 {
@@ -27,7 +25,6 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly IAcceptedArticleQueue? _acceptedArticles;
     private readonly StoreAssemblyAdmission? _storeAdmission;
-    private readonly NntpArticleParser? _storePathParser;
     private readonly Dictionary<uint, SendStream> _streams = [];
     private readonly ConcurrentDictionary<uint, StoreStream> _storeStreams = [];
     private readonly ArticleTransferReadyRing _readyRing = new();
@@ -46,8 +43,7 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
         ILogger logger,
         ArticleTransferLimits? limits = null,
         IAcceptedArticleQueue? acceptedArticles = null,
-        StoreAssemblyAdmission? storeAdmission = null,
-        string? storePathIdentity = null)
+        StoreAssemblyAdmission? storeAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(openBoundary);
@@ -60,9 +56,6 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
         _logger = logger;
         _acceptedArticles = acceptedArticles;
         _storeAdmission = storeAdmission;
-        _storePathParser = string.IsNullOrWhiteSpace(storePathIdentity)
-            ? null
-            : new NntpArticleParser(storePathIdentity.Trim());
     }
 
     /// <summary>Runs until peer close, cancellation, or fatal protocol error.</summary>

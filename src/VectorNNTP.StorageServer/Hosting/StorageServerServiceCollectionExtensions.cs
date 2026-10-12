@@ -30,8 +30,8 @@ public static class StorageServerServiceCollectionExtensions
     /// </summary>
     /// <remarks>
     /// Application service start order:
-    /// NntpDB → nntpsharedconfig → Cloudflare DNS → RabbitMQ (connectivity only) → ACME → VATP listener → AdvertisementPublisher.
-    /// Shutdown is that order reversed, so advertisement stops before the listener.
+    /// NntpDB → nntpsharedconfig → Cloudflare DNS → RabbitMQ (connectivity only) → ACME → accepted-article worker → VATP listener → AdvertisementPublisher.
+    /// Shutdown is that order reversed, so advertisement stops before the listener, and the listener completes the queue before the worker stops.
     /// Topology, queues, and consumers are not registered here. NntpDB does not migrate schema.
     /// </remarks>
     public static HostApplicationBuilder AddStorageServerHosting(this HostApplicationBuilder builder)
@@ -116,6 +116,8 @@ public static class StorageServerServiceCollectionExtensions
             });
 
         builder.Services.TryAddSingleton<IAcceptedArticleQueue, AcceptedArticleQueue>();
+        builder.Services.TryAddSingleton<IAcceptedArticleProcessor, AcceptedArticlePathProcessor>();
+        builder.Services.TryAddSingleton<AcceptedArticleWorker>();
         builder.Services.TryAddSingleton<IStorageArticleOpenBoundary, RejectingStorageArticleOpenBoundary>();
 
         builder.Services.TryAddSingleton<IRabbitMqConnectionNameProvider>(static sp =>
@@ -134,8 +136,8 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddSingleton<INntpSharedConfigurationCatalogue>(static provider =>
             provider.GetRequiredService<StorageServerSharedConfigurationService>());
 
-        // Startup order: NntpDB → nntpsharedconfig → Cloudflare → RabbitMQ → ACME → Listener → AdvertisementPublisher.
-        // ApplicationServiceManager stops in reverse, so advertisement stops first.
+        // Startup order: NntpDB → nntpsharedconfig → Cloudflare → RabbitMQ → ACME → accepted-article worker → Listener → AdvertisementPublisher.
+        // ApplicationServiceManager stops in reverse, so advertisement stops first and the worker stops after the listener completes the queue.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, NntpDbService>(static provider =>
                 provider.GetRequiredService<NntpDbService>()));
@@ -149,6 +151,9 @@ public static class StorageServerServiceCollectionExtensions
                 sp.GetRequiredService<RabbitMqService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateApplicationService>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, AcceptedArticleWorker>(static provider =>
+                provider.GetRequiredService<AcceptedArticleWorker>()));
         builder.Services.AddSingleton(static provider =>
         {
             var listener = provider.GetRequiredService<IOptions<StorageServerOptions>>().Value.Listener;

@@ -1247,7 +1247,7 @@ Example (user scope, PowerShell):
 
 NNTPD places one copy of each accepted article. A successful primary StorageServer placement completes the placement operation. NNTPD does not select a second StorageServer and does not initiate a replica STORE. There is no `Nntpd:Replication` configuration.
 
-StorageServer accepts VATP articles, rewrites `Path:` with this server's FQDN, and places the resulting bytes on an in-memory queue. It does not write a journal, an index, or segment files. There is no `StorageServer:Storage` section. Capacity advertisements still use the existing `cache.broadcast` payload; with no spool, the published totals are zero. `StorageServer:LogDir` remains the Serilog directory and is unrelated to article retention.
+StorageServer accepts VATP articles and places the original bytes on an in-memory queue. One worker dequeues each article, rewrites `Path:` with this server's FQDN, and discards the result. It does not write a journal, an index, or segment files. There is no `StorageServer:Storage` section. Capacity advertisements still use the existing `cache.broadcast` payload; with no spool, the published totals are zero. `StorageServer:LogDir` remains the Serilog directory and is unrelated to article retention.
 
 ## Generated FQDN
 
