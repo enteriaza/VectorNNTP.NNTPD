@@ -36,7 +36,7 @@ public sealed class PostFilterRejectionEvidenceQueueTests
             NullLogger<PostFilterRejectionEvidenceService>.Instance);
         await service.StartAsync(CancellationToken.None);
         Assert.True(queue.TryEnqueue(Evidence("spam")));
-        await WaitForAsync(() => factory.Connections.Sum(static connection => connection.InsertPostFilterRejectionCount) == 1);
+        await WaitForAsync(() => queue.Written == 1);
         Assert.Equal(1, queue.Written);
         Assert.Equal("spam", Assert.Single(factory.Connections.SelectMany(static connection => connection.Rejections)).Reason);
         await service.StopAsync(CancellationToken.None);

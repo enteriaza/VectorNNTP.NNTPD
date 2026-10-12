@@ -1040,7 +1040,7 @@ namespace VectorNNTP.BackFiller.Listener
                 MetaPayload = metaPayload;
                 ArtData = artData;
                 ArtSize = artSize;
-                SendWindow = sendWindow;
+                _sendWindow = sendWindow;
                 ReservedBytes = reservedBytes;
             }
 
@@ -1062,13 +1062,11 @@ namespace VectorNNTP.BackFiller.Listener
             /// <summary>Bytes already handed to the DATA encoder. Advanced under <see cref="VatpListenerSession._streamGate"/>.</summary>
             internal int SentBytes { get; set; }
 
-            /// <summary>Window supplied at construction.</summary>
-            /// <remarks>
-            /// <see cref="ArticleTransferWindow"/> is a struct and this property has no setter.
-            /// <see cref="ArticleTransferWindow.Add"/> and <see cref="ArticleTransferWindow.TryConsume"/> invoked on the
-            /// property value therefore mutate a copy. <see cref="ArticleTransferWindow.Credit"/> stays at the constructed value.
-            /// </remarks>
-            internal ArticleTransferWindow SendWindow { get; }
+            /// <summary>Per-stream send credit. Callers mutate this value under <see cref="VatpListenerSession._streamGate"/>.</summary>
+            private ArticleTransferWindow _sendWindow;
+
+            /// <summary>Gets the stored send window so <see cref="ArticleTransferWindow.Add"/> and <see cref="ArticleTransferWindow.TryConsume"/> update this stream.</summary>
+            internal ref ArticleTransferWindow SendWindow => ref _sendWindow;
 
             /// <summary>Found-byte reservation released once when this stream leaves the table.</summary>
             internal int ReservedBytes { get; }

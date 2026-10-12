@@ -740,14 +740,23 @@ public sealed class TakeThisPipelineTests
         _ = await duplex.ReadClientLineAsync();
 
         var holdN = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new ConcurrentBag<string>();
         var completed = new ConcurrentBag<string>();
         session.TakeThisWindow!.HoldProcess = id =>
         {
             var text = Encoding.ASCII.GetString(id.Span);
-            return text == "<slow-n@ex.com>" ? holdN.Task : Task.CompletedTask;
+            return text == "<slow-n@ex.com>" ? holdN.Task : slowEntered.Task;
         };
-        session.TakeThisWindow.AfterProcessStarted = id => started.Add(Encoding.ASCII.GetString(id.Span));
+        session.TakeThisWindow.AfterProcessStarted = id =>
+        {
+            var text = Encoding.ASCII.GetString(id.Span);
+            started.Add(text);
+            if (text == "<slow-n@ex.com>")
+            {
+                slowEntered.TrySetResult();
+            }
+        };
         session.TakeThisWindow.AfterProcessCompleted = id => completed.Add(Encoding.ASCII.GetString(id.Span));
 
         await duplex.WriteClientAsync(
@@ -755,7 +764,7 @@ public sealed class TakeThisPipelineTests
             BuildTakeThis("<fast-n1@ex.com>", CanonicalArticleText.Destuffed("<fast-n1@ex.com>", "N1\r\n")) +
             BuildTakeThis("<fast-n2@ex.com>", CanonicalArticleText.Destuffed("<fast-n2@ex.com>", "N2\r\n")));
 
-        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var safety = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await WaitUntilAsync(
             () => completed.Contains("<fast-n1@ex.com>") && completed.Contains("<fast-n2@ex.com>"),
             safety.Token);

@@ -104,9 +104,10 @@ public sealed class TxWriteGranularityConnectionTests
                 writeBytes += chunk.Length;
             }
 
+            var read = ReadExactAsync(client, target, timeout.Token);
             await server.Output.FlushAsync(timeout.Token);
 
-            var received = await ReadExactAsync(client, target, timeout.Token);
+            var received = await read;
             Assert.Equal(expected, received);
             Assert.Equal(target, writeBytes);
             Assert.Equal(1, Volatile.Read(ref writes));

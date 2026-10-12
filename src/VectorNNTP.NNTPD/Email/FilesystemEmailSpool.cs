@@ -31,6 +31,14 @@ public sealed class FilesystemEmailSpool : IEmailSpool
     private readonly string _failedDirectory;
     private int _accepting = 1;
 
+    /// <summary>
+    /// Optional replacement for the work-file delete inside <see cref="Complete"/>.
+    /// Production leaves this unset, so <see cref="File.Delete(string)"/> runs.
+    /// Tests assign a delegate that throws <see cref="IOException"/> or
+    /// <see cref="UnauthorizedAccessException"/> to prove the delivered-marker path.
+    /// </summary>
+    internal Action<string>? CompleteWorkFileDelete { get; set; }
+
     /// <summary>Initializes a new filesystem spool from <see cref="EmailOptions"/>.</summary>
     public FilesystemEmailSpool(IOptions<EmailOptions> options, ILogger<FilesystemEmailSpool> logger)
     {
@@ -299,7 +307,8 @@ public sealed class FilesystemEmailSpool : IEmailSpool
         ForgetClaim(claim.Id);
         try
         {
-            File.Delete(claim.WorkPath);
+            var delete = CompleteWorkFileDelete ?? File.Delete;
+            delete(claim.WorkPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -79,7 +79,9 @@ public sealed class TcpConnectionDisconnectLoggingTests
         await client.SendAsync(new byte[] { 0x01 });
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await WaitUntilAsync(() => server.IsCompleted, timeout.Token);
+        await WaitUntilAsync(
+            () => server.IsCompleted && logger.Disconnects.Count == 1 && logger.PumpErrors.Count > 0,
+            timeout.Token);
         await server.CompleteAsync().WaitAsync(timeout.Token);
 
         var line = Assert.Single(logger.Disconnects);

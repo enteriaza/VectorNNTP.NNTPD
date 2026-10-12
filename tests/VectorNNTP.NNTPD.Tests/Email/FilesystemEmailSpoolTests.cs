@@ -166,20 +166,35 @@ public sealed class FilesystemEmailSpoolTests
     }
 
     [Fact]
+    public async Task Complete_DeletesWorkFile_WithoutDeliveredMarker()
+    {
+        using var harness = new EmailSpoolHarness();
+        await harness.Spool.WriteAsync(SmtpTransportTests.Item(), CancellationToken.None);
+        var claim = harness.Spool.TryClaimNext();
+        Assert.NotNull(claim);
+        harness.Spool.Complete(claim!);
+        Assert.False(File.Exists(claim!.WorkPath));
+        Assert.False(File.Exists(Path.Combine(harness.Directory, claim.Id + ".delivered")));
+        Assert.Empty(harness.EmlFiles());
+        Assert.Empty(harness.WorkFiles());
+        Assert.Null(harness.Spool.TryClaimNext());
+    }
+
+    [Fact]
     public async Task Complete_DeleteFailure_LeavesDeliveredMarker()
     {
         using var harness = new EmailSpoolHarness();
         await harness.Spool.WriteAsync(SmtpTransportTests.Item(), CancellationToken.None);
         var claim = harness.Spool.TryClaimNext();
         Assert.NotNull(claim);
-        await using var lockStream = new FileStream(
-            claim!.WorkPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.None);
-        harness.Spool.Complete(claim);
-        Assert.True(File.Exists(claim.WorkPath) || File.Exists(Path.Combine(harness.Directory, claim.Id + ".delivered")));
+        harness.Spool.CompleteWorkFileDelete = _ => throw new IOException("injected work-file delete failure");
+        harness.Spool.Complete(claim!);
+        var delivered = Path.Combine(harness.Directory, claim!.Id + ".delivered");
+        Assert.True(File.Exists(delivered));
+        Assert.False(File.Exists(claim.WorkPath));
         Assert.Empty(harness.EmlFiles());
+        Assert.Empty(harness.WorkFiles());
+        Assert.Null(harness.Spool.TryClaimNext());
     }
 
     [Fact]

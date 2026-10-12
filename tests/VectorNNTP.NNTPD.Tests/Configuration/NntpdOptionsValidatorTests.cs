@@ -1612,10 +1612,12 @@ public sealed class NntpdConfigurationTests
     [Fact]
     public async Task HostStart_MissingCloudFlareApiKey_PublishesTheSharedSnapshot()
     {
-        var json = """
+        var port = TestHostFactory.GetFreeTcpPort();
+        var json = $$"""
                    {
                      "Nntpd": {
                        "BindAddress": [ "*" ],
+                       "BindPort": {{port}},
                        "CloudFlareApiKey": "",
                        "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
                        "ServerId": 1
@@ -1673,10 +1675,12 @@ public sealed class NntpdConfigurationTests
     [Fact]
     public async Task HostStart_ValidMandatorySettings_ReachesRunning()
     {
-        var json = """
+        var port = TestHostFactory.GetFreeTcpPort();
+        var json = $$"""
                    {
                      "Nntpd": {
                        "BindAddress": [ "*" ],
+                       "BindPort": {{port}},
                        "CloudFlareApiKey": "unit-test-cloudflare-api-key",
                        "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
                        "ServerId": 1

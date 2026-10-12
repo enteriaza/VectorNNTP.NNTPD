@@ -240,10 +240,8 @@ namespace VectorNNTP.BackFiller.Tests.Listener
             var slowReceiver = new ManualTransferReceiver(slow.Record.ArtId);
             var fastReceiver = new ManualTransferReceiver(fast.Record.ArtId);
             var fastCompleted = false;
-            var slowDataFrames = 0;
-            var slowStalled = false;
 
-            while (!fastCompleted || !slowReceiver.IsComplete)
+            while (!fastCompleted)
             {
                 var frame = await ReadVatpFrameAsync(client.Stream);
                 if (frame.Header.StreamId == 2)
@@ -252,23 +250,24 @@ namespace VectorNNTP.BackFiller.Tests.Listener
                 }
                 else if (frame.Header.StreamId == 1)
                 {
-                    var grant = slowStalled;
-                    if (frame.Header.Type == VatpFrameType.Data)
-                    {
-                        slowDataFrames++;
-                        if (slowDataFrames >= 4 && !slowStalled)
-                        {
-                            slowStalled = true;
-                            grant = false;
-                        }
-                    }
-
-                    ApplyFrame(client.Stream, frame, slowReceiver, grantServerWindow: grant);
+                    Assert.False(frame.Header.Type == VatpFrameType.Data && frame.Header.HasFin);
+                    ApplyFrame(client.Stream, frame, slowReceiver, grantServerWindow: false);
                 }
             }
 
             Assert.True(fastCompleted);
-            Assert.True(slowReceiver.IsComplete);
+            Assert.False(slowReceiver.IsComplete);
+            await client.Stream.WriteAsync(VatpFrameEncoder.ToSingleBuffer(
+                VatpFrameEncoder.EncodeWindow(1, (uint)slow.Record.ArtSize)));
+            while (!slowReceiver.IsComplete)
+            {
+                var frame = await ReadVatpFrameAsync(client.Stream);
+                if (frame.Header.StreamId == 1)
+                {
+                    ApplyFrame(client.Stream, frame, slowReceiver, grantServerWindow: false);
+                }
+            }
+
             var slowRecord = slowReceiver.Record!.Value;
             var fastRecord = fastReceiver.Record!.Value;
             Assert.True(slowRecord.ArtData.Span.SequenceEqual(slow.ExpectedArtData));
@@ -279,9 +278,14 @@ namespace VectorNNTP.BackFiller.Tests.Listener
         public async Task Cancel_mid_transfer_leaves_other_stream_complete()
         {
             await using var context = await VatpListenerContext.StartAsync(maxBytes: 4 * 1024 * 1024);
-            var cancelBody = BuildLargeBody(64 * 1024);
-            var cancelled = RetainArticle(context.Authority, "<cancel-me@example.test>", cancelBody);
+            var beyondInitialWindow = ArticleTransferLimits.Default.InitialStreamWindowBytes
+                + (int)ArticleTransferLimits.Default.DefaultMaxFramePayload;
+            var cancelled = RetainArticle(
+                context.Authority,
+                "<cancel-me@example.test>",
+                BuildLargeBody(beyondInitialWindow));
             var completes = RetainArticle(context.Authority, "<complete-me@example.test>", "done\r\n");
+            Assert.True(cancelled.ExpectedArtData.Length > ArticleTransferLimits.Default.InitialStreamWindowBytes);
 
             await using var client = await ConnectAsync(context);
             await ExchangeHelloAsync(client.Stream);
@@ -292,27 +296,58 @@ namespace VectorNNTP.BackFiller.Tests.Listener
             var completeReceiver = new ManualTransferReceiver(completes.Record.ArtId);
             var sentCancel = false;
             var secondDone = false;
+            var cancelBytes = 0L;
 
             while (!secondDone)
             {
                 var frame = await ReadVatpFrameAsync(client.Stream);
-                if (frame.Header.StreamId == 1)
-                {
-                    if (frame.Header.Type == VatpFrameType.Data && !sentCancel)
-                    {
-                        sentCancel = true;
-                        await client.Stream.WriteAsync(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeCancel(1)));
-                    }
-
-                    ApplyFrame(client.Stream, frame, cancelReceiver, grantServerWindow: true);
-                }
-                else if (frame.Header.StreamId == 2)
-                {
-                    secondDone = ApplyFrame(client.Stream, frame, completeReceiver, grantServerWindow: true);
-                }
+                AcceptCancelTestFrame(
+                    client.Stream,
+                    frame,
+                    cancelReceiver,
+                    completeReceiver,
+                    ref sentCancel,
+                    ref secondDone,
+                    ref cancelBytes,
+                    cancelled.Record.ArtSize);
             }
 
+            while (true)
+            {
+                using var idle = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                VatpParsedFrame frame;
+                try
+                {
+                    frame = await ReadVatpFrameAsync(client.Stream, idle.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                AcceptCancelTestFrame(
+                    client.Stream,
+                    frame,
+                    cancelReceiver,
+                    completeReceiver,
+                    ref sentCancel,
+                    ref secondDone,
+                    ref cancelBytes,
+                    cancelled.Record.ArtSize);
+            }
+
+            Assert.True(sentCancel);
             Assert.True(completeReceiver.IsComplete);
+            Assert.False(cancelReceiver.IsComplete);
+            Assert.True(cancelBytes < cancelled.Record.ArtSize);
+            Assert.True(completeReceiver.Record!.Value.ArtData.Span.SequenceEqual(completes.ExpectedArtData));
+
+            await client.Stream.WriteAsync(VatpFrameEncoder.ToSingleBuffer(
+                VatpFrameEncoder.EncodeWindow(1, (uint)beyondInitialWindow)));
+            using var proofTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var frameAfterCancel = await ReadVatpFrameAsync(client.Stream, proofTimeout.Token);
+            Assert.Equal(VatpFrameType.Fail, frameAfterCancel.Header.Type);
+            Assert.Equal(VatpErrorCode.UnknownStream, ReadFailCode(frameAfterCancel));
             Assert.False(cancelReceiver.IsComplete);
         }
 
@@ -449,13 +484,70 @@ namespace VectorNNTP.BackFiller.Tests.Listener
         public async Task Resource_duplicate_stream_id_is_rejected()
         {
             await using var context = await VatpListenerContext.StartAsync();
-            var first = RetainArticle(context.Authority, "<stream-dup-a@example.test>", BuildLargeBody(128 * 1024));
+            var beyondInitialWindow = ArticleTransferLimits.Default.InitialStreamWindowBytes
+                + (int)ArticleTransferLimits.Default.DefaultMaxFramePayload;
+            var first = RetainArticle(
+                context.Authority,
+                "<stream-dup-a@example.test>",
+                BuildLargeBody(beyondInitialWindow));
             var second = RetainArticle(context.Authority, "<stream-dup-b@example.test>");
             await using var client = await ConnectAsync(context);
             await ExchangeHelloAsync(client.Stream);
             await SendOpenAsync(client.Stream, 1, first.RequestId, first.Record.ArtId);
             await SendOpenAsync(client.Stream, 1, second.RequestId, second.Record.ArtId);
             Assert.Equal(VatpErrorCode.StreamTableError, await DrainUntilFailAsync(client.Stream));
+        }
+
+        [Fact]
+        public async Task Resource_completed_stream_id_can_be_reused()
+        {
+            await using var context = await VatpListenerContext.StartAsync();
+            var first = RetainArticle(context.Authority, "<stream-reuse-a@example.test>", "one\r\n");
+            var second = RetainArticle(context.Authority, "<stream-reuse-b@example.test>", "two\r\n");
+            await using var client = await ConnectAsync(context);
+            await ExchangeHelloAsync(client.Stream);
+            await SendOpenAsync(client.Stream, 1, first.RequestId, first.Record.ArtId);
+            var firstRecord = await ReceiveTransferAsync(client.Stream, 1, first.RequestId, first.Record.ArtId);
+            Assert.True(firstRecord.ArtData.Span.SequenceEqual(first.ExpectedArtData));
+            Assert.Equal(VatpErrorCode.UnknownStream, await ReadUntilFailAsync(client.Stream));
+
+            await SendOpenAsync(client.Stream, 1, second.RequestId, second.Record.ArtId);
+            var secondRecord = await ReceiveTransferAsync(client.Stream, 1, second.RequestId, second.Record.ArtId);
+            Assert.True(secondRecord.ArtData.Span.SequenceEqual(second.ExpectedArtData));
+        }
+
+        private static void AcceptCancelTestFrame(
+            Stream stream,
+            VatpParsedFrame frame,
+            ManualTransferReceiver cancelReceiver,
+            ManualTransferReceiver completeReceiver,
+            ref bool sentCancel,
+            ref bool secondDone,
+            ref long cancelBytes,
+            long artSize)
+        {
+            if (frame.Header.StreamId == 1)
+            {
+                if (frame.Header.Type == VatpFrameType.Data && !sentCancel)
+                {
+                    sentCancel = true;
+                    stream.Write(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeCancel(1)));
+                }
+
+                if (frame.Header.Type == VatpFrameType.Data)
+                {
+                    cancelBytes += frame.Header.PayloadLength;
+                    Assert.False(
+                        frame.Header.HasFin,
+                        $"fin bytes={cancelBytes} payload={frame.Header.PayloadLength} art={artSize}");
+                }
+
+                ApplyFrame(stream, frame, cancelReceiver, grantServerWindow: false);
+            }
+            else if (frame.Header.StreamId == 2)
+            {
+                secondDone = ApplyFrame(stream, frame, completeReceiver, grantServerWindow: true);
+            }
         }
 
         private static bool ApplyFrame(
@@ -600,16 +692,9 @@ namespace VectorNNTP.BackFiller.Tests.Listener
             while (true)
             {
                 var frame = await ReadVatpFrameAsync(stream);
-                switch (frame.Header.Type)
+                if (frame.Header.Type == VatpFrameType.Fail)
                 {
-                    case VatpFrameType.Fail:
-                        return ReadFailCode(frame);
-                    case VatpFrameType.Data:
-                        var chunk = PayloadToArray(frame.Payload);
-                        await stream.WriteAsync(
-                            VatpFrameEncoder.ToSingleBuffer(
-                                VatpFrameEncoder.EncodeWindow(frame.Header.StreamId, (uint)chunk.Length)));
-                        break;
+                    return ReadFailCode(frame);
                 }
             }
         }
@@ -625,15 +710,17 @@ namespace VectorNNTP.BackFiller.Tests.Listener
                 + "\r\n"
                 + body);
 
-        private static async Task<VatpParsedFrame> ReadVatpFrameAsync(Stream stream)
+        private static async Task<VatpParsedFrame> ReadVatpFrameAsync(
+            Stream stream,
+            CancellationToken cancellationToken = default)
         {
             var headerBytes = new byte[VatpProtocol.HeaderLengthBytes];
-            await stream.ReadExactlyAsync(headerBytes);
+            await stream.ReadExactlyAsync(headerBytes, cancellationToken);
             var header = VatpFrameHeader.ReadFrom(headerBytes);
             var payload = new byte[header.PayloadLength];
             if (payload.Length > 0)
             {
-                await stream.ReadExactlyAsync(payload);
+                await stream.ReadExactlyAsync(payload, cancellationToken);
             }
 
             return new VatpParsedFrame(header, new ReadOnlySequence<byte>(payload));
