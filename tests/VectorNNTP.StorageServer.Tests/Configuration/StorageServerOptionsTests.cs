@@ -66,10 +66,11 @@ public sealed class StorageServerOptionsFqdnTests
     }
 
     [Fact]
-    public void DnsSuffix_default_is_usenet_ninja()
+    public void DnsSuffix_is_empty_until_nntpsharedconfig_publishes_it()
     {
         var options = new StorageServerOptions { ServerId = 1 };
-        Assert.Equal("usenet.ninja", options.DnsSuffix);
+        Assert.Equal(string.Empty, options.DnsSuffix);
+        Assert.Equal(string.Empty, options.Fqdn);
     }
 
     [Theory]
@@ -86,12 +87,15 @@ public sealed class StorageServerOptionsFqdnTests
     }
 
     [Fact]
-    public void Empty_DnsSuffix_fails_validation()
+    public void Empty_DnsSuffix_is_not_validated_from_json()
     {
         var options = StorageServerTestOptions.CreateValid();
         options.DnsSuffix = " ";
+        options.CloudFlareZoneId = " ";
+        options.AcmeDirectoryUrl = string.Empty;
+        options.AcmeRenewalThresholdDays = 0;
         var result = new StorageServerOptionsValidator().Validate(null, options);
-        Assert.True(result.Failed);
+        Assert.True(result.Succeeded);
     }
 }
 
@@ -149,13 +153,14 @@ public sealed class StorageServerAcmeAdapterTests
             source,
             StorageServerTestOptions.CreateValidConfiguration());
 
-        Assert.Equal("cache12.usenet.ninja", destination.Fqdn);
+        Assert.Equal(string.Empty, destination.Fqdn);
+        Assert.Equal("cache12.usenet.ninja", source.Fqdn);
         Assert.False(destination.IncludeNewsHostnameInCertificate);
         Assert.Equal(0, destination.BindPort);
         Assert.Equal(source.BindPortTls, destination.BindPortTls);
 
         var names = VectorNNTP.Common.Acme.CertificateIdentities.ForFqdn(
-            destination.Fqdn,
+            source.Fqdn,
             destination.IncludeNewsHostnameInCertificate);
         Assert.Equal(["cache12.usenet.ninja"], names);
         Assert.DoesNotContain("news.usenet.ninja", names);

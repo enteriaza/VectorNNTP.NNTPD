@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.Extensions.Configuration;
 using VectorNNTP.StorageServer.Configuration;
+using VectorNNTP.StorageServer.Tests.TestDoubles;
 using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Tests.Fixtures;
@@ -40,20 +41,14 @@ internal static class StorageServerTestOptions
         return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["StorageServer:ServerId"] = "1",
-            ["StorageServer:DnsSuffix"] = "usenet.ninja",
-            ["StorageServer:CloudFlareZoneId"] = "0123456789abcdef0123456789abcdef",
             ["StorageServer:LogDir"] = logDir,
             ["StorageServer:BindAddress:0"] = "*",
             ["StorageServer:BindPort"] = "0",
             ["StorageServer:BindPortTls"] = "1191",
-            ["StorageServer:AcmeDirectoryUrl"] = StorageServerOptions.DefaultAcmeDirectoryUrl,
-            [AcmeCloudflareOptions.AcmeAccountConfigurationKey] = "security@usenet.ninja",
-            ["StorageServer:AcmeRenewalThresholdDays"] = "30",
             ["StorageServer:AcmeStateDir"] = acmeDir,
             ["StorageServer:CertificateDirectory"] = acmeDir,
             ["StorageServer:GracefulShutdownTimeout"] = "00:00:30",
-            ["AcmeCertificatePassword"] = SecretPfx,
-            ["CloudFlareApiKey"] = SecretToken,
+            ["ConnectionStrings:NntpDB"] = FakeNntpDbConnectionFactory.ConnectionString,
             ["RabbitMQ:Hosts:0"] = "127.0.0.1",
             ["RabbitMQ:Port"] = "5672",
             ["RabbitMQ:VirtualHost"] = "/",

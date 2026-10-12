@@ -19,7 +19,8 @@ namespace VectorNNTP.StorageServer.Listener;
 /// </summary>
 public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisposable
 {
-    private readonly StorageServerRuntimeOptions _runtime;
+    private readonly StorageServerRuntimeOptionsSource? _runtimeSource;
+    private StorageServerRuntimeOptions? _runtime;
     private readonly ITlsCertificateContextProvider _certificates;
     private readonly IStorageArticleOpenBoundary _openBoundary;
     private readonly IAcmeCertificateReadiness _readiness;
@@ -70,6 +71,36 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         _acceptedArticles = acceptedArticles;
         _storeAdmission = storeAdmission;
     }
+
+    /// <summary>
+    /// Initializes the listener for the host. Runtime options are read when <see cref="StartAsync"/> runs,
+    /// after <c>nntpsharedconfig</c> has been published.
+    /// </summary>
+    public StorageVatpListenerService(
+        StorageServerRuntimeOptionsSource runtimeSource,
+        ITlsCertificateContextProvider certificates,
+        IStorageArticleOpenBoundary openBoundary,
+        IAcmeCertificateReadiness readiness,
+        ILogger<StorageVatpListenerService> logger,
+        IAcceptedArticleQueue? acceptedArticles,
+        StoreAssemblyAdmission? storeAdmission)
+    {
+        ArgumentNullException.ThrowIfNull(runtimeSource);
+        ArgumentNullException.ThrowIfNull(certificates);
+        ArgumentNullException.ThrowIfNull(openBoundary);
+        ArgumentNullException.ThrowIfNull(readiness);
+        ArgumentNullException.ThrowIfNull(logger);
+        _runtimeSource = runtimeSource;
+        _certificates = certificates;
+        _openBoundary = openBoundary;
+        _readiness = readiness;
+        _logger = logger;
+        _acceptedArticles = acceptedArticles;
+        _storeAdmission = storeAdmission;
+    }
+
+    private StorageServerRuntimeOptions Runtime =>
+        _runtime ?? throw new InvalidOperationException("StorageServer runtime options have not been published.");
 
     private static IAcmeCertificateReadiness CreateReadyGate()
     {
@@ -126,6 +157,9 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
 
         try
         {
+            _runtime ??= _runtimeSource?.Current
+                ?? throw new InvalidOperationException("StorageServer runtime options have not been published.");
+
             if (!_readiness.IsReady)
             {
                 throw new InvalidOperationException(
@@ -135,16 +169,16 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
             if (!_certificates.IsAvailable)
             {
                 throw new InvalidOperationException(
-                    $"Storage VATP Listener cannot start because no TLS certificate is available from ACME state '{_runtime.CertificateDirectory}'.");
+                    $"Storage VATP Listener cannot start because no TLS certificate is available from ACME state '{Runtime.CertificateDirectory}'.");
             }
 
-            var bindings = ListenEndpointPlanner.Plan(_runtime.BindAddressTokens, _runtime.BindPortTls);
+            var bindings = ListenEndpointPlanner.Plan(Runtime.BindAddressTokens, Runtime.BindPortTls);
             if (bindings.Count == 0)
             {
                 throw new InvalidOperationException("Storage VATP Listener has no bind endpoints.");
             }
 
-            StorageVatpListenerLogMessages.Starting(_logger, _runtime.BindPortTls, bindings.Count);
+            StorageVatpListenerLogMessages.Starting(_logger, Runtime.BindPortTls, bindings.Count);
             BindEndpoints(bindings);
             if (_listenSockets.Count == 0)
             {
@@ -156,7 +190,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
                 _state = StorageVatpListenerState.Running;
             }
 
-            StorageVatpListenerLogMessages.Running(_logger, _listenSockets.Count, _runtime.BindPortTls);
+            StorageVatpListenerLogMessages.Running(_logger, _listenSockets.Count, Runtime.BindPortTls);
             _acceptTask = AcceptAllAsync(_runCts.Token);
         }
         catch (Exception ex)
@@ -277,12 +311,12 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
 
     private bool IsImplicitWildcard(IPEndPoint endpoint)
     {
-        if (_runtime.BindAddressTokens.Count == 0)
+        if (Runtime.BindAddressTokens.Count == 0)
         {
             return true;
         }
 
-        return _runtime.BindAddressTokens.Any(StorageServerOptions.IsBindAddressWildcard)
+        return Runtime.BindAddressTokens.Any(StorageServerOptions.IsBindAddressWildcard)
                && (endpoint.Address.Equals(IPAddress.Any) || endpoint.Address.Equals(IPAddress.IPv6Any));
     }
 
@@ -331,7 +365,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
             var remote = accepted.RemoteEndPoint?.ToString() ?? "<unknown>";
             if (!TryAdmit())
             {
-                StorageVatpListenerLogMessages.CapacityRejected(_logger, remote, _runtime.Listener.MaxActiveConnections);
+                StorageVatpListenerLogMessages.CapacityRejected(_logger, remote, Runtime.Listener.MaxActiveConnections);
                 accepted.Dispose();
                 continue;
             }
@@ -363,7 +397,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
             };
 
             using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            handshakeCts.CancelAfter(_runtime.Listener.TlsHandshakeTimeout);
+            handshakeCts.CancelAfter(Runtime.Listener.TlsHandshakeTimeout);
             try
             {
                 await ssl.AuthenticateAsServerAsync(options, handshakeCts.Token).ConfigureAwait(false);
@@ -376,16 +410,16 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
             handshakeCompleted = true;
             await using var transport = new StreamStorageVatpTransport(
                 ssl,
-                _runtime.Listener.IoProgressTimeout,
+                Runtime.Listener.IoProgressTimeout,
                 leaveInnerStreamOpen: true);
             await using var vatpSession = new StorageVatpSession(
                 transport,
                 _openBoundary,
-                _runtime.Listener,
+                Runtime.Listener,
                 _logger,
                 acceptedArticles: _acceptedArticles,
                 storeAdmission: _storeAdmission,
-                storePathIdentity: _runtime.Fqdn);
+                storePathIdentity: Runtime.Fqdn);
             await vatpSession.RunAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -420,7 +454,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         while (true)
         {
             var current = Volatile.Read(ref _activeConnections);
-            if (current >= _runtime.Listener.MaxActiveConnections)
+            if (current >= Runtime.Listener.MaxActiveConnections)
             {
                 return false;
             }

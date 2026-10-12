@@ -12,7 +12,7 @@ namespace VectorNNTP.Common.Configuration
     /// Provider pooling, pool size, and idle reaping belong in that connection string.
     /// </para>
     /// <para>
-    /// NNTPD and BackFiller bind this type through the same Common registration and
+    /// NNTPD, BackFiller, and StorageServer bind this type through the same Common registration and
     /// therefore resolve the same configuration key and the same database.
     /// </para>
     /// <para>

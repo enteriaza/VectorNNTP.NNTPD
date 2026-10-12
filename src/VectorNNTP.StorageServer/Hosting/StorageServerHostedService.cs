@@ -18,7 +18,6 @@ public sealed class StorageServerHostedService : BackgroundService
     private readonly ApplicationLifecycle _lifecycle;
     private readonly StorageServerHostShutdown _hostShutdown;
     private readonly IOptions<StorageServerOptions> _options;
-    private readonly StorageServerRuntimeOptions _runtime;
     private readonly IOptions<AcmeCloudflareOptions> _acmeOptions;
     private readonly IBindAddressResolver _bindAddressResolver;
     private readonly ILogger<StorageServerHostedService> _logger;
@@ -30,7 +29,6 @@ public sealed class StorageServerHostedService : BackgroundService
         ApplicationLifecycle lifecycle,
         StorageServerHostShutdown hostShutdown,
         IOptions<StorageServerOptions> options,
-        StorageServerRuntimeOptions runtime,
         IOptions<AcmeCloudflareOptions> acmeOptions,
         IBindAddressResolver bindAddressResolver,
         ILogger<StorageServerHostedService> logger)
@@ -38,7 +36,6 @@ public sealed class StorageServerHostedService : BackgroundService
         ArgumentNullException.ThrowIfNull(lifecycle);
         ArgumentNullException.ThrowIfNull(hostShutdown);
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(acmeOptions);
         ArgumentNullException.ThrowIfNull(bindAddressResolver);
         ArgumentNullException.ThrowIfNull(logger);
@@ -46,7 +43,6 @@ public sealed class StorageServerHostedService : BackgroundService
         _lifecycle = lifecycle;
         _hostShutdown = hostShutdown;
         _options = options;
-        _runtime = runtime;
         _acmeOptions = acmeOptions;
         _bindAddressResolver = bindAddressResolver;
         _logger = logger;
@@ -68,23 +64,36 @@ public sealed class StorageServerHostedService : BackgroundService
 
     private void LogBindAddressDiagnostics()
     {
+        var acme = _acmeOptions.Value;
+        var tokens = acme.BindAddress is { Length: > 0 } ? acme.BindAddress : ["*"];
+        var addresses = new List<IPAddress>();
+        foreach (var token in tokens)
+        {
+            if (!string.IsNullOrWhiteSpace(token)
+                && IPAddress.TryParse(token.Trim(), out var address)
+                && !AcmeCloudflareOptions.IsBindAddressWildcard(token))
+            {
+                addresses.Add(address);
+            }
+        }
+
         var ipv4Configured = string.Join(
             ", ",
-            _runtime.CanonicalBindAddresses
+            addresses
                 .Where(static a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
                 .Select(IpAddressEligibility.ToDnsContent));
         var ipv6Configured = string.Join(
             ", ",
-            _runtime.CanonicalBindAddresses
+            addresses
                 .Where(static a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
                 .Select(IpAddressEligibility.ToDnsContent));
         HostingLogMessages.BindAddressesConfigured(
             _logger,
-            string.Join(", ", _runtime.BindAddressTokens),
+            string.Join(", ", tokens),
             string.IsNullOrEmpty(ipv4Configured) ? "(none)" : ipv4Configured,
             string.IsNullOrEmpty(ipv6Configured) ? "(none)" : ipv6Configured);
 
-        var bindings = ListenEndpointPlanner.Plan(_runtime.BindAddressTokens, _runtime.BindPortTls);
+        var bindings = ListenEndpointPlanner.Plan(tokens, acme.BindPortTls);
         var endpoints = string.Join(
             ", ",
             bindings.Select(static b => FormatEndpoint(b.Address, b.Port)));

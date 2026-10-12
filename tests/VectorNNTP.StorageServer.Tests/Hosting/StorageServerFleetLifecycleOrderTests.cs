@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Messaging.Cache;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.Cloudflare;
 using VectorNNTP.Common.Core;
@@ -267,9 +268,13 @@ public sealed class StorageServerFleetLifecycleOrderTests
             var publisherIndex = Array.FindIndex(
                 ordered,
                 static service => service is StorageServerAdvertisementPublisherService);
+            var databaseIndex = Array.FindIndex(ordered, static service => service is NntpDbService);
+            var sharedIndex = Array.FindIndex(ordered, static service => service is VectorNNTP.StorageServer.NntpDb.StorageServerSharedConfigurationService);
             var rabbitIndex = Array.FindIndex(ordered, static service => service is RabbitMqService);
             var acmeIndex = Array.FindIndex(ordered, static service => service is ImmediateAcmeReadyApplicationService);
-            Assert.True(rabbitIndex >= 0 && rabbitIndex < acmeIndex);
+            Assert.True(databaseIndex >= 0 && databaseIndex < sharedIndex);
+            Assert.True(sharedIndex < rabbitIndex);
+            Assert.True(rabbitIndex < acmeIndex);
             Assert.True(acmeIndex < listenerIndex);
             Assert.True(listenerIndex < publisherIndex);
         }
@@ -285,6 +290,7 @@ public sealed class StorageServerFleetLifecycleOrderTests
             builder.ConfigureStorageServerLogging();
             builder.ConfigureStorageServerPlatformHosting();
             builder.AddStorageServerHosting();
+            builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
             builder.Services.AddSingleton<IRabbitMqConnectionFactory>(factory);
             ReplaceAcme(builder.Services);
             return builder.Build();

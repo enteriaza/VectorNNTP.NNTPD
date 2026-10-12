@@ -8,14 +8,9 @@ namespace VectorNNTP.Common.Configuration
     /// Shared bind, ACME, and Cloudflare settings owned by VectorNNTP.Common.
     /// </summary>
     /// <remarks>
-    /// NNTPD and BackFiller publish the ACME account, certificate password, and
-    /// Cloudflare API key from <c>nntpsharedconfig</c>. StorageServer still overlays
-    /// those secrets from the configuration root. Bind addresses, ports, Cloudflare
-    /// zone id, and DNS suffix are application-section configuration (NNTPD:
-    /// <c>Nntpd</c>; BackFiller: <c>BackFiller</c>) and are not overlaid from the root.
-    /// StorageServer environment variables for those secrets use <see cref="VectorEnvironment.Prefix"/>
-    /// only (<c>VECTOR__CLOUDFLAREAPIKEY</c>, <c>VECTOR__ACMECERTIFICATEPASSWORD</c>,
-    /// <c>VECTOR__ACMEACCOUNT</c>).
+    /// NNTPD, BackFiller, and StorageServer publish the ACME account, certificate password,
+    /// Cloudflare API key, zone id, and DNS suffix from <c>nntpsharedconfig</c>.
+    /// Bind addresses and ports stay in each application section and are not overlaid from the root.
     /// There is no application-specific prefix and no alias for those secrets.
     /// Never log a complete instance: it contains API keys and PFX passwords.
     /// </remarks>
@@ -108,8 +103,7 @@ namespace VectorNNTP.Common.Configuration
         /// Gets or sets the ACME account contact email.
         /// </summary>
         /// <remarks>
-        /// NNTPD and BackFiller publish this from <c>nntpsharedconfig.acmeaccount</c>.
-        /// StorageServer still reads <see cref="AcmeAccountEnvironmentVariable"/>.
+        /// NNTPD, BackFiller, and StorageServer publish this from <c>nntpsharedconfig.acmeaccount</c>.
         /// Not application-section configuration.
         /// </remarks>
         public string AcmeEmail { get; set; } = string.Empty;
@@ -125,8 +119,7 @@ namespace VectorNNTP.Common.Configuration
         /// Gets or sets the PKCS#12 password. Secret. Never log.
         /// </summary>
         /// <remarks>
-        /// NNTPD and BackFiller publish this from <c>nntpsharedconfig.acmecertpass</c>.
-        /// StorageServer still reads <see cref="AcmeCertificatePasswordEnvironmentVariable"/>.
+        /// NNTPD, BackFiller, and StorageServer publish this from <c>nntpsharedconfig.acmecertpass</c>.
         /// </remarks>
         public string AcmeCertificatePassword { get; set; } = string.Empty;
 
@@ -134,8 +127,7 @@ namespace VectorNNTP.Common.Configuration
         /// Gets or sets the Cloudflare API token/key. Secret. Never log.
         /// </summary>
         /// <remarks>
-        /// NNTPD and BackFiller publish this from <c>nntpsharedconfig.cloudflareapikey</c>.
-        /// StorageServer still requires <see cref="CloudFlareApiKeyEnvironmentVariable"/>.
+        /// NNTPD, BackFiller, and StorageServer publish this from <c>nntpsharedconfig.cloudflareapikey</c>.
         /// </remarks>
         public string CloudFlareApiKey { get; set; } = string.Empty;
 
@@ -194,8 +186,7 @@ namespace VectorNNTP.Common.Configuration
         /// <param name="configuration">The full configuration root.</param>
         /// <param name="includeSharedSecrets">
         /// When <see langword="false"/>, the account email, certificate password, and API key are left unchanged.
-        /// NNTPD passes <see langword="false"/> because those values come from <c>nntpsharedconfig</c>.
-        /// StorageServer keeps the default <see langword="true"/>.
+        /// NNTPD, BackFiller, and StorageServer pass <see langword="false"/> because those values come from <c>nntpsharedconfig</c>.
         /// </param>
         public static void OverlaySharedFromRoot(
             AcmeCloudflareOptions options,

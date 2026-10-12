@@ -36,11 +36,10 @@ namespace VectorNNTP.Common.Configuration
         /// <summary>Initializes a new validator.</summary>
         /// <param name="localIpAddressAssignee">Reports whether an explicit bind address is assigned to a local interface.</param>
         /// <param name="validateSharedDatabaseFields">
-        /// <see langword="false"/> for NNTPD and BackFiller, which load directory URL, renewal days, zone id, and DNS suffix from <c>nntpsharedconfig</c>.
+        /// <see langword="false"/> for NNTPD, BackFiller, and StorageServer, which load directory URL, renewal days, zone id, and DNS suffix from <c>nntpsharedconfig</c>.
         /// </param>
         /// <param name="validateSharedCredentials">
-        /// <see langword="false"/> for NNTPD and BackFiller, which load the API key, ACME account, and certificate password from <c>nntpsharedconfig</c>.
-        /// StorageServer keeps the default <see langword="true"/>.
+        /// <see langword="false"/> for NNTPD, BackFiller, and StorageServer, which load the API key, ACME account, and certificate password from <c>nntpsharedconfig</c>.
         /// </param>
         internal AcmeCloudflareOptionsValidator(
             ILocalIpAddressAssignee localIpAddressAssignee,

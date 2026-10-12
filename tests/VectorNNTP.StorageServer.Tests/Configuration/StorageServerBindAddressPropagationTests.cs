@@ -114,7 +114,14 @@ public sealed class StorageServerBindAddressPropagationTests
         source.BindPort = 0;
         source.BindPortTls = 1191;
 
-        var destination = new AcmeCloudflareOptions();
+        var destination = new AcmeCloudflareOptions
+        {
+            DnsSuffix = "keep.example",
+            Fqdn = "cache01.keep.example",
+            CloudFlareZoneId = "kept-zone",
+            AcmeDirectoryUrl = "https://keep.example/directory",
+            AcmeRenewalThresholdDays = 3,
+        };
         StorageServerAcmeCloudflareOptionsAdapter.Apply(
             destination,
             source,
@@ -123,7 +130,11 @@ public sealed class StorageServerBindAddressPropagationTests
         Assert.Equal([ExplicitIpv4, ExplicitIpv6], destination.BindAddress);
         Assert.Equal(0, destination.BindPort);
         Assert.Equal(1191, destination.BindPortTls);
-        Assert.Equal("cache01.usenet.ninja", destination.Fqdn);
+        Assert.Equal("cache01.keep.example", destination.Fqdn);
+        Assert.Equal("keep.example", destination.DnsSuffix);
+        Assert.Equal("kept-zone", destination.CloudFlareZoneId);
+        Assert.Equal("https://keep.example/directory", destination.AcmeDirectoryUrl);
+        Assert.Equal(3, destination.AcmeRenewalThresholdDays);
         Assert.False(destination.IncludeNewsHostnameInCertificate);
     }
 
@@ -271,12 +282,13 @@ public sealed class StorageServerBindAddressPropagationTests
 
         var acme = host.Services.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
         Assert.Equal([ExplicitIpv4, ExplicitIpv6], acme.BindAddress);
+        Assert.Equal(1191, acme.BindPortTls);
+        Assert.Equal(string.Empty, acme.DnsSuffix);
+        Assert.Equal(string.Empty, acme.CloudFlareZoneId);
+        Assert.Equal(string.Empty, acme.AcmeEmail);
+        Assert.Equal(string.Empty, acme.CloudFlareApiKey);
 
-        var runtime = host.Services.GetRequiredService<StorageServerRuntimeOptions>();
-        Assert.Equal([ExplicitIpv4, ExplicitIpv6], runtime.BindAddressTokens);
-        Assert.Equal(1191, runtime.BindPortTls);
-
-        var planned = ListenEndpointPlanner.Plan(runtime.BindAddressTokens, runtime.BindPortTls);
+        var planned = ListenEndpointPlanner.Plan(acme.BindAddress, acme.BindPortTls);
         Assert.Equal(2, planned.Count);
         Assert.DoesNotContain(planned, static b => b.Address.Equals(IPAddress.IPv6Any));
 
@@ -285,10 +297,6 @@ public sealed class StorageServerBindAddressPropagationTests
         Assert.Single(resolved.IPv6);
         Assert.Equal(ExplicitIpv4, IpAddressEligibility.ToDnsContent(resolved.IPv4[0]));
         Assert.Equal(ExplicitIpv6, IpAddressEligibility.ToDnsContent(resolved.IPv6[0]));
-
-        Assert.Equal(
-            ["cache01.usenet.ninja"],
-            VectorNNTP.Common.Acme.CertificateIdentities.ForFqdn(acme.Fqdn, acme.IncludeNewsHostnameInCertificate));
     }
 
     private static string FindAppsettings(string fileName)

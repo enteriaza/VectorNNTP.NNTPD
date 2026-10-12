@@ -16,16 +16,11 @@ public sealed class StorageServerCloudflareHostnameTests
     [InlineData(1, "cache01.usenet.ninja")]
     [InlineData(9, "cache09.usenet.ninja")]
     [InlineData(255, "cache255.usenet.ninja")]
-    public void Adapter_fqdn_is_expected_cache_hostname(int serverId, string expected)
+    public void Options_fqdn_is_expected_cache_hostname(int serverId, string expected)
     {
         var source = StorageServerTestOptions.CreateValid();
         source.ServerId = serverId;
-        var destination = new AcmeCloudflareOptions();
-        StorageServerAcmeCloudflareOptionsAdapter.Apply(
-            destination,
-            source,
-            StorageServerTestOptions.CreateValidConfiguration());
-        Assert.Equal(expected, destination.Fqdn);
+        Assert.Equal(expected, source.Fqdn);
     }
 
     [Fact]

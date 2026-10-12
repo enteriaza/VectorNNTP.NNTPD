@@ -1,7 +1,5 @@
 {
   "StorageServer": {
-    "AcmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
-    "AcmeRenewalThresholdDays": 14,
     "AcmeStateDir": "certs",
     "BindAddress": [
       "198.18.0.66",
@@ -9,8 +7,6 @@
     ],
     "BindPort": 0,
     "BindPortTls": 1191,
-    "CloudFlareZoneId": "5811a29d39a0732afb5f160c9b137c3d",
-    "DnsSuffix": "usenet.ninja",
     "GracefulShutdownTimeout": "00:00:30",
     "Listener": {
       "IoProgressTimeoutSeconds": 60,

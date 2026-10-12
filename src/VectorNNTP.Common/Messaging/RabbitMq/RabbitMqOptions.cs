@@ -73,9 +73,8 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// RabbitMQ username used for credential-based authentication.
         /// </summary>
         /// <remarks>
-        /// NNTPD and BackFiller publish this from <c>nntpsharedconfig.rabbitmqusername</c>
-        /// and discard any bound value. StorageServer still supplies
-        /// <see cref="UsernameEnvironmentVariable"/>. Never commit real values.
+        /// NNTPD, BackFiller, and StorageServer publish this from <c>nntpsharedconfig.rabbitmqusername</c>
+        /// and discard any bound value. Never commit real values.
         /// </remarks>
         public string? Username { get; set; }
 
@@ -83,9 +82,8 @@ namespace VectorNNTP.Common.Messaging.RabbitMq
         /// RabbitMQ password used for credential-based authentication.
         /// </summary>
         /// <remarks>
-        /// Secret. NNTPD and BackFiller publish this from <c>nntpsharedconfig.rabbitmqpassword</c>
-        /// and discard any bound value. StorageServer still supplies
-        /// <see cref="PasswordEnvironmentVariable"/>. Never commit or log.
+        /// Secret. NNTPD, BackFiller, and StorageServer publish this from <c>nntpsharedconfig.rabbitmqpassword</c>
+        /// and discard any bound value. Never commit or log.
         /// </remarks>
         public string? Password { get; set; }
 

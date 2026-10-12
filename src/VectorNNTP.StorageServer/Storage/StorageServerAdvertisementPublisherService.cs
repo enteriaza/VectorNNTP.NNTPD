@@ -25,7 +25,8 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
     private static readonly TimeSpan LifecycleAnnouncementTimeout = TimeSpan.FromSeconds(2);
 
     private readonly IRabbitMqService _rabbitMq;
-    private readonly StorageServerRuntimeOptions _runtime;
+    private readonly StorageServerRuntimeOptionsSource? _runtimeSource;
+    private StorageServerRuntimeOptions? _runtime;
     private readonly IStorageCapacityReader _capacityReader;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<StorageServerAdvertisementPublisherService> _logger;
@@ -39,8 +40,8 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
     private int _drainingPublished;
     private long _lastTimestampTicks;
 
-    /// <summary>Initializes a new advertisement publisher.</summary>
-    public StorageServerAdvertisementPublisherService(
+    /// <summary>Initializes a new advertisement publisher for tests that already have a runtime snapshot.</summary>
+    internal StorageServerAdvertisementPublisherService(
         IRabbitMqService rabbitMq,
         StorageServerRuntimeOptions runtime,
         IStorageCapacityReader capacityReader,
@@ -57,6 +58,31 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
+
+    /// <summary>
+    /// Initializes the host publisher. Runtime options are read when <see cref="StartAsync"/> runs,
+    /// after <c>nntpsharedconfig</c> has been published.
+    /// </summary>
+    public StorageServerAdvertisementPublisherService(
+        IRabbitMqService rabbitMq,
+        StorageServerRuntimeOptionsSource runtimeSource,
+        IStorageCapacityReader capacityReader,
+        ILogger<StorageServerAdvertisementPublisherService> logger,
+        TimeProvider? timeProvider = null)
+    {
+        ArgumentNullException.ThrowIfNull(rabbitMq);
+        ArgumentNullException.ThrowIfNull(runtimeSource);
+        ArgumentNullException.ThrowIfNull(capacityReader);
+        ArgumentNullException.ThrowIfNull(logger);
+        _rabbitMq = rabbitMq;
+        _runtimeSource = runtimeSource;
+        _capacityReader = capacityReader;
+        _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    private StorageServerRuntimeOptions Runtime =>
+        _runtime ?? throw new InvalidOperationException("StorageServer runtime options have not been published.");
 
     /// <inheritdoc />
     public string Name => "StorageServerAdvertisementPublisher";
@@ -82,6 +108,9 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
 
         try
         {
+            _runtime ??= _runtimeSource?.Current
+                ?? throw new InvalidOperationException("StorageServer runtime options have not been published.");
+
             _shutdownCts = new CancellationTokenSource();
             await EnsureExchangeAsync(cancellationToken).ConfigureAwait(false);
             await EnsurePublishChannelAsync(cancellationToken).ConfigureAwait(false);
@@ -149,13 +178,13 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
         var capacity = _capacityReader.Read();
         var advertisement = new StorageServerAdvertisement(
             StorageServerAdvertisementWireProtocol.CurrentVersion,
-            _runtime.ServerId,
-            _runtime.Fqdn,
+            Runtime.ServerId,
+            Runtime.Fqdn,
             capacity.TotalBytes,
             capacity.UsedBytes,
             capacity.AvailableBytes,
             NextTimestamp(),
-            _runtime.BindPortTls);
+            Runtime.BindPortTls);
 
         var body = StorageServerAdvertisementWireProtocol.SerializeV1(advertisement);
         await _publishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -169,7 +198,7 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
                         // the exchange name matches the other durable fanout publications.
                         RoutingKey: CacheFleetTopology.BroadcastExchangeName,
                         MessageId: Guid.NewGuid().ToString("D"),
-                        AppId: _runtime.Fqdn,
+                        AppId: Runtime.Fqdn,
                         CorrelationId: null,
                         ContentType: StorageServerAdvertisementWireProtocol.JsonContentType,
                         RequestIdHeader: null,
@@ -246,8 +275,8 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
             await PublishDrainingAnnouncementAsync(timeout.Token).ConfigureAwait(false);
             StorageServerAdvertisementLogMessages.LifecycleDrainingPublished(
                 _logger,
-                _runtime.Fqdn,
-                _runtime.ServerId);
+                Runtime.Fqdn,
+                Runtime.ServerId);
         }
         catch (Exception ex)
         {
@@ -262,11 +291,11 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
     {
         var announcement = new StorageServerLifecycleAnnouncement(
             StorageServerLifecycleWireProtocol.CurrentVersion,
-            _runtime.ServerId,
-            _runtime.Fqdn,
+            Runtime.ServerId,
+            Runtime.Fqdn,
             StorageServerLifecycleState.Draining,
             NextTimestamp(),
-            _runtime.BindPortTls);
+            Runtime.BindPortTls);
         var body = StorageServerLifecycleWireProtocol.SerializeV1(announcement);
         await _publishGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -277,7 +306,7 @@ public sealed class StorageServerAdvertisementPublisherService : IApplicationSer
                         CacheFleetTopology.BroadcastExchangeName,
                         RoutingKey: CacheFleetTopology.BroadcastExchangeName,
                         MessageId: Guid.NewGuid().ToString("D"),
-                        AppId: _runtime.Fqdn,
+                        AppId: Runtime.Fqdn,
                         CorrelationId: null,
                         ContentType: StorageServerAdvertisementWireProtocol.JsonContentType,
                         RequestIdHeader: null,

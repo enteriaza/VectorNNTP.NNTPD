@@ -8,11 +8,13 @@ using VectorNNTP.Common.Messaging.RabbitMq;
 using VectorNNTP.Common.Acme;
 using VectorNNTP.Common.Cloudflare;
 using VectorNNTP.Common.Core;
+using VectorNNTP.Common.NntpDb;
 using VectorNNTP.StorageServer.Acme;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Hosting.Systemd;
 using VectorNNTP.StorageServer.Ingress;
 using VectorNNTP.StorageServer.Listener;
+using VectorNNTP.StorageServer.NntpDb;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.Common.Configuration;
 
@@ -28,9 +30,9 @@ public static class StorageServerServiceCollectionExtensions
     /// </summary>
     /// <remarks>
     /// Application service start order:
-    /// Cloudflare DNS → RabbitMQ (connectivity only) → ACME → VATP listener → AdvertisementPublisher.
+    /// NntpDB → nntpsharedconfig → Cloudflare DNS → RabbitMQ (connectivity only) → ACME → VATP listener → AdvertisementPublisher.
     /// Shutdown is that order reversed, so advertisement stops before the listener.
-    /// Topology, queues, and consumers are not registered here.
+    /// Topology, queues, and consumers are not registered here. NntpDB does not migrate schema.
     /// </remarks>
     public static HostApplicationBuilder AddStorageServerHosting(this HostApplicationBuilder builder)
     {
@@ -62,9 +64,15 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services
             .AddOptions<RabbitMqOptions>()
             .BindConfiguration(RabbitMqOptions.SectionName)
-            .PostConfigure(static options => options.Management ??= new RabbitMqManagementOptions())
+            .PostConfigure(static options =>
+            {
+                options.Management ??= new RabbitMqManagementOptions();
+                options.Username = null;
+                options.Password = null;
+            })
             .ValidateOnStart();
         builder.Services.AddSingleton<IValidateOptions<RabbitMqOptions>, RabbitMqOptionsValidator>();
+        builder.Services.AddNntpDbOptions();
 
         builder.Services
             .AddOptions<AcmeCloudflareOptions>()
@@ -80,22 +88,31 @@ public static class StorageServerServiceCollectionExtensions
                 acme.AcmeStateDir = ApplicationLocalPath.ResolveApplicationLocalPath(
                     acme.AcmeStateDir,
                     AppContext.BaseDirectory);
+                acme.AcmeDirectoryUrl = string.Empty;
+                acme.AcmeRenewalThresholdDays = 0;
+                acme.CloudFlareZoneId = string.Empty;
+                acme.DnsSuffix = string.Empty;
+                acme.Fqdn = string.Empty;
+                acme.AcmeEmail = string.Empty;
+                acme.AcmeCertificatePassword = string.Empty;
+                acme.CloudFlareApiKey = string.Empty;
             });
-        builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, AcmeCloudflareOptionsValidator>();
+        builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>>(static provider =>
+            new AcmeCloudflareOptionsValidator(
+                provider.GetRequiredService<ILocalIpAddressAssignee>(),
+                validateSharedDatabaseFields: false,
+                validateSharedCredentials: false));
         builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, TlsOnlyAcmeCloudflareOptionsValidator>();
         builder.Services.AddAcmeCloudflareInfrastructure();
 
+        builder.Services.TryAddSingleton<StorageServerRuntimeOptionsSource>();
         builder.Services.AddSingleton(static provider =>
-        {
-            var options = provider.GetRequiredService<IOptions<StorageServerOptions>>().Value;
-            var acme = provider.GetRequiredService<IOptions<AcmeCloudflareOptions>>().Value;
-            return StorageServerRuntimeOptionsFactory.Create(options, acme, AppContext.BaseDirectory);
-        });
+            provider.GetRequiredService<StorageServerRuntimeOptionsSource>().Current);
 
         builder.Services.AddOptions<HostOptions>()
-            .PostConfigure<StorageServerRuntimeOptions>(static (host, runtime) =>
+            .PostConfigure<IOptions<StorageServerOptions>>(static (host, options) =>
             {
-                host.ShutdownTimeout = runtime.GracefulShutdownTimeout;
+                host.ShutdownTimeout = options.Value.GracefulShutdownTimeout;
             });
 
         builder.Services.TryAddSingleton<IAcceptedArticleQueue, AcceptedArticleQueue>();
@@ -111,8 +128,20 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddSingleton<IStorageCapacityReader, NoSpoolCapacityReader>();
         builder.Services.TryAddSingleton<StorageServerAdvertisementPublisherService>();
 
-        // Startup order: Cloudflare → RabbitMQ → ACME → Listener → AdvertisementPublisher.
+        builder.Services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
+        builder.Services.TryAddSingleton<NntpDbService>();
+        builder.Services.TryAddSingleton<StorageServerSharedConfigurationService>();
+        builder.Services.TryAddSingleton<INntpSharedConfigurationCatalogue>(static provider =>
+            provider.GetRequiredService<StorageServerSharedConfigurationService>());
+
+        // Startup order: NntpDB → nntpsharedconfig → Cloudflare → RabbitMQ → ACME → Listener → AdvertisementPublisher.
         // ApplicationServiceManager stops in reverse, so advertisement stops first.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, NntpDbService>(static provider =>
+                provider.GetRequiredService<NntpDbService>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, StorageServerSharedConfigurationService>(static provider =>
+                provider.GetRequiredService<StorageServerSharedConfigurationService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, CloudflareDnsReconciliationApplicationService>());
         builder.Services.TryAddEnumerable(
@@ -122,15 +151,15 @@ public static class StorageServerServiceCollectionExtensions
             ServiceDescriptor.Singleton<IApplicationService, AcmeCertificateApplicationService>());
         builder.Services.AddSingleton(static provider =>
         {
-            var runtime = provider.GetRequiredService<StorageServerRuntimeOptions>();
+            var listener = provider.GetRequiredService<IOptions<StorageServerOptions>>().Value.Listener;
             return new StorageVatpListenerService(
-                runtime,
+                provider.GetRequiredService<StorageServerRuntimeOptionsSource>(),
                 provider.GetRequiredService<VectorNNTP.Common.Networking.Certificates.ITlsCertificateContextProvider>(),
                 provider.GetRequiredService<IStorageArticleOpenBoundary>(),
                 provider.GetRequiredService<IAcmeCertificateReadiness>(),
                 provider.GetRequiredService<ILogger<StorageVatpListenerService>>(),
                 provider.GetRequiredService<IAcceptedArticleQueue>(),
-                new StoreAssemblyAdmission(runtime.Listener.MaxActiveConnections));
+                new StoreAssemblyAdmission(listener.MaxActiveConnections));
         });
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, StorageVatpListenerService>(static provider =>

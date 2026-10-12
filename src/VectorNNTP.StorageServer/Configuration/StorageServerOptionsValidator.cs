@@ -89,40 +89,10 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(options.DnsSuffix))
-        {
-            failures.Add("StorageServer:DnsSuffix is required and cannot be empty.");
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(options.CloudFlareZoneId))
-        {
-            failures.Add("StorageServer:CloudFlareZoneId is required and cannot be empty.");
-            return;
-        }
-
-        var canonicalSuffix = ApplicationFqdn.CanonicalizeDnsSuffix(options.DnsSuffix);
-        if (!StorageServerIdentity.IsValidDnsSuffix(canonicalSuffix))
-        {
-            failures.Add("StorageServer:DnsSuffix is not a syntactically valid DNS name.");
-            return;
-        }
-
-        var fqdn = options.Fqdn;
         var hostLabel = ApplicationFqdn.FormatHostLabel(StorageServerOptions.ApplicationPrefix, serverId);
         if (!StorageServerIdentity.IsValidDnsLabel(hostLabel))
         {
             failures.Add("StorageServer generated host label is not a valid DNS label.");
-            return;
-        }
-
-        if (fqdn.Length > ApplicationFqdn.MaximumLength)
-        {
-            failures.Add("StorageServer:DnsSuffix produces an FQDN longer than 253 characters.");
-        }
-        else if (Uri.CheckHostName(fqdn) != UriHostNameType.Dns)
-        {
-            failures.Add("StorageServer generated FQDN is not a valid DNS hostname.");
         }
     }
 
@@ -142,22 +112,7 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
 
     private static void ValidateAcme(StorageServerOptions options, List<string> failures)
     {
-        if (string.IsNullOrWhiteSpace(options.AcmeDirectoryUrl))
-        {
-            failures.Add("StorageServer:AcmeDirectoryUrl must be a non-empty HTTPS ACME directory URL.");
-        }
-        else if (!Uri.TryCreate(options.AcmeDirectoryUrl.Trim(), UriKind.Absolute, out var directoryUri)
-                 || directoryUri.Scheme != Uri.UriSchemeHttps)
-        {
-            failures.Add(
-                "StorageServer:AcmeDirectoryUrl must be an absolute HTTPS URL (default is Let's Encrypt staging).");
-        }
-
-        if (options.AcmeRenewalThresholdDays is < 1 or > 90)
-        {
-            failures.Add("StorageServer:AcmeRenewalThresholdDays must be an integer in the range 1–90.");
-        }
-
+        // Directory URL, renewal days, zone id, and DNS suffix come from nntpsharedconfig.
         if (string.IsNullOrWhiteSpace(options.AcmeStateDir) && string.IsNullOrWhiteSpace(options.CertificateDirectory))
         {
             failures.Add("StorageServer:AcmeStateDir must be a non-empty filesystem path.");

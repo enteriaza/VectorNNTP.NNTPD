@@ -15,6 +15,8 @@ using VectorNNTP.StorageServer.Hosting.Systemd;
 using VectorNNTP.StorageServer.Ingress;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.Logging;
+using VectorNNTP.Common.NntpDb;
+using VectorNNTP.StorageServer.NntpDb;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Tests.Fixtures;
 using VectorNNTP.StorageServer.Tests.TestDoubles;
@@ -43,19 +45,22 @@ public sealed class StorageServerHostCompositionTests
         Assert.NotNull(host.Services.GetRequiredService<ApplicationLifecycle>());
         Assert.NotNull(host.Services.GetRequiredService<ApplicationServiceManager>());
         Assert.NotNull(host.Services.GetRequiredService<StorageServerHostShutdown>());
-        Assert.NotNull(host.Services.GetRequiredService<StorageServerRuntimeOptions>());
+        var runtimeSource = host.Services.GetRequiredService<StorageServerRuntimeOptionsSource>();
+        Assert.False(runtimeSource.IsPublished);
         Assert.NotNull(host.Services.GetRequiredService<IRabbitMqService>());
         Assert.Same(
             host.Services.GetRequiredService<RabbitMqService>(),
             host.Services.GetRequiredService<IRabbitMqService>());
 
         var application = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(5, application.Length);
-        Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[0]);
-        Assert.IsType<RabbitMqService>(application[1]);
-        Assert.IsType<AcmeCertificateApplicationService>(application[2]);
-        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[3]);
-        Assert.IsType<StorageServerAdvertisementPublisherService>(application[4]);
+        Assert.Equal(7, application.Length);
+        Assert.IsType<NntpDbService>(application[0]);
+        Assert.IsType<StorageServerSharedConfigurationService>(application[1]);
+        Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
+        Assert.IsType<RabbitMqService>(application[3]);
+        Assert.IsType<AcmeCertificateApplicationService>(application[4]);
+        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[5]);
+        Assert.IsType<StorageServerAdvertisementPublisherService>(application[6]);
         Assert.IsType<RejectingStorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
         Assert.IsType<NoSpoolCapacityReader>(host.Services.GetRequiredService<IStorageCapacityReader>());
         Assert.IsType<AcceptedArticleQueue>(host.Services.GetRequiredService<IAcceptedArticleQueue>());
@@ -90,17 +95,30 @@ public sealed class StorageServerHostCompositionTests
     }
 
     [Fact]
-    public void Runtime_options_snapshot_is_singleton_with_cache_fqdn()
+    public async Task Runtime_options_snapshot_is_singleton_with_cache_fqdn()
     {
         using var host = CreateHost();
-        var first = host.Services.GetRequiredService<StorageServerRuntimeOptions>();
-        var second = host.Services.GetRequiredService<StorageServerRuntimeOptions>();
-        Assert.Same(first, second);
-        Assert.Equal("cache01.usenet.ninja", first.Fqdn);
-        Assert.Equal(0, first.BindPort);
-        Assert.Equal(
-            first.GracefulShutdownTimeout,
-            host.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
+        await host.StartAsync();
+        try
+        {
+            var first = host.Services.GetRequiredService<StorageServerRuntimeOptions>();
+            var second = host.Services.GetRequiredService<StorageServerRuntimeOptions>();
+            Assert.Same(first, second);
+            Assert.Equal("cache01.usenet.ninja", first.Fqdn);
+            var shared = host.Services.GetRequiredService<IOptions<StorageServerOptions>>().Value;
+            Assert.Equal("usenet.ninja", shared.DnsSuffix);
+            Assert.Equal("https://acme-staging-v02.api.letsencrypt.org/directory", shared.AcmeDirectoryUrl);
+            Assert.Equal(21, shared.AcmeRenewalThresholdDays);
+            Assert.Equal("0123456789abcdef0123456789abcdef", shared.CloudFlareZoneId);
+            Assert.Equal(0, first.BindPort);
+            Assert.Equal(
+                first.GracefulShutdownTimeout,
+                host.Services.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
+        }
+        finally
+        {
+            await host.StopAsync();
+        }
     }
 
     [Fact]
@@ -114,12 +132,14 @@ public sealed class StorageServerHostCompositionTests
                 ApplicationState.Running,
                 host.Services.GetRequiredService<ApplicationLifecycle>().State);
             var application = host.Services.GetServices<IApplicationService>().ToArray();
-            Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[0]);
-            Assert.IsType<RabbitMqService>(application[1]);
-            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[2]);
+            Assert.IsType<NntpDbService>(application[0]);
+            Assert.IsType<StorageServerSharedConfigurationService>(application[1]);
+            Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
+            Assert.IsType<RabbitMqService>(application[3]);
+            Assert.IsType<ImmediateAcmeReadyApplicationService>(application[4]);
             var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
-            Assert.Same(listener, application[3]);
-            Assert.IsType<StorageServerAdvertisementPublisherService>(application[4]);
+            Assert.Same(listener, application[5]);
+            Assert.IsType<StorageServerAdvertisementPublisherService>(application[6]);
             Assert.Equal(StorageVatpListenerState.Running, listener.State);
             Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
             Assert.NotNull(host.Services.GetRequiredService<IAcceptedArticleQueue>());
@@ -186,6 +206,7 @@ public sealed class StorageServerHostCompositionTests
         builder.ConfigureStorageServerLogging();
         builder.ConfigureStorageServerPlatformHosting();
         builder.AddStorageServerHosting();
+        builder.Services.AddSingleton<INntpDbConnectionFactory, FakeNntpDbConnectionFactory>();
         if (replaceRabbitMq)
         {
             builder.Services.AddSingleton<IRabbitMqConnectionFactory, FakeStorageServerRabbitMqConnectionFactory>();

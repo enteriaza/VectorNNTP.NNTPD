@@ -19,5 +19,10 @@ public sealed class StorageServerJsonStorageRemovalTests
         Assert.DoesNotContain("\"Storage\"", json, StringComparison.Ordinal);
         Assert.Contains("\"Listener\"", json, StringComparison.Ordinal);
         Assert.Contains("\"BindPortTls\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"AcmeStateDir\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("AcmeDirectoryUrl", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("AcmeRenewalThresholdDays", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("CloudFlareZoneId", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("DnsSuffix", json, StringComparison.Ordinal);
     }
 }

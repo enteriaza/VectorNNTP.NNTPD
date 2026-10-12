@@ -18,6 +18,9 @@ namespace VectorNNTP.StorageServer.Configuration;
 /// (default <c>0</c> = unused) and is never listened on. The listener port is
 /// <see cref="BindPortTls"/> only. The FQDN is
 /// <c>cache{ServerId:00}.{DnsSuffix}</c>.
+/// <see cref="DnsSuffix"/>, <see cref="CloudFlareZoneId"/>, <see cref="AcmeDirectoryUrl"/>,
+/// and <see cref="AcmeRenewalThresholdDays"/> are published from <c>nntpsharedconfig</c>
+/// and are not read from this JSON section.
 /// </para>
 /// </remarks>
 public sealed class StorageServerOptions : IApplicationLifecycleOptions
@@ -31,7 +34,7 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// <summary>Fixed FQDN host-label prefix. Not configuration.</summary>
     public const string ApplicationPrefix = "cache";
 
-    /// <summary>Default DNS suffix when the key is omitted.</summary>
+    /// <summary>Historical DNS suffix example. The live suffix comes from <c>nntpsharedconfig</c>.</summary>
     public const string DefaultDnsSuffix = "usenet.ninja";
 
     /// <summary>Default application log directory.</summary>
@@ -64,11 +67,13 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// <summary>
     /// Gets or sets the DNS suffix used to generate <see cref="Fqdn"/>.
     /// </summary>
-    public string DnsSuffix { get; set; } = DefaultDnsSuffix;
+    /// <remarks>Published from <c>nntpsharedconfig.dnssuffix</c>. Empty until that snapshot is applied.</remarks>
+    public string DnsSuffix { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the Cloudflare zone identifier.
     /// </summary>
+    /// <remarks>Published from <c>nntpsharedconfig.cloudflarezoneid</c>. Empty until that snapshot is applied.</remarks>
     public string CloudFlareZoneId { get; set; } = string.Empty;
 
     /// <summary>
@@ -112,12 +117,14 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// <summary>
     /// Gets or sets the ACME directory URL.
     /// </summary>
-    public string AcmeDirectoryUrl { get; set; } = DefaultAcmeDirectoryUrl;
+    /// <remarks>Published from <c>nntpsharedconfig.acmedirectoryurl</c>. Empty until that snapshot is applied.</remarks>
+    public string AcmeDirectoryUrl { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets how many days before expiry a certificate is due for renewal.
     /// </summary>
-    public int AcmeRenewalThresholdDays { get; set; } = DefaultAcmeRenewalThresholdDays;
+    /// <remarks>Published from <c>nntpsharedconfig.acmerenewalthresholddays</c>. Zero until that snapshot is applied.</remarks>
+    public int AcmeRenewalThresholdDays { get; set; }
 
     /// <summary>
     /// Gets or sets the ACME account and certificate state directory.

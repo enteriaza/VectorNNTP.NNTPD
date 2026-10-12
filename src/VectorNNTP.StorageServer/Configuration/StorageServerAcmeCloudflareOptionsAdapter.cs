@@ -4,11 +4,13 @@ using VectorNNTP.Common.Configuration;
 namespace VectorNNTP.StorageServer.Configuration;
 
 /// <summary>
-/// Copies StorageServer-owned bind, ACME, and DNS settings onto Common
+/// Copies StorageServer-owned bind settings and the ACME state directory onto Common
 /// <see cref="AcmeCloudflareOptions"/>.
 /// </summary>
 /// <remarks>
-/// <see cref="AcmeCloudflareOptions.IncludeNewsHostnameInCertificate"/> is always
+/// Directory URL, renewal days, zone id, DNS suffix, account email, certificate password,
+/// and the Cloudflare API key are published from <c>nntpsharedconfig</c> and are not copied
+/// here. <see cref="AcmeCloudflareOptions.IncludeNewsHostnameInCertificate"/> is always
 /// <see langword="false"/>. Cleartext <see cref="AcmeCloudflareOptions.BindPort"/>
 /// is copied from <see cref="StorageServerOptions.BindPort"/> (default 0) and is
 /// never listened on by StorageServer.
@@ -16,8 +18,8 @@ namespace VectorNNTP.StorageServer.Configuration;
 public static class StorageServerAcmeCloudflareOptionsAdapter
 {
     /// <summary>
-    /// Applies nested StorageServer settings and root secrets onto
-    /// <paramref name="destination"/>.
+    /// Applies bind settings, the ACME state directory, and a root Cloudflare operation timeout onto
+    /// <paramref name="destination"/>. Shared database fields are left for <c>nntpsharedconfig</c>.
     /// </summary>
     public static void Apply(
         AcmeCloudflareOptions destination,
@@ -31,33 +33,8 @@ public static class StorageServerAcmeCloudflareOptionsAdapter
         destination.BindAddress = source.BindAddress is { Length: > 0 } ? source.BindAddress : [];
         destination.BindPort = source.BindPort;
         destination.BindPortTls = source.BindPortTls ?? 0;
-        destination.AcmeDirectoryUrl = string.IsNullOrWhiteSpace(source.AcmeDirectoryUrl)
-            ? AcmeCloudflareOptions.DefaultAcmeDirectoryUrl
-            : source.AcmeDirectoryUrl.Trim();
-        destination.AcmeRenewalThresholdDays = source.AcmeRenewalThresholdDays;
         destination.AcmeStateDir = ResolveAcmeStateDir(source);
-        destination.DnsSuffix = source.DnsSuffix;
-        destination.CloudFlareZoneId = source.CloudFlareZoneId ?? string.Empty;
-        destination.Fqdn = source.Fqdn;
         destination.IncludeNewsHostnameInCertificate = false;
-
-        OverlaySecretsFromRoot(destination, configuration);
-    }
-
-    /// <summary>
-    /// Copies Cloudflare API key, ACME PKCS#12, and ACME account-email secrets
-    /// from the configuration root.
-    /// </summary>
-    public static void OverlaySecretsFromRoot(AcmeCloudflareOptions destination, IConfiguration configuration)
-    {
-        ArgumentNullException.ThrowIfNull(destination);
-        ArgumentNullException.ThrowIfNull(configuration);
-
-        destination.AcmeCertificatePassword =
-            configuration[nameof(AcmeCloudflareOptions.AcmeCertificatePassword)] ?? string.Empty;
-        destination.CloudFlareApiKey =
-            configuration[nameof(AcmeCloudflareOptions.CloudFlareApiKey)] ?? string.Empty;
-        AcmeCloudflareOptions.OverlayAcmeAccountEmail(destination, configuration);
 
         var timeout = configuration[nameof(AcmeCloudflareOptions.CloudFlareOperationTimeout)];
         if (!string.IsNullOrWhiteSpace(timeout) && TimeSpan.TryParse(timeout, out var parsed))
