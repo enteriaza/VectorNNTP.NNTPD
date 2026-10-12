@@ -7,6 +7,7 @@ using System.Security.Cryptography.X509Certificates;
 using VectorNNTP.Common.Acme;
 using VectorNNTP.Common.Core;
 using VectorNNTP.Common.Networking.Certificates;
+using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Ingress;
 using VectorNNTP.Common.Networking.Listeners;
@@ -27,6 +28,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
     private readonly ILogger<StorageVatpListenerService> _logger;
     private readonly IAcceptedArticleQueue? _acceptedArticles;
     private readonly StoreAssemblyAdmission? _storeAdmission;
+    private readonly ArticleTransferLimits? _transferLimits;
     private readonly object _gate = new();
     private readonly List<Socket> _listenSockets = [];
     private readonly ConcurrentDictionary<Task, byte> _connections = new();
@@ -49,8 +51,9 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         StorageServerRuntimeOptions runtime,
         ITlsCertificateContextProvider certificates,
         IStorageArticleOpenBoundary openBoundary,
-        ILogger<StorageVatpListenerService> logger)
-        : this(runtime, certificates, openBoundary, CreateReadyGate(), logger)
+        ILogger<StorageVatpListenerService> logger,
+        ArticleTransferLimits? transferLimits = null)
+        : this(runtime, certificates, openBoundary, CreateReadyGate(), logger, transferLimits: transferLimits)
     {
     }
 
@@ -62,7 +65,8 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         IAcmeCertificateReadiness readiness,
         ILogger<StorageVatpListenerService> logger,
         IAcceptedArticleQueue? acceptedArticles = null,
-        StoreAssemblyAdmission? storeAdmission = null)
+        StoreAssemblyAdmission? storeAdmission = null,
+        ArticleTransferLimits? transferLimits = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(certificates);
@@ -76,6 +80,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         _logger = logger;
         _acceptedArticles = acceptedArticles;
         _storeAdmission = storeAdmission;
+        _transferLimits = transferLimits;
     }
 
     /// <summary>
@@ -89,7 +94,8 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         IAcmeCertificateReadiness readiness,
         ILogger<StorageVatpListenerService> logger,
         IAcceptedArticleQueue? acceptedArticles,
-        StoreAssemblyAdmission? storeAdmission)
+        StoreAssemblyAdmission? storeAdmission,
+        ArticleTransferLimits? transferLimits = null)
     {
         ArgumentNullException.ThrowIfNull(runtimeSource);
         ArgumentNullException.ThrowIfNull(certificates);
@@ -103,7 +109,14 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         _logger = logger;
         _acceptedArticles = acceptedArticles;
         _storeAdmission = storeAdmission;
+        _transferLimits = transferLimits;
     }
+
+    /// <summary>
+    /// Gets the per-stream transfer limits for sessions this listener creates.
+    /// Null at construction uses <see cref="ArticleTransferLimits.Default"/>, including the 1 MiB initial window.
+    /// </summary>
+    internal ArticleTransferLimits TransferLimits => _transferLimits ?? ArticleTransferLimits.Default;
 
     private StorageServerRuntimeOptions Runtime =>
         _runtime ?? throw new InvalidOperationException("StorageServer runtime options have not been published.");
@@ -425,6 +438,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
                 _openBoundary,
                 Runtime.Listener,
                 _logger,
+                limits: _transferLimits,
                 acceptedArticles: _acceptedArticles,
                 storeAdmission: _storeAdmission);
             await vatpSession.RunAsync(cancellationToken).ConfigureAwait(false);

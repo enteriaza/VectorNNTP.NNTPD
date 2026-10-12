@@ -9,6 +9,10 @@ namespace VectorNNTP.NNTPD.Tests.Transport.Vatp;
 
 public sealed class VatpArticleClientTests
 {
+    /// <summary>Body larger than the production initial window so WINDOW replenishment is required.</summary>
+    private static int BodyLargerThanInitialWindow =>
+        ArticleTransferLimits.Default.InitialStreamWindowBytes + (64 * 1024);
+
     [Fact]
     public async Task Coalesced_multi_frame_transfer_succeeds()
     {
@@ -59,10 +63,10 @@ public sealed class VatpArticleClientTests
     [Fact]
     public async Task Article_larger_than_initial_window_completes_with_window_pacing()
     {
-        // Phase 3D live defect: ~740 KiB > InitialStreamWindowBytes (256 KiB) produced
-        // FlowControlViolation because local receive credit was never replenished.
+        // Articles larger than the initial window must complete by refunding each accepted DATA chunk.
+        // A missing local replenish is a flow-control failure.
         await using var server = VatpLoopbackTestServer.Start();
-        var prepared = CreateArticle("<window-740k@example.test>", body: BuildLargeBody(740 * 1024));
+        var prepared = CreateArticle("<window-740k@example.test>", body: BuildLargeBody(BodyLargerThanInitialWindow));
         Assert.True(prepared.Record.ArtSize > ArticleTransferLimits.Default.InitialStreamWindowBytes);
         server.Register(prepared.Record, prepared.SelectedDateHeaderName);
         var client = CreateClient(server);
@@ -89,7 +93,7 @@ public sealed class VatpArticleClientTests
         var articles = new PreparedArticle[8];
         for (var i = 0; i < articles.Length; i++)
         {
-            var bodyBytes = i % 2 == 0 ? 740 * 1024 : 64 * 1024;
+            var bodyBytes = i % 2 == 0 ? BodyLargerThanInitialWindow : 64 * 1024;
             articles[i] = CreateArticle($"<mux-large-{i}@example.test>", body: BuildLargeBody(bodyBytes));
             server.Register(articles[i].Record, articles[i].SelectedDateHeaderName);
         }
@@ -121,8 +125,8 @@ public sealed class VatpArticleClientTests
     public async Task Cancel_one_large_stream_does_not_fail_sibling_large_stream()
     {
         await using var server = VatpLoopbackTestServer.Start();
-        var keep = CreateArticle("<keep-large@example.test>", body: BuildLargeBody(740 * 1024));
-        var cancel = CreateArticle("<cancel-large@example.test>", body: BuildLargeBody(740 * 1024));
+        var keep = CreateArticle("<keep-large@example.test>", body: BuildLargeBody(BodyLargerThanInitialWindow));
+        var cancel = CreateArticle("<cancel-large@example.test>", body: BuildLargeBody(BodyLargerThanInitialWindow));
         Assert.True(keep.Record.ArtSize > ArticleTransferLimits.Default.InitialStreamWindowBytes);
         Assert.True(cancel.Record.ArtSize > ArticleTransferLimits.Default.InitialStreamWindowBytes);
         var heldStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

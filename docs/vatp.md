@@ -129,9 +129,13 @@ ArtSize+FIN, duplicate END, etc.) are deterministic protocol errors.
 
 ## Flow control
 
-`ArticleTransferWindow` tracks per-stream credit. Initial credit defaults to **256 KiB**
-(`ArticleTransferLimits`) — policy, not a wire constant. WINDOW adds credit (saturating).
+`ArticleTransferWindow` tracks per-stream credit. Initial credit defaults to **1 MiB**
+(`ArticleTransferLimits.Default`) — policy, not a wire constant. WINDOW adds credit (saturating).
 Insufficient credit is a flow-control violation. Zero credit pauses only that stream.
+HELLO does not carry the initial window, so NNTPD, BackFiller, and StorageServer all use this
+same default. A sender that assumes a larger window than the receiver granted fails flow control.
+The 64 MiB maximum credit is unchanged. 1 MiB is the production default because a 768 KiB article
+fits in it, and measured 2 MiB and 4 MiB windows did not improve on 1 MiB.
 
 The initial window is **outstanding-byte credit**, not an article-size ceiling. Receivers
 consume credit on accepted DATA and replenish the same amount locally when advertising
@@ -162,6 +166,14 @@ default maxFramePayload. Not frozen as immutable protocol constants.
 
 `ArticleTransferStreamTable` bounds active StreamIds, rejects duplicates and StreamId 0,
 and requires removal after terminalization before reuse.
+
+NNTPD retrieval already opens many OPEN streams on one pooled TLS connection, up to
+`MaxStreamsPerConnection` (64). BackFiller schedules their DATA frames one at a time on
+a ready ring. StorageServer accepts concurrent STORE streams on one connection the same
+way, and writes RESULT after the article is enqueued. `ArticlePlacementClient` keeps one TLS connection per target and sends at most
+`Nntpd:ArticleIngestion:MaxOutstandingStoresPerConnection` STOREs on it (default 2, allowed 1 or 2).
+One writer emits complete frames. A lost RESULT after END is acknowledgement-not-observed and is not
+retried. The spool writer still does not call placement. Retrieval OPEN multiplexing is unchanged.
 
 ## Not implemented yet (later phases)
 

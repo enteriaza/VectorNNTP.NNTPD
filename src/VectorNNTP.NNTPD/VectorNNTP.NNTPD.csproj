@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.Tests" />
+    <InternalsVisibleTo Include="VectorNNTP.StorageServer.Tests" />
     <InternalsVisibleTo Include="NNTPCancelMessage" />
     <InternalsVisibleTo Include="VectorNNTP.NNTPCancelMessage.Tests" />
     <InternalsVisibleTo Include="VectorNNTP.NNTPD.CheckHistoryDbBench" />

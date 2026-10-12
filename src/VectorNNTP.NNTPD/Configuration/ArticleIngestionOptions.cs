@@ -45,6 +45,9 @@ public sealed class ArticleIngestionOptions
     [Range(1, 100 * 1024 * 1024)]
     public int MaxArticleBytes { get; set; } = DefaultMaxArticleBytes;
 
+    /// <summary>Default outstanding STORE streams on one placement connection.</summary>
+    public const int DefaultMaxOutstandingStoresPerConnection = 2;
+
     /// <summary>Default minimum concurrent ingestion workers.</summary>
     public const int DefaultMinWorkers = 2;
 
@@ -83,6 +86,16 @@ public sealed class ArticleIngestionOptions
 
     /// <summary>Default bounded OverviewDB publisher shutdown drain seconds.</summary>
     public const int DefaultOverviewDbPublisherShutdownSeconds = 2;
+
+    /// <summary>
+    /// Gets or sets how many STORE streams may be outstanding on one placement connection.
+    /// </summary>
+    /// <remarks>
+    /// <para>Valid values are 1 and 2. One keeps a single STORE in flight. Two is the measured safe overlap.</para>
+    /// <para>This does not enable placement. The spool writer still skips placement while that path is disabled.</para>
+    /// </remarks>
+    [Range(1, 2)]
+    public int MaxOutstandingStoresPerConnection { get; set; } = DefaultMaxOutstandingStoresPerConnection;
 
     /// <summary>
     /// Gets or sets the minimum number of concurrent ingestion workers.

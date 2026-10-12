@@ -22,7 +22,6 @@ namespace VectorNNTP.BackFiller.Tests.Listener
 {
     public sealed class VatpListenerServiceTests
     {
-        private const int LargeBodyBytes = 300 * 1024;
         private const string BodyLine = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n";
 
         [Fact]
@@ -228,7 +227,9 @@ namespace VectorNNTP.BackFiller.Tests.Listener
         public async Task Zero_window_on_one_stream_does_not_starve_another()
         {
             await using var context = await VatpListenerContext.StartAsync(maxBytes: 16 * 1024 * 1024);
-            var largeBody = BuildLargeBody(LargeBodyBytes);
+            var largeBody = BuildLargeBody(
+                ArticleTransferLimits.Default.InitialStreamWindowBytes
+                + (int)ArticleTransferLimits.Default.DefaultMaxFramePayload);
             var slow = RetainArticle(context.Authority, "<slow-large@example.test>", largeBody);
             var fast = RetainArticle(context.Authority, "<fast-small@example.test>", "tiny\r\n");
 

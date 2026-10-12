@@ -28,6 +28,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VectorNNTP.StorageServer\VectorNNTP.StorageServer.csproj" />
+    <ProjectReference Include="..\..\src\VectorNNTP.NNTPD\VectorNNTP.NNTPD.csproj" />
   </ItemGroup>
 
 </Project>

@@ -27,6 +27,20 @@ public sealed class NntpdOptionsValidatorTests
         new(assignee ?? new FakeLocalIpAddressAssignee(assignAll: true));
 
     [Fact]
+    public void Validate_Rejects_OutstandingStoreLimitOutsideOneOrTwo()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        Assert.Equal(2, options.ArticleIngestion.MaxOutstandingStoresPerConnection);
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+        options.ArticleIngestion.MaxOutstandingStoresPerConnection = 1;
+        Assert.True(CreateValidator().Validate(null, options).Succeeded);
+        options.ArticleIngestion.MaxOutstandingStoresPerConnection = 64;
+        var result = CreateValidator().Validate(null, options);
+        Assert.False(result.Succeeded);
+        Assert.Contains("MaxOutstandingStoresPerConnection", result.FailureMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Validate_Succeeds_ForDefaultHistoryTime()
     {
         var options = TestHostFactory.CreateValidOptions();

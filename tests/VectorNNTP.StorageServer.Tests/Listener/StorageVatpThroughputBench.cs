@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime;
 using System.Net;
@@ -61,6 +63,46 @@ public sealed class StorageVatpThroughputBench
     }
 
     [Fact]
+    public async Task Sequential_pipe_accepts_each_store_before_the_next()
+    {
+        var pool = BuildPool(2);
+        await using var host = await BenchHost.StartAsync(rewritten: null, ingressOnly: true);
+        await using var session = await VatpLoadSession.ConnectAsync(host.Port);
+        await session.SendArticlesAsync(pool, count: 2, CancellationToken.None, pipe: 1);
+
+        var drained = await WaitForDequeuedAsync(host, expected: 2, TimeSpan.FromSeconds(30));
+        Assert.True(drained);
+        Assert.Equal(1, session.PipeUsed);
+        Assert.Equal(1, session.PipeMaxOutstanding);
+        Assert.Equal(2, session.Accepted);
+        Assert.Equal(2, session.TransfersCompleted);
+        Assert.Equal(0, session.Rejected);
+        Assert.Equal(0, session.TransfersOutstanding);
+        Assert.Equal(2, host.Queue.EnqueuedCount);
+        Assert.Equal(2, host.Queue.DequeuedCount);
+    }
+
+    [Fact]
+    public async Task Piped_stores_on_one_connection_complete_independently()
+    {
+        var pool = BuildPool(4);
+        await using var host = await BenchHost.StartAsync(rewritten: null, ingressOnly: true);
+        await using var session = await VatpLoadSession.ConnectAsync(host.Port);
+        await session.SendArticlesAsync(pool, count: 4, CancellationToken.None, pipe: 4);
+
+        var drained = await WaitForDequeuedAsync(host, expected: 4, TimeSpan.FromSeconds(30));
+        Assert.True(drained);
+        Assert.Equal(4, session.PipeUsed);
+        Assert.True(session.PipeMaxOutstanding >= 2);
+        Assert.Equal(4, session.Accepted);
+        Assert.Equal(4, session.TransfersCompleted);
+        Assert.Equal(0, session.Rejected);
+        Assert.Equal(0, session.TransfersOutstanding);
+        Assert.Equal(4, host.Queue.EnqueuedCount);
+        Assert.Equal(4, host.Queue.DequeuedCount);
+    }
+
+    [Fact]
     public async Task Sustained_vatp_path_when_bench_enabled()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("VECTORNNTP_STORAGE_BENCH"), "1", StringComparison.Ordinal))
@@ -101,16 +143,19 @@ public sealed class StorageVatpThroughputBench
         var sessions = ParseSessions(Environment.GetEnvironmentVariable("VECTORNNTP_STORAGE_BENCH_SESSIONS"));
         var measureSeconds = ParsePositive(Environment.GetEnvironmentVariable("VECTORNNTP_STORAGE_BENCH_SECONDS"), 8);
         var warmupSeconds = ParsePositive(Environment.GetEnvironmentVariable("VECTORNNTP_STORAGE_BENCH_WARMUP"), 2);
+        var pipeRequested = ParsePositive(Environment.GetEnvironmentVariable("VECTORNNTP_STORAGE_BENCH_PIPE"), 1);
+        var pipe = Math.Min(pipeRequested, ArticleTransferLimits.Default.MaxStreamsPerConnection);
+        var initialWindow = ParseBenchWindow(Environment.GetEnvironmentVariable("VECTORNNTP_STORAGE_BENCH_WINDOW"));
         var pool = BuildPool(16);
         var report = new StringBuilder();
         report.AppendLine("mode=ingress-enqueue boundary=AcceptedArticleQueue.TryEnqueue pathWorker=false");
         report.AppendLine($"threadPoolMin={minThreads}");
-        report.AppendLine($"bodyBytes={BodyBytes} artSize={pool[0].ArtSize} pool={pool.Length} measureSeconds={measureSeconds} warmupSeconds={warmupSeconds}");
-        report.AppendLine($"runtime={Environment.Version} os={Environment.OSVersion} processors={Environment.ProcessorCount} serverGc={GCSettings.IsServerGC}");
+        report.AppendLine($"bodyBytes={BodyBytes} artSize={pool[0].ArtSize} pool={pool.Length} measureSeconds={measureSeconds} warmupSeconds={warmupSeconds} pipeRequested={pipeRequested} pipe={pipe} serverMaxStreams={ArticleTransferLimits.Default.MaxStreamsPerConnection} initialWindow={initialWindow}");
+        report.AppendLine($"runtime={Environment.Version} os={Environment.OSVersion} processors={Environment.ProcessorCount} serverGc={GCSettings.IsServerGC} gcLatency={GCSettings.LatencyMode} lohCompact={GCSettings.LargeObjectHeapCompactionMode}");
 
         foreach (var sessionCount in sessions)
         {
-            var line = await RunLevelAsync(pool, sessionCount, warmupSeconds, measureSeconds, ingressOnly: true);
+            var line = await RunLevelAsync(pool, sessionCount, warmupSeconds, measureSeconds, ingressOnly: true, pipe: pipe, initialWindowBytes: initialWindow);
             report.AppendLine(line);
             _output.WriteLine(line);
         }
@@ -135,9 +180,11 @@ public sealed class StorageVatpThroughputBench
         int sessionCount,
         int warmupSeconds,
         int measureSeconds,
-        bool ingressOnly = false)
+        bool ingressOnly = false,
+        int pipe = 1,
+        int initialWindowBytes = InitialWindowBytes)
     {
-        await using var host = await BenchHost.StartAsync(rewritten: null, ingressOnly: ingressOnly);
+        await using var host = await BenchHost.StartAsync(rewritten: null, ingressOnly: ingressOnly, initialWindowBytes: initialWindowBytes);
         var sessions = new VatpLoadSession[sessionCount];
         for (var i = 0; i < sessions.Length; i++)
         {
@@ -145,13 +192,15 @@ public sealed class StorageVatpThroughputBench
         }
 
         using var sendCts = new CancellationTokenSource();
-        var senders = sessions.Select(session => session.SendArticlesAsync(pool, count: null, sendCts.Token)).ToArray();
+        var senders = sessions.Select(session => session.SendArticlesAsync(pool, count: null, sendCts.Token, pipe, initialWindowBytes)).ToArray();
         var started = Stopwatch.StartNew();
         var origin = Sample.Take(host, sessions, TimeSpan.Zero);
         var samples = new List<Sample>();
         var capped = false;
         var warmup = (Sample?)null;
         var measureEnd = (Sample?)null;
+        var warmupStamp = 0L;
+        var measureStamp = 0L;
 
         while (started.Elapsed < TimeSpan.FromSeconds(warmupSeconds + measureSeconds))
         {
@@ -177,10 +226,12 @@ public sealed class StorageVatpThroughputBench
             if (warmup is null && started.Elapsed >= TimeSpan.FromSeconds(warmupSeconds))
             {
                 warmup = Sample.Take(host, sessions, started.Elapsed);
+                warmupStamp = Stopwatch.GetTimestamp();
             }
         }
 
         measureEnd = Sample.Take(host, sessions, started.Elapsed);
+        measureStamp = Stopwatch.GetTimestamp();
         await sendCts.CancelAsync();
         try
         {
@@ -195,18 +246,49 @@ public sealed class StorageVatpThroughputBench
             : await WaitForProcessedAsync(host, host.Queue.EnqueuedCount, TimeSpan.FromSeconds(60));
         var drainedAt = Sample.Take(host, sessions, started.Elapsed);
         double creditWait = 0;
-        double resultWait = 0;
+        double slotWait = 0;
+        var pipeUsed = 0;
+        var pipeMax = 0;
+        var incomplete = 0L;
+        var initialCredit = 0;
+        var windowFrames = 0;
+        long windowBytes = 0;
+        var windowAddMin = 0;
+        var windowAddMax = 0;
+        var cipher = sessions.Length == 0 ? "none" : sessions[0].NegotiatedCipher;
+        var latencies = new List<long>();
         foreach (var session in sessions)
         {
             creditWait += session.CreditWaitSeconds;
-            resultWait += session.ResultWaitSeconds;
+            slotWait += session.SlotWaitSeconds;
+            pipeUsed = Math.Max(pipeUsed, session.PipeUsed);
+            pipeMax = Math.Max(pipeMax, session.PipeMaxOutstanding);
+            incomplete += session.TransfersOutstanding;
+            initialCredit = session.InitialCredit;
+            windowFrames += session.WindowFrames;
+            windowBytes += session.WindowBytes;
+            if (session.WindowFrames > 0)
+            {
+                windowAddMin = windowAddMin == 0
+                    ? session.WindowAddMin
+                    : Math.Min(windowAddMin, session.WindowAddMin);
+            }
+
+            windowAddMax = Math.Max(windowAddMax, session.WindowAddMax);
+            session.CopySteadyLatencies(warmupStamp, measureStamp, latencies);
             await session.DisposeAsync();
         }
+
+        var (resultMedianUs, resultP95Us, resultSamples) = PercentileMicroseconds(latencies);
 
         var cold = samples.Count >= 2 ? Rate(samples[0], samples[Math.Min(4, samples.Count - 1)], pool[0].ArtSize) : "n/a";
         var steady = warmup is null
             ? "n/a"
             : Rate(warmup.Value, measureEnd.Value, pool[0].ArtSize);
+        var steadyAllocated = warmup is null ? 0 : measureEnd.Value.AllocatedBytes - warmup.Value.AllocatedBytes;
+        var steadyPauseMs = warmup is null
+            ? 0
+            : (measureEnd.Value.GcPause - warmup.Value.GcPause).TotalMilliseconds;
         var depthMax = measureEnd.Value.Depth;
         foreach (var sample in samples)
         {
@@ -222,9 +304,28 @@ public sealed class StorageVatpThroughputBench
             $"enqueued={drainedAt.Enqueued} dequeued={drainedAt.Dequeued} processed={drainedAt.Processed} rejectedPath={drainedAt.PathRejected} " +
             $"accepted={drainedAt.Accepted} rejected={drainedAt.Rejected} " +
             $"gen0={drainedAt.Gen0 - origin.Gen0} gen1={drainedAt.Gen1 - origin.Gen1} gen2={drainedAt.Gen2 - origin.Gen2} " +
+            $"allocatedBytes={drainedAt.AllocatedBytes - origin.AllocatedBytes} steadyAllocatedBytes={steadyAllocated} " +
+            $"gcPauseMs={(drainedAt.GcPause - origin.GcPause).TotalMilliseconds:F1} steadyGcPauseMs={steadyPauseMs:F1} " +
+            $"cipher={cipher} " +
             $"heapBytes={drainedAt.HeapBytes} workingSet={drainedAt.WorkingSet} " +
             $"cpuMs={(drainedAt.Cpu - origin.Cpu).TotalMilliseconds:F0} workerSec={host.Processor?.WorkerSeconds ?? 0:F3} ingressOnly={ingressOnly} " +
-            $"creditWaitSec={creditWait:F3} resultWaitSec={resultWait:F3}";
+            $"pipe={pipeUsed} pipeMax={pipeMax} initialCredit={initialCredit} windowFrames={windowFrames} windowBytes={windowBytes} windowAddMin={windowAddMin} windowAddMax={windowAddMax} creditWaitSec={creditWait:F3} slotWaitSec={slotWait:F3} " +
+            $"resultN={resultSamples} resultMedianUs={resultMedianUs:F0} resultP95Us={resultP95Us:F0} incomplete={incomplete}";
+    }
+
+    private static (double MedianUs, double P95Us, int Count) PercentileMicroseconds(List<long> ticks)
+    {
+        if (ticks.Count == 0)
+        {
+            return (0, 0, 0);
+        }
+
+        ticks.Sort();
+        var median = ticks[ticks.Count / 2];
+        var p95Index = (int)((ticks.Count - 1) * 0.95d);
+        var p95 = ticks[p95Index];
+        var scale = 1_000_000d / Stopwatch.Frequency;
+        return (median * scale, p95 * scale, ticks.Count);
     }
 
     private static string Rate(Sample start, Sample end, int artSize)
@@ -299,6 +400,42 @@ public sealed class StorageVatpThroughputBench
 
     private static int ParsePositive(string? text, int fallback) =>
         int.TryParse(text, out var value) && value > 0 ? value : fallback;
+
+    /// <summary>
+    /// Parses <c>VECTORNNTP_STORAGE_BENCH_WINDOW</c>. Unset means <see cref="ArticleTransferLimits.Default"/>.
+    /// Any other value throws. Values are not clamped.
+    /// </summary>
+    internal static int ParseBenchWindow(string? text)
+    {
+        const int Kib = 1024;
+        ReadOnlySpan<int> allowed = [256 * Kib, 512 * Kib, 1024 * Kib, 2 * 1024 * Kib, 4 * 1024 * Kib];
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            var production = ArticleTransferLimits.Default.InitialStreamWindowBytes;
+            if (!allowed.Contains(production))
+            {
+                throw new InvalidOperationException(
+                    $"Production initial window {production} is not one of the benchmark sizes.");
+            }
+
+            return production;
+        }
+
+        if (!int.TryParse(text, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            || !allowed.Contains(value))
+        {
+            throw new InvalidOperationException(
+                "VECTORNNTP_STORAGE_BENCH_WINDOW must be 262144, 524288, 1048576, 2097152, or 4194304 bytes.");
+        }
+
+        if (value > ArticleTransferLimits.Default.MaxStreamCreditBytes)
+        {
+            throw new InvalidOperationException(
+                $"Initial window {value} exceeds MaxStreamCreditBytes {ArticleTransferLimits.Default.MaxStreamCreditBytes}.");
+        }
+
+        return value;
+    }
 
     private static Prepared[] BuildPool(int count)
     {
@@ -379,6 +516,8 @@ public sealed class StorageVatpThroughputBench
         int Gen0,
         int Gen1,
         int Gen2,
+        long AllocatedBytes,
+        TimeSpan GcPause,
         long HeapBytes,
         long WorkingSet,
         TimeSpan Cpu)
@@ -411,6 +550,8 @@ public sealed class StorageVatpThroughputBench
                 GC.CollectionCount(0),
                 GC.CollectionCount(1),
                 GC.CollectionCount(2),
+                GC.GetTotalAllocatedBytes(precise: false),
+                GC.GetTotalPauseDuration(),
                 GC.GetTotalMemory(forceFullCollection: false),
                 process.WorkingSet64,
                 process.TotalProcessorTime);
@@ -462,6 +603,25 @@ public sealed class StorageVatpThroughputBench
         }
     }
 
+    internal static Task<PlacementIngressHost> StartPlacementIngressHostAsync() =>
+        PlacementIngressHost.OpenAsync();
+
+    internal sealed class PlacementIngressHost : IAsyncDisposable
+    {
+        private readonly BenchHost _host;
+
+        private PlacementIngressHost(BenchHost host) => _host = host;
+
+        public int Port => _host.Port;
+
+        public AcceptedArticleQueue Queue => _host.Queue;
+
+        public static async Task<PlacementIngressHost> OpenAsync() =>
+            new(await BenchHost.StartAsync(rewritten: null, ingressOnly: true).ConfigureAwait(false));
+
+        public ValueTask DisposeAsync() => _host.DisposeAsync();
+    }
+
     private sealed class BenchHost : IAsyncDisposable
     {
         private readonly StorageVatpListenerService _listener;
@@ -493,7 +653,10 @@ public sealed class StorageVatpThroughputBench
 
         public int Port { get; }
 
-        public static async Task<BenchHost> StartAsync(Action<ReadOnlyMemory<byte>>? rewritten, bool ingressOnly = false)
+        public static async Task<BenchHost> StartAsync(
+            Action<ReadOnlyMemory<byte>>? rewritten,
+            bool ingressOnly = false,
+            int? initialWindowBytes = null)
         {
             var port = StorageServerTestOptions.GetFreeTcpPort();
             var readiness = new AcmeCertificateReadiness();
@@ -503,6 +666,9 @@ public sealed class StorageVatpThroughputBench
             AcceptedArticleWorker? worker = processor is null
                 ? null
                 : new AcceptedArticleWorker(queue, processor, NullLogger<AcceptedArticleWorker>.Instance);
+            ArticleTransferLimits? limits = initialWindowBytes is null
+                ? null
+                : new ArticleTransferLimits { InitialStreamWindowBytes = initialWindowBytes.Value };
             var listener = new StorageVatpListenerService(
                 CreateRuntime(port),
                 TestListenerCertificates.CreatePublishedProvider(),
@@ -510,7 +676,8 @@ public sealed class StorageVatpThroughputBench
                 readiness,
                 NullLogger<StorageVatpListenerService>.Instance,
                 queue,
-                new StoreAssemblyAdmission(1024));
+                new StoreAssemblyAdmission(1024),
+                limits);
             await listener.StartAsync(CancellationToken.None);
             if (worker is not null)
             {
@@ -591,17 +758,31 @@ public sealed class StorageVatpThroughputBench
         private readonly SslStream _ssl;
         private readonly TcpClient _tcp;
         private readonly Task _reader;
-        private readonly SemaphoreSlim _creditGate = new(0);
-        private readonly SemaphoreSlim _resultGate = new(0);
+        private readonly SemaphoreSlim _helloGate = new(0);
+        private readonly SemaphoreSlim _doneGate = new(0);
+        private readonly ConcurrentQueue<TransferSlot> _freeSlots = new();
+        private readonly List<LatencySample> _latencies = [];
+        private readonly object _latencyLock = new();
         private readonly CancellationTokenSource _dispose = new();
-        private long _credit = InitialWindowBytes;
         private readonly byte[] _window = new byte[VatpProtocol.WindowPayloadLength];
         private readonly byte[] _outcome = new byte[1];
+        private TransferSlot[]? _slots;
+        private SemaphoreSlim? _slotGate;
         private long _accepted;
         private long _rejected;
         private long _wireBytes;
         private long _creditWaitTicks;
-        private long _resultWaitTicks;
+        private long _slotWaitTicks;
+        private long _outstanding;
+        private long _started;
+        private long _completed;
+        private int _pipeUsed;
+        private int _pipeMaxOutstanding;
+        private int _initialCredit;
+        private int _windowFrames;
+        private long _windowBytes;
+        private int _windowAddMin = int.MaxValue;
+        private int _windowAddMax;
         private Exception? _fault;
 
         private VatpLoadSession(TcpClient tcp, SslStream ssl)
@@ -619,7 +800,29 @@ public sealed class StorageVatpThroughputBench
 
         public double CreditWaitSeconds => Volatile.Read(ref _creditWaitTicks) / (double)Stopwatch.Frequency;
 
-        public double ResultWaitSeconds => Volatile.Read(ref _resultWaitTicks) / (double)Stopwatch.Frequency;
+        /// <summary>Gets time the single writer blocked because every stream slot was awaiting RESULT.</summary>
+        public double SlotWaitSeconds => Volatile.Read(ref _slotWaitTicks) / (double)Stopwatch.Frequency;
+
+        public int PipeUsed => _pipeUsed;
+
+        public int PipeMaxOutstanding => Volatile.Read(ref _pipeMaxOutstanding);
+
+        public long TransfersCompleted => Volatile.Read(ref _completed);
+
+        public long TransfersOutstanding => Math.Max(0, Volatile.Read(ref _started) - Volatile.Read(ref _completed));
+
+        public int InitialCredit => _initialCredit;
+
+        public int WindowFrames => _windowFrames;
+
+        public long WindowBytes => _windowBytes;
+
+        public int WindowAddMin => _windowFrames == 0 ? 0 : _windowAddMin;
+
+        public int WindowAddMax => _windowAddMax;
+
+        public string NegotiatedCipher =>
+            $"{_ssl.SslProtocol}/{_ssl.NegotiatedCipherSuite}";
 
         public static async Task<VatpLoadSession> ConnectAsync(int port)
         {
@@ -640,7 +843,7 @@ public sealed class StorageVatpThroughputBench
             var session = new VatpLoadSession(tcp, ssl);
             await session.WriteAsync(VatpFrameEncoder.ToSingleBuffer(
                 VatpFrameEncoder.EncodeHello(VatpProtocol.DefaultMaxFramePayload)));
-            if (!await session._resultGate.WaitAsync(TimeSpan.FromSeconds(5)))
+            if (!await session._helloGate.WaitAsync(TimeSpan.FromSeconds(5)))
             {
                 throw new TimeoutException("StorageServer did not answer HELLO.");
             }
@@ -653,8 +856,38 @@ public sealed class StorageVatpThroughputBench
             return session;
         }
 
-        public async Task SendArticlesAsync(IReadOnlyList<Prepared> pool, int? count, CancellationToken cancellationToken)
+        public async Task SendArticlesAsync(
+            IReadOnlyList<Prepared> pool,
+            int? count,
+            CancellationToken cancellationToken,
+            int pipe = 1,
+            int initialCredit = InitialWindowBytes)
         {
+            if (initialCredit < 1 || initialCredit > ArticleTransferLimits.Default.MaxStreamCreditBytes)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(initialCredit),
+                    initialCredit,
+                    "Initial credit must be positive and no greater than MaxStreamCreditBytes.");
+            }
+
+            _initialCredit = initialCredit;
+            if (_slots is not null)
+            {
+                throw new InvalidOperationException("A load session sends one article loop.");
+            }
+
+            var limit = ArticleTransferLimits.Default.MaxStreamsPerConnection;
+            _pipeUsed = Math.Clamp(pipe, 1, limit);
+            var slots = new TransferSlot[_pipeUsed];
+            for (var i = 0; i < slots.Length; i++)
+            {
+                slots[i] = new TransferSlot((uint)(i + 1));
+                _freeSlots.Enqueue(slots[i]);
+            }
+
+            _slots = slots;
+            _slotGate = new SemaphoreSlim(_pipeUsed, _pipeUsed);
             var sent = 0;
             var index = 0;
             while (count is null || sent < count)
@@ -665,27 +898,53 @@ public sealed class StorageVatpThroughputBench
                     throw _fault;
                 }
 
+                var slot = await AcquireSlotAsync(cancellationToken);
                 var article = pool[index];
                 index = (index + 1) % pool.Count;
-                Volatile.Write(ref _credit, InitialWindowBytes);
-                await WriteAsync(article.Store);
-                await WriteAsync(article.Meta);
+                var now = Interlocked.Increment(ref _outstanding);
+                UpdatePipeMax(now);
+                Interlocked.Increment(ref _started);
+                Volatile.Write(ref slot.EndTimestamp, 0);
+                Volatile.Write(ref slot.Credit, initialCredit);
+                Volatile.Write(ref slot.AcceptWindow, 1);
+                Volatile.Write(ref slot.Active, 1);
+                await WriteStampedAsync(article.Store, slot.StreamId);
+                await WriteStampedAsync(article.Meta, slot.StreamId);
                 for (var frame = 0; frame < article.Data.Length; frame++)
                 {
-                    await WaitForCreditAsync(article.DataLengths[frame], cancellationToken);
-                    await WriteAsync(article.Data[frame]);
+                    await WaitForCreditAsync(slot, article.DataLengths[frame], cancellationToken);
+                    await WriteStampedAsync(article.Data[frame], slot.StreamId);
                 }
 
-                await WriteAsync(article.End);
-                var resultWait = Stopwatch.GetTimestamp();
-                await _resultGate.WaitAsync(cancellationToken);
-                Interlocked.Add(ref _resultWaitTicks, Stopwatch.GetTimestamp() - resultWait);
+                Volatile.Write(ref slot.AcceptWindow, 0);
+                Volatile.Write(ref slot.EndTimestamp, Stopwatch.GetTimestamp());
+                await WriteStampedAsync(article.End, slot.StreamId);
+                sent++;
+            }
+
+            while (Volatile.Read(ref _outstanding) > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (_fault is not null)
                 {
                     throw _fault;
                 }
 
-                sent++;
+                await _doneGate.WaitAsync(cancellationToken);
+            }
+        }
+
+        public void CopySteadyLatencies(long warmupStamp, long measureStamp, List<long> latencies)
+        {
+            lock (_latencyLock)
+            {
+                foreach (var sample in _latencies)
+                {
+                    if (sample.CompletedTimestamp >= warmupStamp && sample.CompletedTimestamp <= measureStamp)
+                    {
+                        latencies.Add(sample.LatencyTicks);
+                    }
+                }
             }
         }
 
@@ -706,11 +965,56 @@ public sealed class StorageVatpThroughputBench
             await _ssl.DisposeAsync();
             _tcp.Dispose();
             _dispose.Dispose();
-            _creditGate.Dispose();
-            _resultGate.Dispose();
+            _helloGate.Dispose();
+            _doneGate.Dispose();
+            _slotGate?.Dispose();
+            if (_slots is not null)
+            {
+                foreach (var slot in _slots)
+                {
+                    slot.CreditGate.Dispose();
+                }
+            }
         }
 
-        private async Task WaitForCreditAsync(int bytes, CancellationToken cancellationToken)
+        private async Task<TransferSlot> AcquireSlotAsync(CancellationToken cancellationToken)
+        {
+            var gate = _slotGate ?? throw new InvalidOperationException("Stream slots are not open.");
+            if (!gate.Wait(0, cancellationToken))
+            {
+                var started = Stopwatch.GetTimestamp();
+                await gate.WaitAsync(cancellationToken);
+                Interlocked.Add(ref _slotWaitTicks, Stopwatch.GetTimestamp() - started);
+            }
+
+            if (!_freeSlots.TryDequeue(out var slot))
+            {
+                if (_fault is not null)
+                {
+                    throw _fault;
+                }
+
+                throw new InvalidOperationException("Stream slot semaphore and free list diverged.");
+            }
+
+            return slot;
+        }
+
+        private void UpdatePipeMax(long outstanding)
+        {
+            int previous;
+            do
+            {
+                previous = Volatile.Read(ref _pipeMaxOutstanding);
+                if (outstanding <= previous)
+                {
+                    return;
+                }
+            }
+            while (Interlocked.CompareExchange(ref _pipeMaxOutstanding, (int)outstanding, previous) != previous);
+        }
+
+        private async Task WaitForCreditAsync(TransferSlot slot, int bytes, CancellationToken cancellationToken)
         {
             var waiting = false;
             var started = 0L;
@@ -722,8 +1026,8 @@ public sealed class StorageVatpThroughputBench
                     throw _fault;
                 }
 
-                var current = Volatile.Read(ref _credit);
-                if (current >= bytes && Interlocked.CompareExchange(ref _credit, current - bytes, current) == current)
+                var current = Volatile.Read(ref slot.Credit);
+                if (current >= bytes && Interlocked.CompareExchange(ref slot.Credit, current - bytes, current) == current)
                 {
                     if (waiting)
                     {
@@ -739,8 +1043,15 @@ public sealed class StorageVatpThroughputBench
                     started = Stopwatch.GetTimestamp();
                 }
 
-                await _creditGate.WaitAsync(cancellationToken);
+                await slot.CreditGate.WaitAsync(cancellationToken);
             }
+        }
+
+        private async Task WriteStampedAsync(byte[] frame, uint streamId)
+        {
+            BinaryPrimitives.WriteUInt32BigEndian(frame.AsSpan(4, 4), streamId);
+            await _ssl.WriteAsync(frame);
+            Interlocked.Add(ref _wireBytes, frame.Length);
         }
 
         private async Task WriteAsync(byte[] frame)
@@ -788,7 +1099,7 @@ public sealed class StorageVatpThroughputBench
                         switch (frame.Header.Type)
                         {
                             case VatpFrameType.Hello:
-                                _resultGate.Release();
+                                _helloGate.Release();
                                 break;
                             case VatpFrameType.Window:
                                 frame.Payload.CopyTo(window);
@@ -798,26 +1109,27 @@ public sealed class StorageVatpThroughputBench
                                     return;
                                 }
 
-                                Interlocked.Add(ref _credit, add);
-                                _creditGate.Release();
+                                NoteWindow(add);
+                                ApplyWindow(frame.Header.StreamId, add);
                                 break;
                             case VatpFrameType.Result:
                                 frame.Payload.CopyTo(outcome);
-                                if (outcome[0] == VatpStoreOutcome.Accepted)
+                                if (!TryCompleteSlot(frame.Header.StreamId, outcome[0] == VatpStoreOutcome.Accepted))
                                 {
-                                    Interlocked.Increment(ref _accepted);
+                                    Fault(new InvalidOperationException($"RESULT for inactive stream {frame.Header.StreamId}."));
+                                    return;
                                 }
-                                else
+
+                                break;
+                            case VatpFrameType.Fail:
+                                if (frame.Header.StreamId == VatpProtocol.ConnectionStreamId
+                                    || !TryCompleteSlot(frame.Header.StreamId, accepted: false))
                                 {
                                     Interlocked.Increment(ref _rejected);
                                 }
 
-                                _resultGate.Release();
-                                break;
-                            case VatpFrameType.Fail:
-                                Interlocked.Increment(ref _rejected);
                                 Fault(new InvalidOperationException("VATP FAIL during transfer."));
-                                _resultGate.Release();
+                                WakeSenders();
                                 return;
                         }
 
@@ -837,11 +1149,133 @@ public sealed class StorageVatpThroughputBench
             catch (Exception ex)
             {
                 Fault(ex);
-                _resultGate.Release();
+                WakeSenders();
+            }
+        }
+
+        private void NoteWindow(uint add)
+        {
+            _windowFrames++;
+            _windowBytes += add;
+            if (add < _windowAddMin)
+            {
+                _windowAddMin = (int)add;
+            }
+
+            if (add > _windowAddMax)
+            {
+                _windowAddMax = (int)add;
+            }
+        }
+
+        private void ApplyWindow(uint streamId, uint add)
+        {
+            var slot = FindSlot(streamId);
+            if (slot is null)
+            {
+                Fault(new InvalidOperationException($"WINDOW for unknown stream {streamId}."));
+                return;
+            }
+
+            if (Volatile.Read(ref slot.AcceptWindow) == 0)
+            {
+                return;
+            }
+
+            Interlocked.Add(ref slot.Credit, add);
+            slot.CreditGate.Release();
+        }
+
+        private bool TryCompleteSlot(uint streamId, bool accepted)
+        {
+            var slot = FindSlot(streamId);
+            if (slot is null || Interlocked.Exchange(ref slot.Active, 0) != 1)
+            {
+                return false;
+            }
+
+            Volatile.Write(ref slot.AcceptWindow, 0);
+            if (accepted)
+            {
+                Interlocked.Increment(ref _accepted);
+            }
+            else
+            {
+                Interlocked.Increment(ref _rejected);
+            }
+
+            var end = Volatile.Read(ref slot.EndTimestamp);
+            if (end != 0)
+            {
+                var completed = Stopwatch.GetTimestamp();
+                lock (_latencyLock)
+                {
+                    _latencies.Add(new LatencySample(completed, completed - end));
+                }
+            }
+
+            Interlocked.Increment(ref _completed);
+            Interlocked.Decrement(ref _outstanding);
+            _freeSlots.Enqueue(slot);
+            _slotGate?.Release();
+            slot.CreditGate.Release();
+            _doneGate.Release();
+            return true;
+        }
+
+        private TransferSlot? FindSlot(uint streamId)
+        {
+            var slots = _slots;
+            if (slots is null || streamId == 0 || streamId > (uint)slots.Length)
+            {
+                return null;
+            }
+
+            return slots[streamId - 1];
+        }
+
+        private void WakeSenders()
+        {
+            try
+            {
+                _helloGate.Release();
+                _doneGate.Release();
+                _slotGate?.Release();
+                if (_slots is null)
+                {
+                    return;
+                }
+
+                foreach (var slot in _slots)
+                {
+                    slot.CreditGate.Release();
+                }
+            }
+            catch (ObjectDisposedException)
+            {
             }
         }
 
         private void Fault(Exception exception) =>
             Interlocked.CompareExchange(ref _fault, exception, null);
+
+        private sealed class TransferSlot
+        {
+            public TransferSlot(uint streamId) => StreamId = streamId;
+
+            public uint StreamId { get; }
+
+            public SemaphoreSlim CreditGate { get; } = new(0);
+
+            public long Credit;
+
+            public int AcceptWindow;
+
+            public int Active;
+
+            public long EndTimestamp;
+        }
+
+        private readonly record struct LatencySample(long CompletedTimestamp, long LatencyTicks);
     }
 }

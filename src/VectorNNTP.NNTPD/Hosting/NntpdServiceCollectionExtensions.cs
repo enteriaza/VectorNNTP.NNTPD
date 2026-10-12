@@ -366,7 +366,14 @@ public static class NntpdServiceCollectionExtensions
 
         services.TryAddSingleton<VatpConnectionPool>();
         services.TryAddSingleton<IVatpArticleClient, VatpArticleClient>();
-        services.TryAddSingleton<IArticlePlacementClient, ArticlePlacementClient>();
+        services.TryAddSingleton<IArticlePlacementClient>(static provider =>
+        {
+            var ingestion = provider.GetRequiredService<IOptions<NntpdOptions>>().Value.ArticleIngestion
+                ?? new ArticleIngestionOptions();
+            return new ArticlePlacementClient(
+                provider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ArticlePlacementClient>>(),
+                ingestion.MaxOutstandingStoresPerConnection);
+        });
 
         services.TryAddSingleton<ArticleWorkRpcService>();
         services.TryAddSingleton<IArticleWorkRpcClient>(

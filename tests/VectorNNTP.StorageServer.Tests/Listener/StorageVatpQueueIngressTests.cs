@@ -223,6 +223,71 @@ public sealed class StorageVatpQueueIngressTests
     }
 
     [Fact]
+    public void Default_receive_stream_starts_at_the_production_window()
+    {
+        var built = Build("<store-default-window@seg.test>", "body\r\n");
+        var stream = new ArticleTransferReceiveStream(1, Guid.NewGuid(), built.Record.ArtId);
+        Assert.Equal(1024L * 1024, stream.ReceiveCredit);
+        Assert.Equal(1024 * 1024, ArticleTransferLimits.Default.InitialStreamWindowBytes);
+    }
+
+    [Fact]
+    public async Task Explicit_initial_window_reaches_the_receive_stream_and_refunds_each_chunk()
+    {
+        const int initial = 1024 * 1024;
+        var limits = new ArticleTransferLimits { InitialStreamWindowBytes = initial };
+        var built = Build("<store-wide-window@seg.test>", "body-line\r\n");
+        var stream = new ArticleTransferReceiveStream(1, Guid.NewGuid(), built.Record.ArtId, limits);
+        Assert.Equal((long)initial, stream.ReceiveCredit);
+
+        var queue = new AcceptedArticleQueue();
+        await using var harness = await Harness.StartAsync(queue, limits);
+        var frames = await harness.StoreAndReadAsync(built);
+        Assert.Equal(VatpStoreOutcome.Accepted, Outcome(frames));
+        long refunded = 0;
+        foreach (var frame in frames)
+        {
+            if (frame.Header.Type != VatpFrameType.Window)
+            {
+                continue;
+            }
+
+            Assert.True(VatpControlPayload.TryDecodeWindow(frame.Payload, out var add));
+            Assert.True(add <= 64 * 1024);
+            refunded += add;
+        }
+
+        Assert.Equal(built.Record.ArtSize, refunded);
+        Assert.Equal(1, queue.EnqueuedCount);
+    }
+
+    [Fact]
+    public async Task Initial_window_smaller_than_a_chunk_is_a_flow_control_failure()
+    {
+        var limits = new ArticleTransferLimits { InitialStreamWindowBytes = 16 };
+        var built = Build("<store-tight-window@seg.test>", "body-line\r\n");
+        Assert.True(built.Record.ArtSize > limits.InitialStreamWindowBytes);
+        var queue = new AcceptedArticleQueue();
+        await using var harness = await Harness.StartAsync(queue, limits);
+        await harness.SendStoreAsync(built);
+        Assert.Equal(VatpErrorCode.FlowControlViolation, FailCode(await harness.ReadUntilAsync(static frames =>
+            frames.Any(frame => frame.Header.Type == VatpFrameType.Fail))));
+        Assert.Equal(0, queue.EnqueuedCount);
+    }
+
+    [Fact]
+    public void Initial_window_above_the_max_credit_is_rejected()
+    {
+        var built = Build("<store-over-window@seg.test>", "body\r\n");
+        var limits = new ArticleTransferLimits
+        {
+            InitialStreamWindowBytes = (int)ArticleTransferLimits.Default.MaxStreamCreditBytes + 1,
+        };
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ArticleTransferReceiveStream(1, Guid.NewGuid(), built.Record.ArtId, limits));
+    }
+
+    [Fact]
     public async Task Split_reads_enqueue_a_large_article()
     {
         var body = new StringBuilder(768_000);
@@ -405,7 +470,7 @@ public sealed class StorageVatpQueueIngressTests
 
         public PipeTransport Transport { get; }
 
-        public static async Task<Harness> StartAsync(IAcceptedArticleQueue queue)
+        public static async Task<Harness> StartAsync(IAcceptedArticleQueue queue, ArticleTransferLimits? limits = null)
         {
             var transport = new PipeTransport();
             var session = new StorageVatpSession(
@@ -413,6 +478,7 @@ public sealed class StorageVatpQueueIngressTests
                 NullStorageArticleOpenBoundary.Instance,
                 new StorageServerListenerRuntimeOptions(262144, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30), 8),
                 NullLogger.Instance,
+                limits,
                 acceptedArticles: queue,
                 storeAdmission: new StoreAssemblyAdmission(8));
             var harness = new Harness(transport, session);

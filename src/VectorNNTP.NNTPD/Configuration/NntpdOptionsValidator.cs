@@ -124,6 +124,12 @@ public sealed class NntpdOptionsValidator : IValidateOptions<NntpdOptions>
             failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MaxArticleBytes)} must be between 1 and 104857600.");
         }
 
+        if (ingestion.MaxOutstandingStoresPerConnection is not (1 or 2))
+        {
+            failures.Add(
+                $"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MaxOutstandingStoresPerConnection)} must be 1 or 2.");
+        }
+
         if (ingestion.MinWorkers is < 1 or > 512)
         {
             failures.Add($"{nameof(NntpdOptions.ArticleIngestion)}.{nameof(ArticleIngestionOptions.MinWorkers)} must be between 1 and 512.");

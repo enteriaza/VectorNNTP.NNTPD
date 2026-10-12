@@ -2,7 +2,10 @@ using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.NNTPD.Storage;
 
-/// <summary>Sends one CanonicalV1 article to one StorageServer over a dedicated STORE connection.</summary>
+/// <summary>
+/// Sends one CanonicalV1 article to one StorageServer.
+/// The client keeps one TLS connection per target and does not dial for every article.
+/// </summary>
 public interface IArticlePlacementClient
 {
     /// <summary>Places <paramref name="record"/> on <paramref name="target"/>. One attempt.</summary>

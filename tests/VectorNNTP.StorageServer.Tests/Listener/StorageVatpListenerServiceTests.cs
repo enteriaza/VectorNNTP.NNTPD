@@ -6,6 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Logging.Abstractions;
 using VectorNNTP.Common.Acme;
 using VectorNNTP.Common.Networking.Certificates;
+using VectorNNTP.Common.Transport.ArticleTransfer;
 using VectorNNTP.StorageServer.Configuration;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.Tests.Fixtures;
@@ -129,6 +130,47 @@ public sealed class StorageVatpListenerServiceTests
         Assert.Contains("cache-renewed.test", ssl2.RemoteCertificate!.Subject, StringComparison.OrdinalIgnoreCase);
 
         await service.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Listener_uses_the_production_initial_window_when_no_limits_are_supplied()
+    {
+        await using var service = new StorageVatpListenerService(
+            CreateRuntime(StorageServerTestOptions.GetFreeTcpPort()),
+            TestListenerCertificates.CreatePublishedProvider(),
+            NullStorageArticleOpenBoundary.Instance,
+            NullLogger<StorageVatpListenerService>.Instance);
+        Assert.Equal(1024 * 1024, service.TransferLimits.InitialStreamWindowBytes);
+        Assert.Equal(64L * 1024 * 1024, service.TransferLimits.MaxStreamCreditBytes);
+    }
+
+    [Fact]
+    public async Task Listener_keeps_an_explicit_initial_window_for_its_sessions()
+    {
+        var limits = new ArticleTransferLimits { InitialStreamWindowBytes = 2 * 1024 * 1024 };
+        await using var service = new StorageVatpListenerService(
+            CreateRuntime(StorageServerTestOptions.GetFreeTcpPort()),
+            TestListenerCertificates.CreatePublishedProvider(),
+            NullStorageArticleOpenBoundary.Instance,
+            NullLogger<StorageVatpListenerService>.Instance,
+            transferLimits: limits);
+        Assert.Same(limits, service.TransferLimits);
+        Assert.Equal(2 * 1024 * 1024, service.TransferLimits.InitialStreamWindowBytes);
+        Assert.Equal(ArticleTransferLimits.Default.MaxStreamCreditBytes, service.TransferLimits.MaxStreamCreditBytes);
+    }
+
+    [Fact]
+    public void Bench_window_accepts_only_the_five_sizes()
+    {
+        Assert.Equal(1024 * 1024, StorageVatpThroughputBench.ParseBenchWindow(null));
+        Assert.Equal(256 * 1024, StorageVatpThroughputBench.ParseBenchWindow("262144"));
+        Assert.Equal(512 * 1024, StorageVatpThroughputBench.ParseBenchWindow("524288"));
+        Assert.Equal(1024 * 1024, StorageVatpThroughputBench.ParseBenchWindow("1048576"));
+        Assert.Equal(2 * 1024 * 1024, StorageVatpThroughputBench.ParseBenchWindow("2097152"));
+        Assert.Equal(4 * 1024 * 1024, StorageVatpThroughputBench.ParseBenchWindow("4194304"));
+        var rejected = Assert.Throws<InvalidOperationException>(() => StorageVatpThroughputBench.ParseBenchWindow("1048575"));
+        Assert.Contains("262144", rejected.Message, StringComparison.Ordinal);
+        Assert.Throws<InvalidOperationException>(() => StorageVatpThroughputBench.ParseBenchWindow("67108864"));
     }
 
     private static StorageServerRuntimeOptions CreateRuntime(int tlsPort)

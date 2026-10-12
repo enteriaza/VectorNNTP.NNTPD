@@ -745,7 +745,8 @@ existing TLS cache listener (first-frame demux). NNTPD consumes VATP via
 ArticleWork → VATP → CanonicalV1 `ArticleRecord`, then serve the NNTP client and
 best-effort admit with `InboundArticleProducer.BackFiller` (ingest failure does
 not change the NNTP response). Numeric article forms remain deferred. Protocol
-contract: [vatp.md](vatp.md). Historical design notes:
+contract: [vatp.md](vatp.md). The shared initial per-stream window is 1 MiB
+(`ArticleTransferLimits.Default`); HELLO does not negotiate it. Historical design notes:
 `.artifacts/article-data-plane-design.md`.
 
 ## Testing strategy

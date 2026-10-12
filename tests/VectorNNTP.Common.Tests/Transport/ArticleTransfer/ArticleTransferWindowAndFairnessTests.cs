@@ -6,6 +6,25 @@ namespace VectorNNTP.Common.Tests.Transport.ArticleTransfer
     public sealed class ArticleTransferWindowAndFairnessTests
     {
         [Fact]
+        public void Production_default_initial_window_is_one_mebibyte_and_refunds_once()
+        {
+            Assert.Equal(1024 * 1024, ArticleTransferLimits.Default.InitialStreamWindowBytes);
+            Assert.Equal(64L * 1024 * 1024, ArticleTransferLimits.Default.MaxStreamCreditBytes);
+            var window = new ArticleTransferWindow(
+                ArticleTransferLimits.Default.InitialStreamWindowBytes,
+                ArticleTransferLimits.Default.MaxStreamCreditBytes);
+            Assert.Equal(1024 * 1024, window.Credit);
+            Assert.True(window.TryConsume(64 * 1024));
+            Assert.Equal((1024 * 1024) - (64 * 1024), window.Credit);
+            Assert.Equal(64 * 1024, window.Add(64 * 1024));
+            Assert.Equal(1024 * 1024, window.Credit);
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new ArticleTransferWindow(
+                    (int)ArticleTransferLimits.Default.MaxStreamCreditBytes + 1,
+                    ArticleTransferLimits.Default.MaxStreamCreditBytes));
+        }
+
+        [Fact]
         public void Window_InitialCredit_ConsumeAndRestore()
         {
             var window = new ArticleTransferWindow(initialCredit: 1024, maxCredit: 4096);
