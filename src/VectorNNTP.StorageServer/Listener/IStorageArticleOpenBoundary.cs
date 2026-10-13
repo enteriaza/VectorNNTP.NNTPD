@@ -7,7 +7,7 @@ namespace VectorNNTP.StorageServer.Listener;
 /// Boundary between the VATP OPEN path and article bytes.
 /// </summary>
 /// <remarks>
-/// This server does not retain articles, so the host registration rejects OPEN.
+/// Spool files are not an OPEN index. The host registration still rejects every OPEN.
 /// RequestId is correlation metadata. Null and rejecting implementations remain for tests.
 /// </remarks>
 public interface IStorageArticleOpenBoundary
@@ -24,7 +24,7 @@ public interface IStorageArticleOpenBoundary
 }
 
 /// <summary>Result of an article-open attempt.</summary>
-    /// <param name="Accepted">Whether OPEN can be served.</param>
+/// <param name="Accepted">Whether OPEN can be served.</param>
 /// <param name="Reason">Optional human-readable rejection reason (ASCII-safe, no secrets).</param>
 /// <param name="Record">Canonical record when <paramref name="Accepted"/> is true; otherwise default.</param>
 /// <param name="SelectedDateHeaderName">Date-family header used to build VATP META when accepted.</param>

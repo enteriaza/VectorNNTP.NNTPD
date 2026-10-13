@@ -132,6 +132,43 @@ public sealed class AcceptedArticleWorkerTests
     }
 
     [Fact]
+    public void Path_rewrite_matches_the_canonical_factory_bytes()
+    {
+        var inbound = Build("<rewrite-match@seg.test>", "body-line\r\nsecond\r\n");
+        var processor = new AcceptedArticlePathProcessor(CacheFqdn, NullLogger.Instance);
+        Assert.True(processor.TryRewrite(ToQueued(inbound), out var rewritten));
+        var created = ArticleRecordFactory.TryCreate(
+            new NntpArticleParser(CacheFqdn),
+            inbound.Record.ArtData,
+            ArticlePathMode.Traverse);
+        Assert.True(created.IsAccepted);
+        Assert.True(created.Record.ArtData.Span.SequenceEqual(rewritten.Span));
+        Assert.Equal(inbound.Record.ArtId, created.Record.ArtId);
+
+        var wrong = new AcceptedArticle(
+            ArticleId.FromMessageId("<other@seg.test>"u8),
+            inbound.Record.ArtHash,
+            inbound.Record.ArtSize,
+            inbound.Record.ArtData);
+        Assert.False(processor.TryRewrite(wrong, out _));
+    }
+
+    [Fact]
+    public void Rented_path_rewrite_matches_the_exact_buffer_and_is_returned()
+    {
+        var inbound = Build("<rewrite-rent@seg.test>", "body-line\r\nsecond\r\n");
+        var processor = new AcceptedArticlePathProcessor(CacheFqdn, NullLogger.Instance);
+        Assert.True(processor.TryRewrite(ToQueued(inbound), out var exact));
+        Assert.True(processor.TryRewriteRented(ToQueued(inbound), out var rented, out var length));
+        Assert.NotNull(rented);
+        Assert.True(exact.Span.SequenceEqual(rented.AsSpan(0, length)));
+        AcceptedArticlePathProcessor.ReturnRewriteBuffer(rented);
+        Assert.True(processor.TryRewriteRented(ToQueued(inbound), out var again, out var againLength));
+        Assert.True(exact.Span.SequenceEqual(again.AsSpan(0, againLength)));
+        AcceptedArticlePathProcessor.ReturnRewriteBuffer(again!);
+    }
+
+    [Fact]
     public async Task Worker_exits_when_the_queue_is_completed()
     {
         var queue = new AcceptedArticleQueue();
@@ -200,20 +237,17 @@ public sealed class AcceptedArticleWorkerTests
 
         public void EnsureReady() => inner.EnsureReady();
 
-        public bool TryProcess(AcceptedArticle article)
+        public ValueTask<AcceptedArticleProcessResult> ProcessAsync(
+            AcceptedArticle article,
+            CancellationToken cancellationToken)
         {
             var call = Interlocked.Increment(ref _calls);
-            if (call == 1)
-            {
-                return inner.TryProcess(article);
-            }
-
             if (call == 2)
             {
                 throw new InvalidOperationException("recoverable article failure");
             }
 
-            return inner.TryProcess(article);
+            return inner.ProcessAsync(article, cancellationToken);
         }
     }
 }

@@ -77,6 +77,36 @@ public sealed class StorageVatpQueueIngressTests
     }
 
     [Fact]
+    public async Task Result_is_sent_before_persistence_finishes()
+    {
+        var inbound = Build("<result-before-publish@seg.test>", "body\r\n");
+        var queue = new AcceptedArticleQueue();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var processor = new BlockingProcessor(release.Task);
+        var worker = new AcceptedArticleWorker(
+            queue,
+            processor,
+            NullLogger<AcceptedArticleWorker>.Instance,
+            new SpoolPersistenceOptions { MinWorkers = 1, MaxWorkers = 1 },
+            new VectorNNTP.StorageServer.Storage.SpoolPersistence.SpoolPressure(),
+            new VectorNNTP.StorageServer.Storage.SpoolPersistence.SpoolPersistenceCounters(),
+            TimeProvider.System);
+        await worker.StartAsync(CancellationToken.None);
+        try
+        {
+            await using var harness = await Harness.StartAsync(queue);
+            var frames = await harness.StoreAndReadAsync(inbound).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(VatpStoreOutcome.Accepted, Outcome(frames));
+            Assert.Equal(0, processor.Finished);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await worker.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Hash_id_and_size_mismatches_do_not_enqueue()
     {
         var real = Build("<store-real@seg.test>", "body\r\n");
@@ -454,6 +484,28 @@ public sealed class StorageVatpQueueIngressTests
     }
 
     private readonly record struct Built(ArticleRecord Record, NntpArticleHeaderName SelectedDateHeaderName);
+
+    private sealed class BlockingProcessor : IAcceptedArticleProcessor
+    {
+        private readonly Task _release;
+
+        public BlockingProcessor(Task release) => _release = release;
+
+        public int Finished { get; private set; }
+
+        public void EnsureReady()
+        {
+        }
+
+        public async ValueTask<AcceptedArticleProcessResult> ProcessAsync(
+            AcceptedArticle article,
+            CancellationToken cancellationToken)
+        {
+            await _release.WaitAsync(cancellationToken).ConfigureAwait(false);
+            Finished++;
+            return AcceptedArticleProcessResult.Completed;
+        }
+    }
 
     private readonly record struct Decoded(VatpFrameHeader Header, byte[] Payload);
 

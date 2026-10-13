@@ -587,19 +587,21 @@ public sealed class StorageVatpThroughputBench
 
         public void EnsureReady() => _inner.EnsureReady();
 
-        public bool TryProcess(AcceptedArticle article)
+        public ValueTask<AcceptedArticleProcessResult> ProcessAsync(
+            AcceptedArticle article,
+            CancellationToken cancellationToken)
         {
             var started = Stopwatch.GetTimestamp();
-            var accepted = _inner.TryProcess(article);
+            var result = _inner.ProcessAsync(article, cancellationToken).GetAwaiter().GetResult();
             Interlocked.Add(ref _ticks, Stopwatch.GetTimestamp() - started);
-            if (!accepted)
+            if (result != AcceptedArticleProcessResult.Completed)
             {
                 Interlocked.Increment(ref _rejected);
-                return false;
+                return ValueTask.FromResult(result);
             }
 
             Interlocked.Increment(ref _processed);
-            return true;
+            return ValueTask.FromResult(result);
         }
     }
 

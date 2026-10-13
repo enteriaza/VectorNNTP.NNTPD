@@ -1,11 +1,12 @@
 using Microsoft.Extensions.Logging;
 using VectorNNTP.Common.Core;
+using VectorNNTP.StorageServer.Storage.SpoolPersistence;
 
 namespace VectorNNTP.StorageServer.Storage.SegmentPools;
 
 /// <summary>
-/// Samples validated physical devices about once per second. Observational only:
-/// it does not evict, reject articles, or change advertisements.
+/// Samples validated physical devices and filesystem free space about once per second.
+/// It does not evict, reject articles, or change advertisements. Selection reads the snapshot.
 /// </summary>
 internal sealed class BlockDeviceMonitorService : IApplicationService
 {
@@ -14,10 +15,14 @@ internal sealed class BlockDeviceMonitorService : IApplicationService
     private readonly SegmentPoolCatalog _catalog;
     private readonly IBlockDeviceCounterSource _counters;
     private readonly ILogger<BlockDeviceMonitorService> _logger;
+    private readonly ISpoolFreeSpaceProbe? _freeSpace;
     private readonly TimeProvider _time;
     private readonly TimeSpan _interval;
     private readonly CancellationTokenSource _runCts = new();
+    private readonly object _publishGate = new();
     private readonly Dictionary<string, DeviceCursor> _cursors = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _commitsAfterProbeOpen = new(StringComparer.Ordinal);
+    private SpoolObservationSnapshot _observations = SpoolObservationSnapshot.Empty;
     private Task? _execution;
     private int _started;
 
@@ -25,11 +30,13 @@ internal sealed class BlockDeviceMonitorService : IApplicationService
     /// <param name="catalog">Devices published by successful validation.</param>
     /// <param name="counters">Platform counter source.</param>
     /// <param name="logger">Sample and error logger.</param>
+    /// <param name="freeSpace">Filesystem capacity probe sampled with the device counters.</param>
     public BlockDeviceMonitorService(
         SegmentPoolCatalog catalog,
         IBlockDeviceCounterSource counters,
-        ILogger<BlockDeviceMonitorService> logger)
-        : this(catalog, counters, logger, TimeSpan.FromSeconds(1), TimeProvider.System)
+        ILogger<BlockDeviceMonitorService> logger,
+        ISpoolFreeSpaceProbe freeSpace)
+        : this(catalog, counters, logger, TimeSpan.FromSeconds(1), TimeProvider.System, freeSpace)
     {
     }
 
@@ -39,12 +46,14 @@ internal sealed class BlockDeviceMonitorService : IApplicationService
     /// <param name="logger">Sample and error logger.</param>
     /// <param name="interval">Delay between samples.</param>
     /// <param name="time">Clock used for the delay and for elapsed time.</param>
+    /// <param name="freeSpace">Filesystem capacity probe. Null leaves free space unknown.</param>
     internal BlockDeviceMonitorService(
         SegmentPoolCatalog catalog,
         IBlockDeviceCounterSource counters,
         ILogger<BlockDeviceMonitorService> logger,
         TimeSpan interval,
-        TimeProvider time)
+        TimeProvider time,
+        ISpoolFreeSpaceProbe? freeSpace = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(counters);
@@ -60,6 +69,49 @@ internal sealed class BlockDeviceMonitorService : IApplicationService
         _logger = logger;
         _interval = interval;
         _time = time;
+        _freeSpace = freeSpace;
+    }
+
+    /// <summary>Latest consistent device and free-space view.</summary>
+    internal SpoolObservationSnapshot Observations
+    {
+        get
+        {
+            lock (_publishGate)
+            {
+                return _observations;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Subtracts <paramref name="bytes"/> from the cached available space for <paramref name="spoolPath"/>
+    /// and records the commit so a probe already in progress cannot add those bytes back.
+    /// A missing cache entry is left unchanged. Duplicate and failed publishes do not call this.
+    /// </summary>
+    /// <param name="spoolPath">Canonical spool path.</param>
+    /// <param name="bytes">Bytes renamed into that spool. Negative values are ignored.</param>
+    internal void NoteCommittedBytes(string spoolPath, long bytes)
+    {
+        if (bytes <= 0 || string.IsNullOrEmpty(spoolPath))
+        {
+            return;
+        }
+
+        lock (_publishGate)
+        {
+            if (!_observations.Space.TryGetValue(spoolPath, out var current))
+            {
+                return;
+            }
+
+            var space = new Dictionary<string, SpoolSpaceObservation>(_observations.Space, StringComparer.Ordinal);
+            var available = current.AvailableBytes > bytes ? current.AvailableBytes - bytes : 0;
+            space[spoolPath] = current with { AvailableBytes = available };
+            _observations = _observations with { Space = space };
+            var pending = _commitsAfterProbeOpen.GetValueOrDefault(spoolPath);
+            _commitsAfterProbeOpen[spoolPath] = pending > long.MaxValue - bytes ? long.MaxValue : pending + bytes;
+        }
     }
 
     /// <inheritdoc />
@@ -126,6 +178,15 @@ internal sealed class BlockDeviceMonitorService : IApplicationService
     private void Sample()
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var unavailable = new HashSet<string>(StringComparer.Ordinal);
+        Dictionary<string, PublishedSample> devices;
+        Dictionary<string, SpoolSpaceObservation> space;
+        lock (_publishGate)
+        {
+            devices = new Dictionary<string, PublishedSample>(_observations.Devices, StringComparer.Ordinal);
+            space = new Dictionary<string, SpoolSpaceObservation>(_observations.Space, StringComparer.Ordinal);
+        }
+
         foreach (var device in _catalog.Devices)
         {
             seen.Add(device.DeviceId);
@@ -135,6 +196,8 @@ internal sealed class BlockDeviceMonitorService : IApplicationService
                 if (!_counters.TryRead(device.DeviceId, out var current, out var error))
                 {
                     NoteFailure(device.DeviceId, error ?? "counters unavailable");
+                    unavailable.Add(device.DeviceId);
+                    devices.Remove(device.DeviceId);
                     continue;
                 }
 
@@ -169,6 +232,8 @@ internal sealed class BlockDeviceMonitorService : IApplicationService
                     (long)elapsed.TotalMilliseconds,
                     rate.CounterResets);
                 Latest = published;
+                devices[device.DeviceId] = published;
+                unavailable.Remove(device.DeviceId);
                 CompletedSamples++;
                 if (_logger.IsEnabled(LogLevel.Debug))
                 {
@@ -193,6 +258,8 @@ internal sealed class BlockDeviceMonitorService : IApplicationService
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 NoteFailure(device.DeviceId, ex.GetType().Name + ": " + ex.Message);
+                unavailable.Add(device.DeviceId);
+                devices.Remove(device.DeviceId);
             }
         }
 
@@ -201,6 +268,80 @@ internal sealed class BlockDeviceMonitorService : IApplicationService
             SegmentPoolLogMessages.CountersUnavailable(_logger, known, "device disappeared");
             CollectionFailures++;
             _cursors.Remove(known);
+            unavailable.Add(known);
+            devices.Remove(known);
+        }
+
+        if (_freeSpace is not null)
+        {
+            var probedAt = _time.GetTimestamp();
+            foreach (var device in _catalog.Devices)
+            {
+                foreach (var path in device.PoolPaths)
+                {
+                    var opened = OpenProbeWindow(path);
+                    if (_freeSpace.TryRead(path, out var total, out var available))
+                    {
+                        space[path] = new SpoolSpaceObservation(total, available, probedAt);
+                    }
+                    else
+                    {
+                        RestoreProbeCommits(path, opened);
+                    }
+                }
+            }
+        }
+
+        lock (_publishGate)
+        {
+            foreach (var path in space.Keys.ToArray())
+            {
+                var probed = space[path];
+                var during = _commitsAfterProbeOpen.GetValueOrDefault(path);
+                var available = probed.AvailableBytes;
+                if (during > 0)
+                {
+                    available = during >= available ? 0 : available - during;
+                }
+
+                space[path] = probed with { AvailableBytes = available };
+            }
+
+            _observations = new SpoolObservationSnapshot(_time.GetTimestamp(), devices, unavailable, space);
+        }
+    }
+
+    /// <summary>
+    /// Drops commits that finished before this probe. Those bytes are assumed to be in the probe result.
+    /// Commits that land after this call stay in the counter and are subtracted from the probe.
+    /// </summary>
+    /// <param name="path">Canonical spool path.</param>
+    /// <returns>The commit total that was cleared.</returns>
+    private long OpenProbeWindow(string path)
+    {
+        lock (_publishGate)
+        {
+            return _commitsAfterProbeOpen.Remove(path, out var opened) ? opened : 0;
+        }
+    }
+
+    /// <summary>Puts commits back when the probe itself failed, so a later probe can still account for them.</summary>
+    /// <param name="path">Canonical spool path.</param>
+    /// <param name="opened">Commits cleared by <see cref="OpenProbeWindow"/>.</param>
+    private void RestoreProbeCommits(string path, long opened)
+    {
+        lock (_publishGate)
+        {
+            var added = _commitsAfterProbeOpen.GetValueOrDefault(path);
+            var restored = opened > 0 && added > long.MaxValue - opened ? long.MaxValue : opened + added;
+            if (restored > 0)
+            {
+                _commitsAfterProbeOpen[path] = restored;
+            }
+            else
+            {
+                _commitsAfterProbeOpen.Remove(path);
+            }
         }
     }
 

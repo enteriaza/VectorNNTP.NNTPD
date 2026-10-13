@@ -17,6 +17,7 @@ using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.NntpDb;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.SegmentPools;
+using VectorNNTP.StorageServer.Storage.SpoolPersistence;
 using VectorNNTP.StorageServer.Storage.SpoolShards;
 using VectorNNTP.Common.Configuration;
 
@@ -32,7 +33,7 @@ public static class StorageServerServiceCollectionExtensions
     /// </summary>
     /// <remarks>
     /// Application service start order:
-    /// NntpDB → nntpsharedconfig → Cloudflare DNS → RabbitMQ (connectivity only) → ACME → accepted-article worker → VATP listener → AdvertisementPublisher.
+    /// NntpDB → nntpsharedconfig → Cloudflare DNS → RabbitMQ (connectivity only) → ACME → segment-pool validation → spool shard initialization → block-device monitor → accepted-article worker → VATP listener → AdvertisementPublisher.
     /// Shutdown is that order reversed, so advertisement stops before the listener, and the listener completes the queue before the worker stops.
     /// Topology, queues, and consumers are not registered here. NntpDB does not migrate schema.
     /// </remarks>
@@ -119,8 +120,20 @@ public static class StorageServerServiceCollectionExtensions
                 host.ShutdownTimeout = options.Value.GracefulShutdownTimeout;
             });
 
-        builder.Services.TryAddSingleton<IAcceptedArticleQueue, AcceptedArticleQueue>();
-        builder.Services.TryAddSingleton<IAcceptedArticleProcessor, AcceptedArticlePathProcessor>();
+        builder.Services.TryAddSingleton(TimeProvider.System);
+        builder.Services.TryAddSingleton<IAcceptedArticleQueue>(static provider =>
+            new AcceptedArticleQueue(
+                provider.GetRequiredService<IOptions<StorageServerOptions>>().Value.SpoolPersistence.MaxQueuedBytes,
+                provider.GetRequiredService<TimeProvider>()));
+        builder.Services.TryAddSingleton<SpoolPressure>();
+        builder.Services.TryAddSingleton(static provider => new SpoolHealth(provider.GetRequiredService<TimeProvider>()));
+        builder.Services.TryAddSingleton<SpoolWriteGate>();
+        builder.Services.TryAddSingleton<SpoolArticleIdentityGate>();
+        builder.Services.TryAddSingleton<SpoolPersistenceCounters>();
+        builder.Services.TryAddSingleton<ISpoolFreeSpaceProbe, FilesystemSpoolFreeSpaceProbe>();
+        builder.Services.TryAddSingleton<ISpoolArticleFiles, FileSpoolArticleFiles>();
+        builder.Services.TryAddSingleton<SpoolArticlePublisher>();
+        builder.Services.TryAddSingleton<IAcceptedArticleProcessor, SpoolArticlePersistenceProcessor>();
         builder.Services.TryAddSingleton<AcceptedArticleWorker>();
         builder.Services.TryAddSingleton<IStorageArticleOpenBoundary, RejectingStorageArticleOpenBoundary>();
 

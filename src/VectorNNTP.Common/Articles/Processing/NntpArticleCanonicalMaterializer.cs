@@ -1,3 +1,4 @@
+using System.Buffers;
 using VectorNNTP.Common.Articles.Parsing;
 
 namespace VectorNNTP.Common.Articles.Processing
@@ -75,7 +76,9 @@ namespace VectorNNTP.Common.Articles.Processing
     /// Result of one canonical article materialization attempt.
     /// </summary>
     /// <remarks>
-    /// On success, <see cref="ArticleBytes"/> is a newly allocated exact-size buffer owned by the caller.
+    /// On success, <see cref="ArticleBytes"/> holds the canonical article.
+    /// <see cref="CanonicalLength"/> is the article size. An exact allocation uses that many bytes.
+    /// A rented buffer may be longer, and the caller returns it to the pool that produced it.
     /// The source parse slices are not mutated.
     /// </remarks>
     internal readonly struct NntpArticleCanonicalMaterializeResult
@@ -85,15 +88,18 @@ namespace VectorNNTP.Common.Articles.Processing
         /// </summary>
         /// <param name="isAccepted">Whether a canonical article was produced.</param>
         /// <param name="failureCode">Failure classification when not accepted.</param>
-        /// <param name="articleBytes">Exact-size canonical article when accepted; otherwise <see langword="null"/>.</param>
+        /// <param name="articleBytes">Canonical article buffer when accepted; otherwise <see langword="null"/>.</param>
+        /// <param name="canonicalLength">Number of canonical bytes in <paramref name="articleBytes"/>. Zero when rejected.</param>
         private NntpArticleCanonicalMaterializeResult(
             bool isAccepted,
             NntpArticleCanonicalFailureCode failureCode,
-            byte[]? articleBytes)
+            byte[]? articleBytes,
+            int canonicalLength)
         {
             IsAccepted = isAccepted;
             FailureCode = failureCode;
             ArticleBytes = articleBytes;
+            CanonicalLength = canonicalLength;
         }
 
         /// <summary>Gets a value indicating whether materialization produced a canonical article.</summary>
@@ -102,20 +108,36 @@ namespace VectorNNTP.Common.Articles.Processing
         /// <summary>Gets the failure classification when <see cref="IsAccepted"/> is false.</summary>
         internal NntpArticleCanonicalFailureCode FailureCode { get; }
 
-        /// <summary>Gets the exact-size canonical article bytes when accepted.</summary>
+        /// <summary>
+        /// Gets the canonical article buffer when accepted.
+        /// An exact allocation has <see cref="CanonicalLength"/> equal to <c>ArticleBytes.Length</c>.
+        /// A rented buffer may be longer; only the first <see cref="CanonicalLength"/> bytes are the article.
+        /// </summary>
         internal byte[]? ArticleBytes { get; }
+
+        /// <summary>Gets the number of canonical article bytes when accepted. Zero when rejected.</summary>
+        internal int CanonicalLength { get; }
 
         /// <summary>Creates a rejected result with no output buffer.</summary>
         /// <param name="failureCode">Failure classification.</param>
         /// <returns>Rejected result.</returns>
         internal static NntpArticleCanonicalMaterializeResult Rejected(NntpArticleCanonicalFailureCode failureCode)
-            => new(false, failureCode, null);
+            => new(false, failureCode, null, 0);
 
-        /// <summary>Creates a successful result that transfers <paramref name="articleBytes"/> to the caller.</summary>
+        /// <summary>Creates a successful result that transfers an exact-size <paramref name="articleBytes"/> to the caller.</summary>
         /// <param name="articleBytes">Exact-size canonical article.</param>
         /// <returns>Accepted result.</returns>
         internal static NntpArticleCanonicalMaterializeResult Accepted(byte[] articleBytes)
-            => new(true, NntpArticleCanonicalFailureCode.None, articleBytes);
+            => new(true, NntpArticleCanonicalFailureCode.None, articleBytes, articleBytes.Length);
+
+        /// <summary>
+        /// Creates a successful result for a rented buffer. The caller returns <paramref name="articleBytes"/> to the pool that rented it.
+        /// </summary>
+        /// <param name="articleBytes">Rented buffer. May be longer than the article.</param>
+        /// <param name="canonicalLength">Canonical article length within <paramref name="articleBytes"/>.</param>
+        /// <returns>Accepted result.</returns>
+        internal static NntpArticleCanonicalMaterializeResult Accepted(byte[] articleBytes, int canonicalLength)
+            => new(true, NntpArticleCanonicalFailureCode.None, articleBytes, canonicalLength);
     }
 
     /// <summary>
@@ -154,12 +176,19 @@ namespace VectorNNTP.Common.Articles.Processing
         /// <param name="pathMode">Normalize revalidates Path. Traverse prepends the parser's application FQDN.</param>
         /// <param name="maxArticleBytes">Article-size boundary for this operation.</param>
         /// <param name="organizationalTrackerHost">Path tracker component captured with <paramref name="maxArticleBytes"/>.</param>
-        /// <returns>A result that owns one exact-size canonical buffer on success, or a failure classification.</returns>
+        /// <param name="rentFrom">
+        /// When set, the canonical bytes are written into a buffer from this pool.
+        /// The buffer may be longer than <see cref="NntpArticleCanonicalMaterializeResult.CanonicalLength"/>.
+        /// The caller returns it to this same pool after every consumer has finished.
+        /// When null, the result owns a new exact-size array.
+        /// </param>
+        /// <returns>A result that owns one exact-size canonical buffer on success, or a rented buffer, or a failure classification.</returns>
         internal static NntpArticleCanonicalMaterializeResult Materialize(
             in NntpArticleParseResult parseResult,
             ArticlePathMode pathMode,
             int maxArticleBytes,
-            ReadOnlySpan<byte> organizationalTrackerHost)
+            ReadOnlySpan<byte> organizationalTrackerHost,
+            ArrayPool<byte>? rentFrom = null)
         {
             if (!parseResult.IsAccepted)
             {
@@ -249,45 +278,72 @@ namespace VectorNNTP.Common.Articles.Processing
                 return NntpArticleCanonicalMaterializeResult.Rejected(boundaryFailure);
             }
 
-            var destination = GC.AllocateUninitializedArray<byte>(destinationLength);
-            var written = 0;
-            var consumed = 0;
-            var dest = destination.AsSpan();
-
-            if (pathEdit is HeaderEdit resolvedPathEdit && resolvedPathEdit.StartOffset < dateEdit.StartOffset)
+            byte[] destination = rentFrom is null
+                ? GC.AllocateUninitializedArray<byte>(destinationLength)
+                : rentFrom.Rent(destinationLength);
+            try
             {
-                if (!TryApplyEdit(source, dest, ref consumed, ref written, resolvedPathEdit, canonicalPath)
-                    || !TryApplyEdit(source, dest, ref consumed, ref written, dateEdit, canonicalDate))
+                var written = 0;
+                var consumed = 0;
+                var dest = destination.AsSpan(0, destinationLength);
+
+                if (pathEdit is HeaderEdit resolvedPathEdit && resolvedPathEdit.StartOffset < dateEdit.StartOffset)
                 {
+                    if (!TryApplyEdit(source, dest, ref consumed, ref written, resolvedPathEdit, canonicalPath)
+                        || !TryApplyEdit(source, dest, ref consumed, ref written, dateEdit, canonicalDate))
+                    {
+                        ReturnRented(rentFrom, destination);
+                        return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
+                    }
+                }
+                else
+                {
+                    if (!TryApplyEdit(source, dest, ref consumed, ref written, dateEdit, canonicalDate))
+                    {
+                        ReturnRented(rentFrom, destination);
+                        return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
+                    }
+
+                    if (pathEdit is HeaderEdit resolvedPathEditAfter
+                        && !TryApplyEdit(source, dest, ref consumed, ref written, resolvedPathEditAfter, canonicalPath))
+                    {
+                        ReturnRented(rentFrom, destination);
+                        return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
+                    }
+                }
+
+                if (pathInsert is HeaderInsert insert
+                    && !TryApplyInsert(source, dest, ref consumed, ref written, insert, canonicalPath))
+                {
+                    ReturnRented(rentFrom, destination);
                     return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
                 }
-            }
-            else
-            {
-                if (!TryApplyEdit(source, dest, ref consumed, ref written, dateEdit, canonicalDate))
+
+                source[consumed..].CopyTo(dest[written..]);
+                written += source.Length - consumed;
+                if (written != destinationLength)
                 {
+                    ReturnRented(rentFrom, destination);
                     return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
                 }
 
-                if (pathEdit is HeaderEdit resolvedPathEditAfter
-                    && !TryApplyEdit(source, dest, ref consumed, ref written, resolvedPathEditAfter, canonicalPath))
-                {
-                    return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
-                }
+                return rentFrom is null
+                    ? NntpArticleCanonicalMaterializeResult.Accepted(destination)
+                    : NntpArticleCanonicalMaterializeResult.Accepted(destination, destinationLength);
             }
-
-            if (pathInsert is HeaderInsert insert
-                && !TryApplyInsert(source, dest, ref consumed, ref written, insert, canonicalPath))
+            catch
             {
-                return NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
+                ReturnRented(rentFrom, destination);
+                throw;
             }
+        }
 
-            source[consumed..].CopyTo(dest[written..]);
-            written += source.Length - consumed;
-
-            return written == destinationLength
-                ? NntpArticleCanonicalMaterializeResult.Accepted(destination)
-                : NntpArticleCanonicalMaterializeResult.Rejected(NntpArticleCanonicalFailureCode.WriteMismatch);
+        /// <summary>Returns a rented materialization buffer. Exact allocations are left for the garbage collector.</summary>
+        /// <param name="rentFrom">Pool that produced <paramref name="buffer"/>, or null for an exact allocation.</param>
+        /// <param name="buffer">Buffer to return. Not cleared.</param>
+        private static void ReturnRented(ArrayPool<byte>? rentFrom, byte[] buffer)
+        {
+            rentFrom?.Return(buffer);
         }
 
         /// <summary>

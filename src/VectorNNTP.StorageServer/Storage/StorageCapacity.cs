@@ -17,9 +17,8 @@ public interface IStorageCapacityReader
 }
 
 /// <summary>
-/// Advertises no durable spool. StorageServer no longer stores articles on disk,
-/// so the published totals are zero. The advertisement exchange and payload shape
-/// are unchanged.
+/// Publishes zero capacity totals. Spool files are not reflected in
+/// <c>cache.broadcast</c>. The advertisement exchange and payload shape are unchanged.
 /// </summary>
 public sealed class NoSpoolCapacityReader : IStorageCapacityReader
 {

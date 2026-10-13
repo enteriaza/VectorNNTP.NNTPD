@@ -130,6 +130,69 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             failures,
             applicationBaseDirectory);
         ValidateSegmentPools(options.SegmentPools, failures, applicationBaseDirectory);
+        ValidateSpoolPersistence(options.SpoolPersistence, failures);
+    }
+
+    /// <summary>Validates worker limits and the queued-byte budget.</summary>
+    /// <param name="persistence">Persistence options. Null is a missing section.</param>
+    /// <param name="failures">Validation messages.</param>
+    private static void ValidateSpoolPersistence(SpoolPersistenceOptions? persistence, List<string> failures)
+    {
+        if (persistence is null)
+        {
+            failures.Add("StorageServer:SpoolPersistence is required.");
+            return;
+        }
+
+        if (persistence.MaxQueuedBytes is < 1_048_576 or > 8L * 1024 * 1024 * 1024)
+        {
+            failures.Add("StorageServer:SpoolPersistence:MaxQueuedBytes must be from 1 MiB through 8 GiB.");
+        }
+
+        if (persistence.MinWorkers is < 1 or > 32)
+        {
+            failures.Add("StorageServer:SpoolPersistence:MinWorkers must be from 1 through 32.");
+        }
+
+        if (persistence.MaxWorkers < persistence.MinWorkers || persistence.MaxWorkers > 64)
+        {
+            failures.Add("StorageServer:SpoolPersistence:MaxWorkers must be from MinWorkers through 64.");
+        }
+
+        if (persistence.MaxInFlightPerSpool < 1 || persistence.MaxInFlightPerSpool > persistence.MaxWorkers)
+        {
+            failures.Add("StorageServer:SpoolPersistence:MaxInFlightPerSpool must be from 1 through MaxWorkers.");
+        }
+
+        if (persistence.ScaleUpQueueDepth < 1)
+        {
+            failures.Add("StorageServer:SpoolPersistence:ScaleUpQueueDepth must be at least 1.");
+        }
+
+        if (persistence.ScaleDownQueueDepth < 0 || persistence.ScaleDownQueueDepth >= persistence.ScaleUpQueueDepth)
+        {
+            failures.Add("StorageServer:SpoolPersistence:ScaleDownQueueDepth must be from 0 through ScaleUpQueueDepth - 1.");
+        }
+
+        if (persistence.ScaleDwellMilliseconds is < 100 or > 60_000)
+        {
+            failures.Add("StorageServer:SpoolPersistence:ScaleDwellMilliseconds must be from 100 through 60000.");
+        }
+
+        if (persistence.ControlIntervalMilliseconds < 50 || persistence.ControlIntervalMilliseconds > persistence.ScaleDwellMilliseconds)
+        {
+            failures.Add("StorageServer:SpoolPersistence:ControlIntervalMilliseconds must be from 50 through ScaleDwellMilliseconds.");
+        }
+
+        if (persistence.ScaleUpAgeMilliseconds < 0)
+        {
+            failures.Add("StorageServer:SpoolPersistence:ScaleUpAgeMilliseconds must be at least 0.");
+        }
+
+        if (persistence.IneligibleRetryMilliseconds is < 10 or > 5_000)
+        {
+            failures.Add("StorageServer:SpoolPersistence:IneligibleRetryMilliseconds must be from 10 through 5000.");
+        }
     }
 
     private static void ValidateSegmentPools(

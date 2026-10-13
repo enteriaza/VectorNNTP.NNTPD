@@ -168,9 +168,16 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     public StorageServerListenerOptions Listener { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets dedicated segment-pool directories and future occupancy thresholds.
+    /// Gets or sets dedicated segment-pool directories and occupancy thresholds.
+    /// Low, high, and critical percents are reserved for a future eviction loop and do not gate writes.
     /// </summary>
     public SegmentPoolsOptions SegmentPools { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets queue budget and adaptive persistence-worker limits.
+    /// Omitted configuration uses <see cref="SpoolPersistenceOptions"/> defaults.
+    /// </summary>
+    public SpoolPersistenceOptions SpoolPersistence { get; set; } = new();
 
     /// <summary>
     /// Gets or sets Linux systemd notify/watchdog options.

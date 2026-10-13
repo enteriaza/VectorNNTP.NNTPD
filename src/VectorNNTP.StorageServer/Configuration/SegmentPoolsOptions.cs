@@ -3,14 +3,15 @@ using Microsoft.Extensions.Configuration;
 namespace VectorNNTP.StorageServer.Configuration;
 
 /// <summary>
-/// Dedicated segment-pool directories and occupancy thresholds reserved for a future control loop.
-/// Thresholds are validated at startup and are not enforced by eviction, acceptance, or advertisements.
+/// Dedicated segment-pool directories and used-space thresholds for a future eviction loop.
+/// <see cref="LowPercent"/>, <see cref="HighPercent"/>, and <see cref="CriticalPercent"/> do not
+/// admit or reject article writes. Advertisements are not changed by these thresholds.
 /// </summary>
 public sealed class SegmentPoolsOptions
 {
     /// <summary>
-    /// Occupancy percent at or above which a future control loop would stop accepting articles
-    /// and withdraw the server. Not enforced in this phase.
+    /// Highest used-space percent reserved for a future eviction loop.
+    /// It does not make a spool ineligible for a new write and does not change the RabbitMQ advertisement.
     /// </summary>
     public int CriticalPercent { get; set; } = 85;
 

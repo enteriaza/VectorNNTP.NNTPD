@@ -1005,16 +1005,8 @@ namespace VectorNNTP.Common.Articles.Parsing
             while (position < body.Length)
             {
                 var maxScanBytes = Math.Min(maxLineBytes + 1, body.Length - position);
-                var lineEnd = -1;
-                for (var i = 0; i < maxScanBytes; i++)
-                {
-                    var current = body[position + i];
-                    if (current is (byte)'\r' or (byte)'\n')
-                    {
-                        lineEnd = position + i;
-                        break;
-                    }
-                }
+                var relativeEnd = body.Slice(position, maxScanBytes).IndexOfAny((byte)'\r', (byte)'\n');
+                var lineEnd = relativeEnd >= 0 ? position + relativeEnd : -1;
 
                 var lineContentEnd = lineEnd >= 0 ? lineEnd : position + maxScanBytes;
                 var lineLength = lineContentEnd - position;

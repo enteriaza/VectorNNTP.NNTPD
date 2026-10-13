@@ -66,6 +66,19 @@ public sealed class SpoolArticlePathTests
         Assert.NotEqual(first, second);
     }
 
+    [Fact]
+    public void Combine_article_matches_combine_under_root()
+    {
+        var id = ArticleId.ParseLowerHex(Hex);
+        var relative = SpoolArticlePath.RelativePath(id);
+        var root = Path.Combine(Path.GetTempPath(), "spool-combine-article");
+        var combined = SpoolArticlePath.CombineUnderRoot(root, relative);
+        var direct = SpoolArticlePath.CombineArticle(root, id);
+
+        Assert.Equal(combined, direct);
+        Assert.Equal(direct, SpoolArticlePath.CombineArticle(root, id));
+    }
+
     [Theory]
     [InlineData("a/../b")]
     [InlineData("../a")]

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using VectorNNTP.Common.Articles;
 
 namespace VectorNNTP.StorageServer.Storage.SpoolShards;
@@ -10,6 +11,13 @@ namespace VectorNNTP.StorageServer.Storage.SpoolShards;
 internal static class SpoolArticlePath
 {
     /// <summary>
+    /// Normalized spool-root prefixes, including a trailing separator.
+    /// One entry per distinct root string passed to <see cref="CombineArticle"/>.
+    /// The cache does not store article paths.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, string> RootPrefixes = new(StringComparer.Ordinal);
+
+    /// <summary>
     /// Relative path <c>{n0}/{n1}/{n2}/{64 lowercase hex}</c>.
     /// The three directory nibbles are the first three characters of the canonical lowercase hex digest.
     /// </summary>
@@ -17,8 +25,35 @@ internal static class SpoolArticlePath
     /// <returns>A relative path with no parent segments.</returns>
     internal static string RelativePath(ArticleId articleId)
     {
-        var hex = articleId.ToLowerHexString();
-        return string.Concat(hex[0], "/", hex[1], "/", hex[2], "/", hex);
+        return string.Create(ShardLength, articleId, static (destination, id) =>
+        {
+            WriteShard(destination, id, '/');
+        });
+    }
+
+    /// <summary>
+    /// Absolute article path under <paramref name="spoolRoot"/> for <paramref name="articleId"/>.
+    /// The relative segments are the canonical lowercase hex nibbles, so the result cannot leave the root.
+    /// The normalized root prefix is cached for the life of the process.
+    /// </summary>
+    /// <param name="spoolRoot">Absolute spool directory.</param>
+    /// <param name="articleId">Canonical VATP article identity.</param>
+    /// <returns>The absolute article path, using the platform directory separator.</returns>
+    internal static string CombineArticle(string spoolRoot, ArticleId articleId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(spoolRoot);
+        var prefix = RootPrefixes.GetOrAdd(spoolRoot, static root =>
+        {
+            var full = Path.GetFullPath(root);
+            return full.EndsWith(Path.DirectorySeparatorChar)
+                ? full
+                : string.Concat(full, Path.DirectorySeparatorChar);
+        });
+        return string.Create(prefix.Length + ShardLength, (prefix, articleId), static (destination, state) =>
+        {
+            state.prefix.AsSpan().CopyTo(destination);
+            WriteShard(destination[state.prefix.Length..], state.articleId, Path.DirectorySeparatorChar);
+        });
     }
 
     /// <summary>
@@ -95,4 +130,34 @@ internal static class SpoolArticlePath
 
         return full;
     }
+
+    /// <summary>Characters in <c>{n0}/{n1}/{n2}/{64 hex}</c>, including the three separators.</summary>
+    private const int ShardLength = 6 + ArticleId.HexLength;
+
+    /// <summary>Writes the three shard nibbles, separators, and the 64-digit lowercase hex digest.</summary>
+    /// <param name="destination">Buffer of <see cref="ShardLength"/> characters.</param>
+    /// <param name="articleId">Canonical article identity.</param>
+    /// <param name="separator">Separator between the shard segments.</param>
+    private static void WriteShard(Span<char> destination, ArticleId articleId, char separator)
+    {
+        Span<byte> digest = stackalloc byte[ArticleId.Length];
+        articleId.CopyTo(digest);
+        destination[0] = ToHex(digest[0] >> 4);
+        destination[1] = separator;
+        destination[2] = ToHex(digest[0] & 0x0F);
+        destination[3] = separator;
+        destination[4] = ToHex(digest[1] >> 4);
+        destination[5] = separator;
+        var index = 6;
+        for (var i = 0; i < digest.Length; i++)
+        {
+            destination[index++] = ToHex(digest[i] >> 4);
+            destination[index++] = ToHex(digest[i] & 0x0F);
+        }
+    }
+
+    /// <summary>One lowercase hexadecimal digit.</summary>
+    /// <param name="value">A value from 0 through 15.</param>
+    /// <returns>The corresponding ASCII hex character.</returns>
+    private static char ToHex(int value) => (char)(value < 10 ? '0' + value : 'a' + (value - 10));
 }
