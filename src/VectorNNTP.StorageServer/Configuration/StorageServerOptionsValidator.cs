@@ -129,6 +129,12 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
             "StorageServer:LogDir",
             failures,
             applicationBaseDirectory);
+        ValidateFilesystemPath(
+            options.DbDir,
+            "StorageServer:DbDir",
+            failures,
+            applicationBaseDirectory);
+        ValidateDbDirSeparatedFromSpools(options, failures, applicationBaseDirectory);
         ValidateSegmentPools(options.SegmentPools, failures, applicationBaseDirectory);
         ValidateSpoolPersistence(options.SpoolPersistence, failures);
     }
@@ -193,6 +199,83 @@ public sealed class StorageServerOptionsValidator : IValidateOptions<StorageServ
         {
             failures.Add("StorageServer:SpoolPersistence:IneligibleRetryMilliseconds must be from 10 through 5000.");
         }
+    }
+
+    /// <summary>
+    /// Rejects a database directory that is the same as a spool or nested with one.
+    /// The check is lexical after canonicalization. It does not probe the physical device.
+    /// </summary>
+    /// <param name="options">Options being validated.</param>
+    /// <param name="failures">Validation messages.</param>
+    /// <param name="applicationBaseDirectory">Application binary directory used to resolve relative paths.</param>
+    private static void ValidateDbDirSeparatedFromSpools(
+        StorageServerOptions options,
+        List<string> failures,
+        string? applicationBaseDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(options.DbDir) || options.SegmentPools?.Directories is null)
+        {
+            return;
+        }
+
+        string databaseDirectory;
+        try
+        {
+            databaseDirectory = ApplicationLocalPath.ResolveApplicationLocalPath(options.DbDir.Trim(), applicationBaseDirectory);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return;
+        }
+
+        for (var index = 0; index < options.SegmentPools.Directories.Length; index++)
+        {
+            var entry = options.SegmentPools.Directories[index];
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                continue;
+            }
+
+            string spool;
+            try
+            {
+                spool = ApplicationLocalPath.ResolveApplicationLocalPath(entry.Trim(), applicationBaseDirectory);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                continue;
+            }
+
+            if (PathsOverlap(databaseDirectory, spool))
+            {
+                failures.Add(
+                    "StorageServer:DbDir must not be the same directory as StorageServer:SegmentPools:Directories:"
+                    + index
+                    + ", nested inside it, or a parent of it. The article index does not fall back onto a spool volume.");
+            }
+        }
+    }
+
+    /// <summary>Compares two canonical paths for equality or nesting.</summary>
+    /// <param name="left">First canonical path.</param>
+    /// <param name="right">Second canonical path.</param>
+    /// <returns><see langword="true"/> when the paths are equal or one contains the other.</returns>
+    private static bool PathsOverlap(string left, string right)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (string.Equals(left, right, comparison))
+        {
+            return true;
+        }
+
+        var leftPrefix = left.EndsWith(Path.DirectorySeparatorChar) ? left : left + Path.DirectorySeparatorChar;
+        if (right.StartsWith(leftPrefix, comparison))
+        {
+            return true;
+        }
+
+        var rightPrefix = right.EndsWith(Path.DirectorySeparatorChar) ? right : right + Path.DirectorySeparatorChar;
+        return left.StartsWith(rightPrefix, comparison);
     }
 
     private static void ValidateSegmentPools(

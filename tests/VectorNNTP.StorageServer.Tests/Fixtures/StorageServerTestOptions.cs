@@ -35,8 +35,10 @@ internal static class StorageServerTestOptions
     {
         var logDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-logs", Guid.NewGuid().ToString("N"));
         var acmeDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-acme", Guid.NewGuid().ToString("N"));
+        var spoolDir = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-testhost-spool", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(logDir);
         Directory.CreateDirectory(acmeDir);
+        Directory.CreateDirectory(spoolDir);
 
         return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -47,6 +49,8 @@ internal static class StorageServerTestOptions
             ["StorageServer:BindPortTls"] = "1191",
             ["StorageServer:AcmeStateDir"] = acmeDir,
             ["StorageServer:CertificateDirectory"] = acmeDir,
+            ["StorageServer:DbDir"] = Path.Combine(Path.GetTempPath(), "vectornntp-storageserver-db", Guid.NewGuid().ToString("N")),
+            ["StorageServer:SegmentPools:Directories:0"] = spoolDir,
             ["StorageServer:GracefulShutdownTimeout"] = "00:00:30",
             ["ConnectionStrings:NntpDB"] = FakeNntpDbConnectionFactory.ConnectionString,
             ["RabbitMQ:Hosts:0"] = "127.0.0.1",

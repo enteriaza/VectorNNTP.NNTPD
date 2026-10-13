@@ -16,6 +16,7 @@ using VectorNNTP.StorageServer.Ingress;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.NntpDb;
 using VectorNNTP.StorageServer.Storage;
+using VectorNNTP.StorageServer.Storage.ArticleIndex;
 using VectorNNTP.StorageServer.Storage.SegmentPools;
 using VectorNNTP.StorageServer.Storage.SpoolPersistence;
 using VectorNNTP.StorageServer.Storage.SpoolShards;
@@ -33,7 +34,7 @@ public static class StorageServerServiceCollectionExtensions
     /// </summary>
     /// <remarks>
     /// Application service start order:
-    /// NntpDB → nntpsharedconfig → Cloudflare DNS → RabbitMQ (connectivity only) → ACME → segment-pool validation → spool shard initialization → block-device monitor → accepted-article worker → VATP listener → AdvertisementPublisher.
+    /// NntpDB → nntpsharedconfig → Cloudflare DNS → RabbitMQ (connectivity only) → ACME → segment-pool validation → spool shard initialization → article index → block-device monitor → accepted-article worker → VATP listener → AdvertisementPublisher.
     /// Shutdown is that order reversed, so advertisement stops before the listener, and the listener completes the queue before the worker stops.
     /// Topology, queues, and consumers are not registered here. NntpDB does not migrate schema.
     /// </remarks>
@@ -154,6 +155,8 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddSingleton<ISpoolShardDirectorySystem, FileSpoolShardDirectorySystem>();
         builder.Services.TryAddSingleton<SegmentPoolValidationService>();
         builder.Services.TryAddSingleton<SpoolShardInitializationService>();
+        builder.Services.TryAddSingleton<ArticleIndexService>();
+        builder.Services.TryAddSingleton<IArticleIndex>(static provider => provider.GetRequiredService<ArticleIndexService>());
         builder.Services.TryAddSingleton<BlockDeviceMonitorService>();
 
         builder.Services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
@@ -163,7 +166,7 @@ public static class StorageServerServiceCollectionExtensions
             provider.GetRequiredService<StorageServerSharedConfigurationService>());
 
         // Startup order: NntpDB → nntpsharedconfig → Cloudflare → RabbitMQ → ACME →
-        // segment-pool validation → spool shard initialization → block-device monitor →
+        // segment-pool validation → spool shard initialization → article index → block-device monitor →
         // accepted-article worker → Listener → AdvertisementPublisher.
         // Validation and shard initialization throw before the worker, listener, or advertisement publisher start.
         // ApplicationServiceManager stops in reverse, so advertisement stops first and the worker stops after the listener completes the queue.
@@ -186,6 +189,9 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, SpoolShardInitializationService>(static provider =>
                 provider.GetRequiredService<SpoolShardInitializationService>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, ArticleIndexService>(static provider =>
+                provider.GetRequiredService<ArticleIndexService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, BlockDeviceMonitorService>(static provider =>
                 provider.GetRequiredService<BlockDeviceMonitorService>()));

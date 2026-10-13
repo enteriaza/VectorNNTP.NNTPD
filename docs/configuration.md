@@ -1247,7 +1247,105 @@ Example (user scope, PowerShell):
 
 NNTPD places one copy of each accepted article. A successful primary StorageServer placement completes the placement operation. NNTPD does not select a second StorageServer and does not initiate a replica STORE. There is no `Nntpd:Replication` configuration. The placement transport keeps one TLS connection per target. `Nntpd:ArticleIngestion:MaxOutstandingStoresPerConnection` is 1 or 2 (default 2). The spool writer still does not call placement.
 
-StorageServer accepts VATP articles and places the original bytes on an in-memory queue. RESULT follows a successful enqueue and is not a durable-storage acknowledgement. Workers later rewrite `Path:` with this server's FQDN and publish the rewritten bytes into the selected spool. They do not write a journal, an index, or segment files. There is no `StorageServer:Storage` section and no per-host initial-window key. VATP peers share `ArticleTransferLimits.Default` (1 MiB initial credit, 64 MiB maximum). Capacity advertisements still use the existing `cache.broadcast` payload; the published totals stay zero. `StorageServer:LogDir` remains the Serilog directory and is unrelated to article retention.
+StorageServer accepts VATP articles and places the original bytes on an in-memory queue. RESULT follows a successful enqueue and is not a durable-storage acknowledgement. Workers later rewrite `Path:` with this server's FQDN and publish the rewritten bytes into the selected spool. They do not write a journal or segment files. After the final spool file is in place, the worker waits for the local SQLite article index to commit that article. There is no `StorageServer:Storage` section and no per-host initial-window key. VATP peers share `ArticleTransferLimits.Default` (1 MiB initial credit, 64 MiB maximum). Capacity advertisements still use the existing `cache.broadcast` payload; the published totals stay zero. `StorageServer:LogDir` remains the Serilog directory and is unrelated to article retention. The local index is described under `StorageServer:DbDir`. StorageServer still does not answer `cache.requests`.
+
+## StorageServer:DbDir
+
+`StorageServer:DbDir` is the directory that holds one SQLite article index per registered spool, plus `article-index-spools.registry`. The default is `db` when the property is omitted. Relative paths resolve with `ApplicationLocalPath` against `AppContext.BaseDirectory`, the same rule as `LogDir` and the spool directories. Startup creates the directory when it is missing. If the path is a file, or the directory cannot be created or written, startup fails and names that path. It does not substitute a spool directory or any other volume.
+
+Put `DbDir` on a dedicated or otherwise suitably provisioned NVMe device. The index is a high-rate write workload separate from the spool. A missing or unwritable directory is a startup failure, not a silent move onto the SATA spool volume. Validation also rejects a `DbDir` that is the same path as a `SegmentPools` directory, nested inside one, or a parent of one. That check is lexical after canonicalization. It does not probe which physical disk the path will use, so an operator can still point `DbDir` at the operating-system volume in development. Production placement on NVMe is an operator requirement, not something the process discovers and repairs.
+
+The database is an index of articles that already have a final spool file. It is not a journal and it does not store article bytes. The provider is `Microsoft.Data.Sqlite` 10.0.12. Command APIs used by the index are synchronous. The provider's asynchronous methods call the same synchronous SQLite library and are not used.
+
+Each registered spool gets one database. The file name is `article-index-` plus the 32 lowercase hex characters stored in `vectornntp-spool.id` in that spool root. The identity file is created on first open and is not replaced when it is unreadable or malformed. The same identity resolves to the same database across restarts. Two registered spools that present the same identity fail startup. Removing a spool from configuration leaves its identity file, registry row, and database on disk. Schema version 2 is one row in `ArticleIndexMeta` (`Id`, `SchemaVersion`, `ArticleCount`) and the article table. The spool is implicit in which database is open; rows do not repeat it. Version 1 was the unreleased single-database shape that stored `SpoolDirectory`. If `article-index.sqlite` is still that version-1 file, startup copies its rows into the per-spool databases, checks that each receipt time survived, and renames the old file to `article-index.sqlite.migrated`. It does not delete it. Any other schema version is left unchanged and fails startup.
+
+```sql
+CREATE TABLE ArticleIndex (
+    MessageIdHash BLOB NOT NULL CONSTRAINT PK_ArticleIndex PRIMARY KEY,
+    ReceivedAt INTEGER NOT NULL,
+    LastAccessedAt INTEGER NOT NULL,
+    CONSTRAINT CK_ArticleIndex_HashLength CHECK (length(MessageIdHash) = 32),
+    CONSTRAINT CK_ArticleIndex_Received CHECK (ReceivedAt >= 0),
+    CONSTRAINT CK_ArticleIndex_Accessed CHECK (LastAccessedAt >= 0)
+) WITHOUT ROWID;
+
+CREATE INDEX IX_ArticleIndex_LastAccessedAt ON ArticleIndex (LastAccessedAt);
+```
+
+`MessageIdHash` is the existing 32-byte BLAKE3 `ArticleId`. `ReceivedAt` and `LastAccessedAt` are UTC Unix epoch milliseconds. The first insert into a spool stores one sampled value in both columns. A duplicate insert in that same database does nothing: it does not change `ReceivedAt`. A hash that is already present in another spool's database is not a reason to delete either copy. Retrieval rebuilds `{root}/{n0}/{n1}/{n2}/{64 lowercase hex}` with `SpoolArticlePath` from the first spool whose file and row both exist. Startup copies every stored hash into membership and does not stat article files to do so. A row whose file is missing can therefore remain in membership. `Contains` does not check the filesystem. `TryGetRetrievableArticle` returns false when the file is absent and does not delete the row. An unreadable or missing spool fails startup and is not treated as an empty spool. An access update runs `UPDATE ... SET LastAccessedAt = $accessed WHERE MessageIdHash = $hash AND LastAccessedAt < $accessed` on that spool's database. It does not assign `ReceivedAt`. A touch for a missing hash does not insert a row. Eviction reads only that spool's `LastAccessedAt` index. A row with a newer touch still waiting in that spool's coalescer is skipped. This change does not delete articles. Recovery trusts a 64-character lowercase hex file name. It does not hash the payload bytes.
+
+SQLite settings, all constants rather than extra configuration keys:
+
+| Setting | Value | Reason |
+|---|---|---|
+| `journal_mode` | WAL | Readers do not block the writer for the snapshot they already hold. |
+| `synchronous` | FULL | A commit waits for the WAL frame to be durable. The index does not use `OFF` or `NORMAL`. |
+| `page_size` | 8192 | Set before the first schema write. An existing file keeps its page size. |
+| writer `cache_size` | 256 MiB shared | One spool keeps the full 256 MiB. Several spools divide it, with at least 2 MiB each. |
+| reader `cache_size` | 64 MiB shared | One spool uses four 16 MiB readers. Several spools use two readers each and divide the 64 MiB. |
+| `busy_timeout` | 5000 ms | Bound on `SQLITE_BUSY` / `SQLITE_LOCKED`. |
+| `wal_autocheckpoint` | 4000 pages | About 32 MiB of WAL before SQLite's own checkpoint. |
+| `journal_size_limit` | 64 MiB | After a checkpoint, SQLite may shrink the WAL file down to this size. It does not stop the live WAL from growing past 64 MiB while frames are still uncheckpointed. |
+| `mmap_size` | 256 MiB | Mapping limit, not a second copy of the file. |
+| `temp_store` | MEMORY | Temporary sort pages stay off the index volume. |
+
+Each spool database has one writer connection. Other spools keep committing when that writer is busy or has faulted. The writer queues commands on a bounded channel of 8192. It commits when 512 commands are waiting, when 1 ms has elapsed since the batch started, or when shutdown completes the channel. Each batch is one transaction. Waiters complete only after that commit, or with the exception that rolled the batch back. `SQLITE_BUSY` and `SQLITE_LOCKED` retry up to 4 attempts. Any other failure fails that batch and every command still waiting in that spool's queue, and faults that writer. Those callers do not observe success. A passive checkpoint runs on the writer connection every 32 batches or when the WAL file reaches 64 MiB. Only one spool checkpoints at a time. If another spool holds that gate, this writer skips the passive checkpoint and tries again on a later batch; it does not wait. Shutdown commits commands already queued, then runs a truncate checkpoint, waiting for the gate. A caller that cancels its wait after the command has been queued can observe cancellation while the batch still commits. The row is then present. Cancellation before the command enters the queue does not commit it.
+
+Ingestion reserves a hash before spool selection. A second delivery of that hash waits instead of publishing another copy. If the hash is already in the membership set, the worker returns completed and does not write, even when the payload file is gone. That stale membership is accepted. Releasing the reservation after a failure or cancellation allows a later attempt. The reservation is not membership and is not stored per article. An unreadable spool fails startup; its database is not rewritten and its rows are not treated as absent.
+
+Repeated touches for one hash on one spool collapse to the newest timestamp while that token is queued, up to 8192 distinct keys and 64 extra waiters per key. A touch that does not fit is queued on its own. Eviction on that spool skips a row while a newer touch is still queued. The committed `LastAccessedAt` is what remains after a crash. The delay before a touch commits is the queue time plus at most the 1 ms flush interval. `ReceivedAt` is unchanged.
+
+The in-memory membership set is 64 open-addressed shards. Each shard is one byte array of 32-byte hashes plus an occupancy bitset. Lookups do not take a lock. Inserts lock only that shard. Load factor is 0.75. A shard that fills grows by about 25 percent, so a resize does not allocate a second copy of the whole set. The set does not delete. A hash is added only after the SQLite commit. If that publication throws, the row remains and the next startup scan publishes it.
+
+At 521 million articles the raw hashes are `521e6 × 32` bytes, about 15.5 GiB. At a 0.75 load factor the slot arrays are about 20.7 GiB, plus about 83 MiB of occupancy bits. That is a calculated backing-store size, not a measured working set, and it is not a 15.5 GiB structure. A resize holds the old and new arrays for one shard only, about 1.25 times that shard, until the old array is unreachable. Startup reads `MessageIdHash` only, reserves from `ArticleIndexMeta.ArticleCount`, and publishes the set before later services accept VATP traffic. An unknown schema version fails startup and is not modified. The 521-million-row scan was not measured in this environment.
+
+Durability boundaries:
+
+- VATP RESULT is still the queue enqueue. It happens before the spool rename and before the index commit. A crash after RESULT and before the rename can lose the article. There is no journal to replay.
+- The rename is the point at which the final path exists. It does not fsync the device.
+- The worker then waits for the index transaction. `synchronous=FULL` makes that commit durable across process and power loss. A failure returns `Failed` to the worker, leaves the file in place, and does not advertise the hash.
+- A crash after the rename and before the commit is repaired before `ArticleIndex.StartAsync` returns. Later services, including the worker and the VATP listener, do not start until that walk finishes. The walk reads spool file names, not payloads. A name that is not 64 lowercase hex digits is ignored, including a temporary publish file and `vectornntp-spool.id`. A missing hash is inserted into that spool's database. A file whose hash is already indexed on another spool is inserted too, and both copies are kept. A second start skips hashes already stored in that spool's database. When the file last-write time is after the Unix epoch, that time is stored as `ReceivedAt` and `LastAccessedAt`. When the last-write time is at or before the epoch, or cannot be read, the reconciliation clock is stored instead. Zero is not used as a stand-in for an unknown time. Either value is a recovery approximation. The original in-memory receive time was not on disk. A later duplicate insert in the same database does not replace it.
+- The spool writer calls `Flush(false)` and then `File.Move`. The rename publishes the name atomically on the same volume. It does not fsync the file or the directory. A power loss can leave a renamed file whose bytes or directory entry did not reach stable storage. The index can then refer to a path that exists and is still unreadable or incomplete. `TryGetRetrievableArticle` checks that the file exists. It does not read or checksum the payload.
+- A committed row whose file is gone is counted and left in place. Membership stays until a later eviction removes the file and the row together. `TryGetRetrievableArticle` returns false for that row.
+- A queued access update that has not committed is lost. The next access records a new time.
+- Shutdown commits commands already queued, then checkpoints.
+
+Startup logs the database directory, schema version, page size, loaded rows, load duration, and estimated membership bytes (event 5800), then one line per spool with its identity and database path (event 5810). Cross-spool duplicates are one warning with a sample of at most eight hashes (event 5811). A legacy migration is one warning (event 5812). The writer logs batch failures, busy retries, checkpoints, and a periodic summary of inserts, queue depth, batch size, and WAL bytes (events 5801–5809). Per-article informational logs are not emitted.
+
+`ArticleIndexBenchTests` measured this workstation: Windows NT 10.0.26100, 14 processors, process temp directory on an NTFS volume whose `DriveType` was `Fixed`. That volume was not identified as dedicated NVMe or as a SATA spool. The index bench inserts rows and does not write article payloads. `Contains` is a hash-set lookup. `TryGetRetrievableArticle` is false for those rows because the files are absent. These numbers are not a production ceiling and not a 521-million-row measurement.
+
+An earlier build stat'd every indexed hash during startup and on each positive membership check. On the same volume, with a 20 ms flush and 64 concurrent callers, that build recorded:
+
+- 4096 inserts: 1995.0 ms, 2053.2/s, p50 31.135 ms, p95 32.319 ms, p99 33.321 ms. 4096 updates: 1997.2 ms, 2050.9/s.
+- 5120 membership checks with no payload files: 173.1 ms. Restart scanned 5120 rows in 148 ms (354.4 ms including process start).
+- 100000 inserts: 51759.5 ms, 1932.0/s, p50 31.384 ms, p95 37.495 ms, p99 80.136 ms. 100000 updates: 50473.7 ms, 1981.2/s.
+- Restart scanned those 100000 rows in 3089 ms (5952.4 ms including process start), about 32373 rows/s. The rows had no payload files, so every stat missed. A linear projection of that scan to 521 million rows is about 16094 seconds. That projection is not a measurement.
+
+Removing those per-row and per-lookup stats, still at a 20 ms flush, left insert throughput near the same ceiling and cut the scan:
+
+- 4096 inserts: 2104.2 ms, 1946.6/s, p50 31.406 ms, p95 42.103 ms, p99 52.553 ms. 4096 updates: 1998.8 ms, 2049.2/s, p50 31.010 ms. 160 batches for 9216 mutations. Database 499712 bytes, WAL 8051712 bytes.
+- 5120 membership hits: 1.0 ms. Restart scanned 5120 rows in 6 ms (112.3 ms including process start).
+- 100000 inserts: 49442.6 ms, 2022.5/s, p50 31.284 ms, p95 33.789 ms, p99 47.890 ms. 100000 updates: 49713.0 ms, 2011.5/s, p50 31.190 ms, p95 33.888 ms, p99 49.915 ms.
+- Resources after those 100000 writes: database 9740288 bytes, WAL 20359280 bytes, 3126 batches, 97 checkpoints, 0 busy checkpoints, 1758 ms total checkpoint time, 46 ms maximum, 2160 log frames on the last checkpoint, 0 failures, 0 retries, 404957344 bytes allocated, 67 gen-0 collections, queue depth 0. Shutdown added the truncate checkpoint: 98 checkpoints, 1779 ms total, last log frames 0.
+- Restart scanned 100000 rows in 71 ms (1257.4 ms including process start), about 1408450 rows/s, and estimated 4720640 bytes of reserved membership backing store. A linear projection of that hash scan to 521 million rows is about 370 seconds. That projection is not a measurement.
+
+The 20 ms flush was the remaining per-call cost. Each caller waits for the commit, so the interval waits for commands that cannot be queued until the batch finishes. A paired run of the same 4096-insert fact with `VECTORNNTP_ARTICLE_INDEX_BENCH_FLUSH_MS=1` committed 161 batches, almost the same 160 as the 20 ms run, with a similar WAL (8018848 bytes). Inserts were 227.0 ms, 18045.0/s, p50 2.898 ms, p95 4.029 ms, p99 15.552 ms. Updates were 187.4 ms, 21859.0/s, p50 2.402 ms. The production flush interval is therefore 1 ms. `synchronous=FULL` is unchanged. The same 100000-row fact at that interval inserted in 5362.4 ms (18648.2/s, p50 2.878 ms, p95 4.034 ms, p99 19.465 ms) and updated in 5681.4 ms (17601.3/s, p50 2.832 ms). It committed 3127 batches and 97 checkpoints, against 3126 batches and 97 checkpoints at 20 ms, with 0 failures and 0 retries. Restart scan stayed 72 ms.
+
+Several spools, 512 rows each, flush 1 ms, no payload files, 0 failures, 0 retries, queue depth 0. Degree of parallelism was `min(256, max(64, spoolCount * 8))`.
+
+| Spools | Inserts | Updates | Per-spool inserts | Lookups | Writer KiB | Reader KiB × readers | WAL bytes | Startup scan / wall | Working set before → after |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 512 in 17.4 ms, 29393.5/s | 35821.7/s | 29393.5/s | 512 in 0.6 ms | 262144 | 16384 × 4 | 903792 | 0 ms / 49.1 ms | 107319296 → 107114496 |
+| 4 | 2048 in 71.4 ms, 28687.5/s | 31472.2/s | 7171.9/s | 2048 in 0.6 ms | 65536 | 8192 × 2 | 5759544 | 1 / 118.1 | 108277760 → 108433408 |
+| 8 | 4096 in 163.7 ms, 25021.8/s | 28325.8/s | 3127.7/s | 4096 in 1.0 ms | 32768 | 4096 × 2 | 11231528 | 3 / 249.3 | 110166016 → 109166592 |
+| 16 | 8192 in 266.7 ms, 30715.7/s | 36561.0/s | 1919.7/s | 4096 in 11.9 ms | 16384 | 2048 × 2 | 21690752 | 5 / 505.6 | 114642944 → 117415936 |
+| 22 | 11264 in 296.3 ms, 38011.4/s | 43091.4/s | 1727.8/s | 4096 in 0.9 ms | 11915 | 1489 × 2 | 31648736 | 8 / 648.8 | 126734336 → 125616128 |
+
+At 20 ms the same spool counts stayed near 2000 calls/s until caller parallelism rose with spool count (16 spools about 4055/s, 22 spools about 5629/s). At 1 ms one spool already exceeds that, and 22 spools reach about 38011 inserts/s rather than 22 times one spool. Configured cache stays inside 256 MiB of writer cache and 64 MiB of reader cache through 22 spools. Process working set on that run was about 126 MB, which is not the sum of the `cache_size` values. One spool held inside `BeforeCommit` left the other three able to commit 768 inserts in 182.0 ms (4219.8/s). That scenario uses batch size 1 and a 60 s flush so the hold is visible; it is not the 1 ms rate.
+
+`SpoolPersistenceBenchTests` published 24 articles of 750 KiB (18432000 bytes) on the same temp NTFS volume in 66 ms, 361.5 articles/s, about 2220.9 megabits/s, store p50 2.46 ms, p95 3.35 ms, p99 7.38 ms. `dedicatedDisk=false` and `sameVolume=true`. That is the rename path only. It is not a SATA measurement and it was not combined with the SQLite commit. The 1628 articles/s figure in that test is the 10 Gbps payload-rate label, not a result.
+
+Repeat a chosen size with `VECTORNNTP_ARTICLE_INDEX_BENCH_ROWS` (for example `10000`, `100000`, or `1000000`) and `dotnet test tests/VectorNNTP.StorageServer.Tests/VectorNNTP.StorageServer.Tests.csproj -c Release --filter Configured_row_count`. The default when the variable is unset is 10000 rows. A dedicated NVMe `DbDir` and a SATA spool measurement are still required before treating any of these rates as the deployment disk.
 
 ## StorageServer:SegmentPools
 
@@ -1257,7 +1355,7 @@ Relative paths resolve with `ApplicationLocalPath` against `AppContext.BaseDirec
 
 An ordinary directory on the OS volume is rejected even when it exists. A development pool has to be the mount point of its own volume (`mountvol` on Windows, a real mount on Linux) on a disk that is not the OS disk. The shipped relative path is not rewritten to a parent. Validation does not create a missing spool root.
 
-Startup order through `ApplicationServiceManager` is configuration validation, then `SegmentPoolValidation`, then spool-shard initialization, then `BlockDeviceMonitor` and the accepted-article worker, then the VATP listener, then the RabbitMQ advertisement publisher. The manager starts services in that registration order and does not start later services when an earlier `StartAsync` throws. A failed pool or a failed shard tree therefore produces no VATP accept and no availability advertisement, including when another spool has already finished its own tree. Validation does not create directories, change mounts, or fall back to a parent or to the operating-system volume.
+Startup order through `ApplicationServiceManager` is configuration validation, then `SegmentPoolValidation`, then spool-shard initialization, then the article index, then `BlockDeviceMonitor` and the accepted-article worker, then the VATP listener, then the RabbitMQ advertisement publisher. The manager starts services in that registration order and does not start later services when an earlier `StartAsync` throws. A failed pool or a failed shard tree therefore produces no VATP accept and no availability advertisement, including when another spool has already finished its own tree. Validation does not create directories, change mounts, or fall back to a parent or to the operating-system volume.
 
 For each directory the inspector:
 

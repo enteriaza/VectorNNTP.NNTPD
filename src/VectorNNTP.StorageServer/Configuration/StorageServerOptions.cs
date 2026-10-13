@@ -40,6 +40,11 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// <summary>Default application log directory.</summary>
     public const string DefaultLogDir = "/logs";
 
+    /// <summary>
+    /// Default directory for the SQLite article index, relative to the application binary directory.
+    /// </summary>
+    public const string DefaultDbDir = "db";
+
     /// <summary>Default relative certificate directory.</summary>
     public const string DefaultCertificateDirectory = "certs";
 
@@ -135,6 +140,17 @@ public sealed class StorageServerOptions : IApplicationLifecycleOptions
     /// Gets or sets the directory used for application log files.
     /// </summary>
     public string LogDir { get; set; } = DefaultLogDir;
+
+    /// <summary>
+    /// Gets or sets the directory that holds the SQLite article index and its WAL files.
+    /// </summary>
+    /// <remarks>
+    /// Default <see cref="DefaultDbDir"/> when omitted. Relative paths resolve with
+    /// <c>ApplicationLocalPath</c> against the application binary directory, not the process
+    /// working directory. Startup creates the directory. A missing or unwritable directory
+    /// fails startup. The path is not replaced with a spool directory.
+    /// </remarks>
+    public string DbDir { get; set; } = DefaultDbDir;
 
     /// <summary>
     /// Gets or sets the directory used for ACME and TLS certificate artifacts.

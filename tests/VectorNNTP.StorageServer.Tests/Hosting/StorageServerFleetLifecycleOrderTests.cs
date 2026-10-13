@@ -15,6 +15,7 @@ using VectorNNTP.StorageServer.Hosting;
 using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.StorageServer.Storage;
+using VectorNNTP.StorageServer.Storage.ArticleIndex;
 using VectorNNTP.StorageServer.Storage.SegmentPools;
 using VectorNNTP.StorageServer.Storage.SpoolShards;
 using VectorNNTP.StorageServer.Tests.Fixtures;
@@ -276,6 +277,7 @@ public sealed class StorageServerFleetLifecycleOrderTests
             var acmeIndex = Array.FindIndex(ordered, static service => service is ImmediateAcmeReadyApplicationService);
             var validationIndex = Array.FindIndex(ordered, static service => service is SegmentPoolValidationService);
             var shardIndex = Array.FindIndex(ordered, static service => service is SpoolShardInitializationService);
+            var indexIndex = Array.FindIndex(ordered, static service => service is ArticleIndexService);
             var monitorIndex = Array.FindIndex(ordered, static service => service is BlockDeviceMonitorService);
             var workerIndex = Array.FindIndex(ordered, static service => service is VectorNNTP.StorageServer.Ingress.AcceptedArticleWorker);
             Assert.True(databaseIndex >= 0 && databaseIndex < sharedIndex);
@@ -283,7 +285,8 @@ public sealed class StorageServerFleetLifecycleOrderTests
             Assert.True(rabbitIndex < acmeIndex);
             Assert.True(acmeIndex < validationIndex);
             Assert.True(validationIndex < shardIndex);
-            Assert.True(shardIndex < monitorIndex);
+            Assert.True(shardIndex < indexIndex);
+            Assert.True(indexIndex < monitorIndex);
             Assert.True(monitorIndex < workerIndex);
             Assert.True(workerIndex < listenerIndex);
             Assert.Equal(1, ordered.Count(static service => service is VectorNNTP.StorageServer.Ingress.AcceptedArticleWorker));

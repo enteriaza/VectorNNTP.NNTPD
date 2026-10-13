@@ -18,6 +18,7 @@ using VectorNNTP.StorageServer.Logging;
 using VectorNNTP.Common.NntpDb;
 using VectorNNTP.StorageServer.NntpDb;
 using VectorNNTP.StorageServer.Storage;
+using VectorNNTP.StorageServer.Storage.ArticleIndex;
 using VectorNNTP.StorageServer.Storage.SegmentPools;
 using VectorNNTP.StorageServer.Storage.SpoolShards;
 using VectorNNTP.StorageServer.Tests.Fixtures;
@@ -55,7 +56,7 @@ public sealed class StorageServerHostCompositionTests
             host.Services.GetRequiredService<IRabbitMqService>());
 
         var application = host.Services.GetServices<IApplicationService>().ToArray();
-        Assert.Equal(11, application.Length);
+        Assert.Equal(12, application.Length);
         Assert.IsType<NntpDbService>(application[0]);
         Assert.IsType<StorageServerSharedConfigurationService>(application[1]);
         Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
@@ -63,10 +64,11 @@ public sealed class StorageServerHostCompositionTests
         Assert.IsType<AcmeCertificateApplicationService>(application[4]);
         Assert.IsType<SegmentPoolValidationService>(application[5]);
         Assert.IsType<SpoolShardInitializationService>(application[6]);
-        Assert.IsType<BlockDeviceMonitorService>(application[7]);
-        Assert.Same(host.Services.GetRequiredService<AcceptedArticleWorker>(), application[8]);
-        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[9]);
-        Assert.IsType<StorageServerAdvertisementPublisherService>(application[10]);
+        Assert.IsType<ArticleIndexService>(application[7]);
+        Assert.IsType<BlockDeviceMonitorService>(application[8]);
+        Assert.Same(host.Services.GetRequiredService<AcceptedArticleWorker>(), application[9]);
+        Assert.Same(host.Services.GetRequiredService<StorageVatpListenerService>(), application[10]);
+        Assert.IsType<StorageServerAdvertisementPublisherService>(application[11]);
         Assert.Equal(1, application.Count(static service => service is AcceptedArticleWorker));
         Assert.IsType<RejectingStorageArticleOpenBoundary>(host.Services.GetRequiredService<IStorageArticleOpenBoundary>());
         Assert.IsType<NoSpoolCapacityReader>(host.Services.GetRequiredService<IStorageCapacityReader>());
@@ -187,12 +189,14 @@ public sealed class StorageServerHostCompositionTests
             Assert.IsType<ImmediateAcmeReadyApplicationService>(application[4]);
             Assert.IsType<SegmentPoolValidationService>(application[5]);
             Assert.IsType<SpoolShardInitializationService>(application[6]);
-            Assert.IsType<BlockDeviceMonitorService>(application[7]);
-            Assert.IsType<AcceptedArticleWorker>(application[8]);
+            Assert.IsType<ArticleIndexService>(application[7]);
+            Assert.IsType<BlockDeviceMonitorService>(application[8]);
+            Assert.IsType<AcceptedArticleWorker>(application[9]);
             var listener = host.Services.GetRequiredService<StorageVatpListenerService>();
-            Assert.Same(listener, application[9]);
-            Assert.IsType<StorageServerAdvertisementPublisherService>(application[10]);
+            Assert.Same(listener, application[10]);
+            Assert.IsType<StorageServerAdvertisementPublisherService>(application[11]);
             Assert.Equal(StorageVatpListenerState.Running, listener.State);
+            Assert.True(host.Services.GetRequiredService<IArticleIndex>().IsReady);
             Assert.True(host.Services.GetRequiredService<IRabbitMqService>().IsReady);
             Assert.NotNull(host.Services.GetRequiredService<IAcceptedArticleQueue>());
         }
