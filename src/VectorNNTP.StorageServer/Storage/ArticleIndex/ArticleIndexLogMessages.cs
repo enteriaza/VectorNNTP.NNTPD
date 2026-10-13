@@ -89,31 +89,6 @@ internal static partial class ArticleIndexLogMessages
     [LoggerMessage(EventId = 5805, Level = LogLevel.Error, Message = "Article index committed a row and failed to publish it to the membership index")]
     public static partial void CachePublishFailed(ILogger logger, Exception exception);
 
-    /// <summary>Logs spool reconciliation. This does not delete rows.</summary>
-    /// <param name="logger">Article-index logger.</param>
-    /// <param name="filesSeen">Article file names visited.</param>
-    /// <param name="missing">Files inserted.</param>
-    /// <param name="alreadyPresent">Files already indexed.</param>
-    /// <param name="rowsProbed">Index rows checked on disk.</param>
-    /// <param name="stale">Rows whose file was missing.</param>
-    /// <param name="receiptTimeFromClock">Rows whose receipt time came from the reconciliation clock.</param>
-    /// <param name="crossSpoolDuplicates">Copies kept because the hash was already indexed on another spool.</param>
-    /// <param name="elapsedMilliseconds">Reconciliation time.</param>
-    [LoggerMessage(
-        EventId = 5806,
-        Level = LogLevel.Information,
-        Message = "Article index reconciliation files={FilesSeen} missing={Missing} alreadyPresent={AlreadyPresent} rowsProbed={RowsProbed} stale={Stale} receiptTimeFromClock={ReceiptTimeFromClock} crossSpoolDuplicates={CrossSpoolDuplicates} elapsedMilliseconds={ElapsedMilliseconds}")]
-    public static partial void Reconciled(
-        ILogger logger,
-        long filesSeen,
-        long missing,
-        long alreadyPresent,
-        long rowsProbed,
-        long stale,
-        long receiptTimeFromClock,
-        long crossSpoolDuplicates,
-        long elapsedMilliseconds);
-
     /// <summary>Logs an index failure after the spool file was already published.</summary>
     /// <param name="logger">Persistence logger.</param>
     /// <param name="exception">The index failure.</param>

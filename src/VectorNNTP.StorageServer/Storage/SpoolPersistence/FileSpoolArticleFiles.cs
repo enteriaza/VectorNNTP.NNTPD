@@ -115,5 +115,5 @@ internal sealed class FileSpoolArticleFiles : ISpoolArticleFiles
     }
 
     /// <inheritdoc />
-    public void MoveNew(string source, string destination) => File.Move(source, destination);
+    public void MoveNew(string source, string destination) => File.Move(source, destination, overwrite: true);
 }

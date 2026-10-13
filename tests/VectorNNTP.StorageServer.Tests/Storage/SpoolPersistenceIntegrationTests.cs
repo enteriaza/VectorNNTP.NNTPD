@@ -568,9 +568,9 @@ public sealed class SpoolPersistenceIntegrationTests
         {
             lock (_gate)
             {
-                if (_files.ContainsKey(destination) || !_files.Remove(source, out var bytes))
+                if (!_files.Remove(source, out var bytes))
                 {
-                    throw new IOException("exists");
+                    throw new IOException("missing");
                 }
 
                 _files[destination] = bytes;
@@ -662,9 +662,9 @@ public sealed class SpoolPersistenceIntegrationTests
         {
             lock (_gate)
             {
-                if (_files.ContainsKey(destination) || !_files.Remove(source, out var bytes))
+                if (!_files.Remove(source, out var bytes))
                 {
-                    throw new IOException("exists");
+                    throw new IOException("missing");
                 }
 
                 _files[destination] = bytes;

@@ -663,7 +663,7 @@ public sealed class SpoolPersistenceBenchTests
             var again = publisher.Publish(root, id, body, CancellationToken.None);
             duplicateTicks += Stopwatch.GetTimestamp() - copy;
             copies.Add(Stopwatch.GetElapsedTime(copy).TotalMilliseconds);
-            Assert.Equal(SpoolPublishKind.Duplicate, again.Kind);
+            Assert.Equal(SpoolPublishKind.Replaced, again.Kind);
         }
 
         var storeSeconds = storeTicks / (double)Stopwatch.Frequency;

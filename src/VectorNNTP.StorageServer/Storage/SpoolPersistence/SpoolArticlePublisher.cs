@@ -9,6 +9,9 @@ internal enum SpoolPublishKind
     /// <summary>The final path was created by this call and contains the supplied bytes.</summary>
     Stored,
 
+    /// <summary>The final path already existed and this call replaced it with the supplied bytes.</summary>
+    Replaced,
+
     /// <summary>The final path already existed and its bytes match the supplied article.</summary>
     Duplicate,
 
@@ -33,8 +36,8 @@ internal readonly record struct SpoolPublishResult(SpoolPublishKind Kind, string
 
 /// <summary>
 /// Writes one rewritten article to <c>{spool}/{n0}/{n1}/{n2}/{articleId}</c> by a temp file
-/// in that leaf and a same-directory rename. Readers of the final path do not observe the
-/// temp contents. Rename does not flush the device and does not survive power loss by itself.
+/// in that leaf and a same-directory replace. Readers of the final path do not observe the
+/// temp contents. An existing final file is replaced by that rename. Rename does not flush the device and does not survive power loss by itself.
 /// Each attempt deletes only the temp path it created. A <c>.writing-</c> file left by another
 /// attempt or another process is not treated as abandoned.
 /// </summary>
@@ -85,31 +88,14 @@ internal sealed class SpoolArticlePublisher
         {
             cancellationToken.ThrowIfCancellationRequested();
             _files.CreateDirectory(directory);
-            if (_files.Exists(final))
-            {
-                return _files.ContentsEqual(final, content)
-                    ? new SpoolPublishResult(SpoolPublishKind.Duplicate, final, null)
-                    : new SpoolPublishResult(SpoolPublishKind.Conflict, final, "Existing article bytes differ.");
-            }
-
+            var replacing = _files.Exists(final);
             var temp = CreateTempPath(final);
             try
             {
                 _files.WriteAll(temp, content, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    _files.MoveNew(temp, final);
-                }
-                catch (IOException) when (_files.Exists(final))
-                {
-                    DeleteQuiet(temp);
-                    return _files.ContentsEqual(final, content)
-                        ? new SpoolPublishResult(SpoolPublishKind.Duplicate, final, null)
-                        : new SpoolPublishResult(SpoolPublishKind.Conflict, final, "Existing article bytes differ.");
-                }
-
-                return new SpoolPublishResult(SpoolPublishKind.Stored, final, null);
+                _files.MoveNew(temp, final);
+                return new SpoolPublishResult(replacing ? SpoolPublishKind.Replaced : SpoolPublishKind.Stored, final, null);
             }
             catch
             {
@@ -141,20 +127,16 @@ internal sealed class SpoolArticlePublisher
 
     /// <summary>
     /// Looks for an already published final file for <paramref name="articleId"/> on any spool.
-    /// Does not create, rename, or delete files. A temp file is not a published article.
+    /// Does not create, rename, delete, or read file bytes. A temp file is not a published article.
     /// </summary>
-    /// <param name="spoolRoots">Validated spool roots to scan. Order does not change a match.</param>
+    /// <param name="spoolRoots">Validated spool roots to scan.</param>
     /// <param name="articleId">Canonical article identity.</param>
-    /// <param name="content">Path-rewritten bytes that would be published.</param>
     /// <param name="spoolRoot">Spool that already holds the final file when the method returns <see langword="true"/>.</param>
-    /// <param name="result">Duplicate or conflict when the method returns <see langword="true"/>.</param>
     /// <returns><see langword="true"/> when a final file already exists on one of the roots.</returns>
-    internal bool TryClassifyExisting(
+    internal bool TryFindPublished(
         IReadOnlyList<string> spoolRoots,
         ArticleId articleId,
-        ReadOnlySpan<byte> content,
-        out string spoolRoot,
-        out SpoolPublishResult result)
+        out string spoolRoot)
     {
         ArgumentNullException.ThrowIfNull(spoolRoots);
         foreach (var root in spoolRoots)
@@ -175,14 +157,10 @@ internal sealed class SpoolArticlePublisher
             }
 
             spoolRoot = root;
-            result = _files.ContentsEqual(final, content)
-                ? new SpoolPublishResult(SpoolPublishKind.Duplicate, final, null)
-                : new SpoolPublishResult(SpoolPublishKind.Conflict, final, "Existing article bytes differ.");
             return true;
         }
 
         spoolRoot = string.Empty;
-        result = default;
         return false;
     }
 

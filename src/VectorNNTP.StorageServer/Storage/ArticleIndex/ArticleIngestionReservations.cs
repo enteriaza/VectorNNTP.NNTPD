@@ -7,9 +7,6 @@ internal enum ArticleIngestionHold : byte
 {
     /// <summary>This caller owns the in-flight reservation. Release it on success or failure.</summary>
     Acquired = 1,
-
-    /// <summary>The hash is already in the membership index. Do not write another copy.</summary>
-    AlreadyPresent = 2,
 }
 
 /// <summary>
@@ -17,7 +14,8 @@ internal enum ArticleIngestionHold : byte
 /// </summary>
 /// <remarks>
 /// Only hashes currently being ingested occupy a slot. Unrelated hashes take different shard locks.
-/// A waiter resumes after the holder releases the reservation and then observes membership again.
+/// Membership is not consulted. A hash that is already published can be reserved again after the
+/// current holder releases, so a later delivery can overwrite that copy.
 /// </remarks>
 internal sealed class ArticleIngestionReservations
 {
@@ -33,18 +31,15 @@ internal sealed class ArticleIngestionReservations
     }
 
     /// <summary>
-    /// Waits until <paramref name="articleId"/> is published or this caller owns its reservation.
+    /// Waits until this caller owns the in-flight reservation for <paramref name="articleId"/>.
     /// </summary>
     /// <param name="articleId">Canonical article identity.</param>
-    /// <param name="presence">Published membership. A hit does not create a reservation and does not stat the payload.</param>
     /// <param name="cancellationToken">Cancels the wait. A cancelled wait does not own the reservation.</param>
-    /// <returns>Whether the caller must ingest or treat the article as already stored.</returns>
+    /// <returns><see cref="ArticleIngestionHold.Acquired"/> when this caller must publish and index the article.</returns>
     internal async ValueTask<ArticleIngestionHold> ReserveAsync(
         ArticleId articleId,
-        ArticlePresenceIndex presence,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(presence);
         var shard = _shards[Shard(articleId)];
         while (true)
         {
@@ -52,11 +47,6 @@ internal sealed class ArticleIngestionReservations
             Task? wait = null;
             lock (shard.Gate)
             {
-                if (presence.Contains(articleId))
-                {
-                    return ArticleIngestionHold.AlreadyPresent;
-                }
-
                 if (shard.InFlight.TryGetValue(articleId, out var pending))
                 {
                     wait = pending.Task;

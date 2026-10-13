@@ -8,11 +8,6 @@ namespace VectorNNTP.StorageServer.Storage.ArticleIndex;
 /// <param name="DatabasePath">SQLite file under the configured database directory.</param>
 internal readonly record struct ArticleSpoolBinding(string Id, string SpoolDirectory, string DatabasePath);
 
-/// <summary>A spool binding whose SQLite database is open.</summary>
-/// <param name="Binding">Identity and paths.</param>
-/// <param name="Database">Open database. The caller owns its lifetime.</param>
-internal readonly record struct ArticleIndexOpenSpool(ArticleSpoolBinding Binding, ArticleIndexDatabase Database);
-
 /// <summary>
 /// Maps each registered spool to one SQLite file under <c>DbDir</c>.
 /// The mapping is the identity file in the spool root, not the drive letter.

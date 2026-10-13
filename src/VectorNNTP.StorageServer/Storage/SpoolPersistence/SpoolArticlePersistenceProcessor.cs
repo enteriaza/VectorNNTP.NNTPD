@@ -159,13 +159,7 @@ internal sealed class SpoolArticlePersistenceProcessor : IAcceptedArticleProcess
         var reserved = false;
         if (_index is not null)
         {
-            var hold = await _index.ReserveIngestionAsync(article.ArtId, cancellationToken).ConfigureAwait(false);
-            if (hold == ArticleIngestionHold.AlreadyPresent)
-            {
-                _counters.NoteDuplicate();
-                return AcceptedArticleProcessResult.Completed;
-            }
-
+            await _index.ReserveIngestionAsync(article.ArtId, cancellationToken).ConfigureAwait(false);
             reserved = true;
         }
 
@@ -228,9 +222,22 @@ internal sealed class SpoolArticlePersistenceProcessor : IAcceptedArticleProcess
 
             using var lease = _identity.Acquire(article.ArtId, cancellationToken);
             var roots = SpoolRoots();
-            if (_publisher.TryClassifyExisting(roots, article.ArtId, rewritten.Span, out var spoolRoot, out var existing))
+            if (_index is not null && _index.TryGetIndexedRecord(article.ArtId, out var indexed))
             {
-                return PersistenceOutcome.Indexable(Apply(article, spoolRoot, rewritten.Length, existing), spoolRoot, existing.Kind);
+                var published = _publisher.Publish(indexed.SpoolDirectory, article.ArtId, rewritten.Span, cancellationToken);
+                return PersistenceOutcome.Indexable(
+                    Apply(article, indexed.SpoolDirectory, rewritten.Length, published),
+                    indexed.SpoolDirectory,
+                    published.Kind);
+            }
+
+            if (_publisher.TryFindPublished(roots, article.ArtId, out var existingRoot))
+            {
+                var published = _publisher.Publish(existingRoot, article.ArtId, rewritten.Span, cancellationToken);
+                return PersistenceOutcome.Indexable(
+                    Apply(article, existingRoot, rewritten.Length, published),
+                    existingRoot,
+                    published.Kind);
             }
 
             var persistence = _options.Value.SpoolPersistence ?? new SpoolPersistenceOptions();
@@ -358,6 +365,11 @@ internal sealed class SpoolArticlePersistenceProcessor : IAcceptedArticleProcess
                 _monitor.NoteCommittedBytes(spool, byteCount);
                 SpoolPersistenceLogMessages.Stored(_logger, spool, byteCount);
                 return AcceptedArticleProcessResult.Completed;
+            case SpoolPublishKind.Replaced:
+                _health.Success(spool);
+                _counters.NoteDuplicate();
+                SpoolPersistenceLogMessages.Duplicate(_logger, spool);
+                return AcceptedArticleProcessResult.Completed;
             case SpoolPublishKind.Duplicate:
                 _health.Success(spool);
                 _counters.NoteDuplicate();
@@ -424,6 +436,6 @@ internal readonly record struct PersistenceOutcome(AcceptedArticleProcessResult 
         new(
             result,
             result == AcceptedArticleProcessResult.Completed
-                && kind is SpoolPublishKind.Stored or SpoolPublishKind.Duplicate,
+                && kind is SpoolPublishKind.Stored or SpoolPublishKind.Replaced or SpoolPublishKind.Duplicate,
             spool);
 }

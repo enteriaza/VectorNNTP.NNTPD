@@ -235,17 +235,23 @@ internal sealed class ArticleIndexDatabase : IDisposable
                 if (mutation.HasInsert)
                 {
                     mutation.Id.CopyTo(_writerHash);
+                    exists.Parameters[0].Value = _writerHash;
+                    var existed = exists.ExecuteScalar() is not null and not DBNull;
                     insert.Parameters[0].Value = _writerHash;
                     insert.Parameters[1].Value = mutation.ReceivedAt;
                     var changed = insert.ExecuteNonQuery();
-                    if (changed == 1)
+                    if (existed)
+                    {
+                        mutation.InsertDisposition = ArticleIndexWriteDisposition.AlreadyPresent;
+                    }
+                    else if (changed == 1)
                     {
                         inserted++;
                         mutation.InsertDisposition = ArticleIndexWriteDisposition.Inserted;
                     }
                     else
                     {
-                        mutation.InsertDisposition = ArticleIndexWriteDisposition.AlreadyPresent;
+                        throw new InvalidOperationException("Article index insert did not write its row.");
                     }
                 }
 
@@ -805,12 +811,14 @@ internal static class ArticleIndexSql
         SELECT SchemaVersion, ArticleCount FROM ArticleIndexMeta WHERE Id = 1;
         """;
 
-    /// <summary>Inserts a new article. A conflict does not change <c>ReceivedAt</c>.</summary>
+    /// <summary>Inserts a new article. A conflict keeps <c>ReceivedAt</c> and <c>LastAccessedAt</c>.</summary>
     internal const string Insert =
         """
         INSERT INTO ArticleIndex (MessageIdHash, ReceivedAt, LastAccessedAt)
         VALUES ($hash, $received, $received)
-        ON CONFLICT(MessageIdHash) DO NOTHING;
+        ON CONFLICT(MessageIdHash) DO UPDATE SET
+            ReceivedAt = ArticleIndex.ReceivedAt,
+            LastAccessedAt = ArticleIndex.LastAccessedAt;
         """;
 
     /// <summary>Inserts a migrated row with its original receipt and access times.</summary>

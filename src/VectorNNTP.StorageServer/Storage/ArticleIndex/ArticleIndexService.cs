@@ -15,9 +15,10 @@ namespace VectorNNTP.StorageServer.Storage.ArticleIndex;
 /// <remarks>
 /// <para>
 /// Startup creates <c>DbDir</c> when it is missing and fails if that directory cannot be used.
-/// It does not substitute a spool directory. Membership is loaded, spool reconciliation finishes,
+/// It does not substitute a spool directory. Membership is loaded from the open databases,
 /// and only then does <see cref="StartAsync"/> return. Later application services, including the
 /// accepted-article worker and the VATP listener, start after that.
+/// Startup does not walk article files or compare them with index rows.
 /// </para>
 /// <para>
 /// VATP RESULT is still sent when an article is queued, before the spool write and before this index.
@@ -40,7 +41,6 @@ internal sealed class ArticleIndexService : IArticleIndex, IApplicationService
     private readonly Dictionary<string, SpoolSlot> _bySpool = new(PathComparer);
     private readonly SemaphoreSlim _checkpointGate = new(1, 1);
     private CancellationTokenSource _runCts = new();
-    private CancellationTokenSource? _linked;
     private Task? _execution;
     private Task<ArticleIndexReconciliationReport>? _reconciliation;
     private int _started;
@@ -230,34 +230,8 @@ internal sealed class ArticleIndexService : IArticleIndex, IApplicationService
                 DatabasePath = _spools[0].Binding.DatabasePath;
             }
 
-            _linked = CancellationTokenSource.CreateLinkedTokenSource(_runCts.Token, cancellationToken);
             Volatile.Write(ref _ready, 1);
-            ArticleIndexReconciliationReport report;
-            try
-            {
-                var open = new ArticleIndexOpenSpool[_spools.Count];
-                for (var i = 0; i < _spools.Count; i++)
-                {
-                    open[i] = new ArticleIndexOpenSpool(_spools[i].Binding, _spools[i].Database);
-                }
-
-                report = await ArticleIndexReconciler.RunAsync(
-                    open,
-                    _presence,
-                    this,
-                    _counters,
-                    _logger,
-                    _time,
-                    _linked.Token).ConfigureAwait(false);
-            }
-            catch
-            {
-                await StopWritersAsync().ConfigureAwait(false);
-                throw;
-            }
-
-            report = report with { CrossSpoolDuplicates = report.CrossSpoolDuplicates + duplicates };
-            _reconciliation = Task.FromResult(report);
+            _reconciliation = Task.FromResult(new ArticleIndexReconciliationReport(0, 0, 0, 0, 0, 0, 0));
             ArticleIndexLogMessages.Ready(
                 _logger,
                 DatabaseDirectory,
@@ -285,8 +259,6 @@ internal sealed class ArticleIndexService : IArticleIndex, IApplicationService
             DisposeDatabases();
             _spools.Clear();
             _bySpool.Clear();
-            _linked?.Dispose();
-            _linked = null;
             _execution = null;
             var retired = _runCts;
             _runCts = new CancellationTokenSource();
@@ -323,7 +295,6 @@ internal sealed class ArticleIndexService : IArticleIndex, IApplicationService
         }
 
         DisposeDatabases();
-        _linked?.Dispose();
         if (Interlocked.Exchange(ref _gateDisposed, 1) == 0)
         {
             _checkpointGate.Dispose();
@@ -351,7 +322,7 @@ internal sealed class ArticleIndexService : IArticleIndex, IApplicationService
     public ValueTask<ArticleIngestionHold> ReserveIngestionAsync(ArticleId articleId, CancellationToken cancellationToken)
     {
         ThrowIfNotReady();
-        return _reservations.ReserveAsync(articleId, _presence, cancellationToken);
+        return _reservations.ReserveAsync(articleId, cancellationToken);
     }
 
     /// <inheritdoc />

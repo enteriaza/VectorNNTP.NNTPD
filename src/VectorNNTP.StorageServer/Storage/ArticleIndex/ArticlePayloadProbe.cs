@@ -1,10 +1,10 @@
 namespace VectorNNTP.StorageServer.Storage.ArticleIndex;
 
 /// <summary>
-/// Checks that a registered spool root can be listed before startup scans it.
+/// Checks that a registered spool root can be listed before its database is loaded.
 /// </summary>
 /// <remarks>
-/// This is one directory probe per spool. It does not stat article files.
+/// This is one directory probe per spool. It does not stat article files and does not scan article names.
 /// A missing or unreadable root fails startup and does not modify that spool's database.
 /// </remarks>
 internal static class ArticlePayloadProbe

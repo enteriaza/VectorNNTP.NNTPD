@@ -44,7 +44,7 @@ internal interface ISpoolArticleFiles
 
     /// <summary>
     /// Publishes <paramref name="source"/> as <paramref name="destination"/> on the same directory.
-    /// Fails when <paramref name="destination"/> already exists, so an existing article is not replaced.
+    /// An existing destination is replaced. Readers do not observe the temp file's contents.
     /// </summary>
     /// <param name="source">Temp file written by <see cref="WriteAll"/>.</param>
     /// <param name="destination">Final article path.</param>

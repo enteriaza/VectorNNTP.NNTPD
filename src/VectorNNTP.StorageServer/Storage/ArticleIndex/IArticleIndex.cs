@@ -30,7 +30,7 @@ internal interface IArticleIndex
     /// <summary>Gets process counters.</summary>
     ArticleIndexCounters Counters { get; }
 
-    /// <summary>Gets the startup reconciliation task. It completes after the spool-name walk.</summary>
+    /// <summary>Gets the startup membership task. It completes when the databases have been loaded. Startup does not walk spool files.</summary>
     Task<ArticleIndexReconciliationReport> Reconciliation { get; }
 
     /// <summary>Returns whether the hash is in the committed membership set.</summary>
@@ -40,13 +40,15 @@ internal interface IArticleIndex
     bool Contains(ArticleId articleId);
 
     /// <summary>
-    /// Inserts a spool-published article. Both initial timestamps are <paramref name="receivedAtUnixMilliseconds"/>.
+    /// Inserts or reaffirms a spool-published article.
+    /// The first insert stores <paramref name="receivedAtUnixMilliseconds"/> in both timestamps.
+    /// A later insert for the same hash in that database keeps both timestamps and does not add a second row.
     /// </summary>
     /// <param name="articleId">Canonical article identity.</param>
     /// <param name="spoolDirectory">Validated spool root that holds the final file.</param>
     /// <param name="receivedAtUnixMilliseconds">One UTC Unix epoch millisecond sample.</param>
     /// <param name="cancellationToken">Cancels the wait. A queued command can still commit.</param>
-    /// <returns>The commit result. <see cref="ArticleIndexInsertResult.Inserted"/> is false when the original row was kept.</returns>
+    /// <returns>The commit result. <see cref="ArticleIndexInsertResult.Inserted"/> is false when the original timestamps were kept.</returns>
     ValueTask<ArticleIndexInsertResult> InsertStoredAsync(
         ArticleId articleId,
         string spoolDirectory,
@@ -54,12 +56,12 @@ internal interface IArticleIndex
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Waits until <paramref name="articleId"/> is already published or this caller owns its ingestion reservation.
-    /// The reservation is not membership. Release it when ingestion finishes or fails.
+    /// Waits until this caller owns the in-flight reservation for <paramref name="articleId"/>.
+    /// Membership is not an ingestion gate. Release the reservation when ingestion finishes or fails.
     /// </summary>
     /// <param name="articleId">Canonical article identity.</param>
     /// <param name="cancellationToken">Cancels the wait. Cancellation does not leave this caller holding the reservation.</param>
-    /// <returns>Whether the caller must ingest or treat the article as already stored.</returns>
+    /// <returns><see cref="ArticleIngestionHold.Acquired"/> when this caller must publish and index the article.</returns>
     ValueTask<ArticleIngestionHold> ReserveIngestionAsync(ArticleId articleId, CancellationToken cancellationToken);
 
     /// <summary>Releases a reservation acquired by <see cref="ReserveIngestionAsync"/> without changing membership.</summary>

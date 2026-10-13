@@ -46,7 +46,30 @@ public sealed class ArticleIndexPersistenceTests
             Assert.Equal(AcceptedArticleProcessResult.Completed, await processor.ProcessAsync(article, CancellationToken.None));
             Assert.True(index.TryGetIndexedRecord(article.ArtId, out var duplicate));
             Assert.Equal(expected, duplicate.ReceivedAtUnixMilliseconds);
+            Assert.Equal(expected, duplicate.LastAccessedAtUnixMilliseconds);
             Assert.Equal(spool, duplicate.SpoolDirectory);
+            Assert.Equal(1, index.CopyOldest(spool, new ArticleIndexRecord[2]));
+
+            var rewritten = Build("<indexed@example.test>", "replaced-body");
+            Assert.Equal(article.ArtId, rewritten.ArtId);
+            Assert.True(index.Contains(rewritten.ArtId));
+            Assert.Equal(AcceptedArticleProcessResult.Completed, await processor.ProcessAsync(rewritten, CancellationToken.None));
+            var replaced = await File.ReadAllTextAsync(path);
+            Assert.Contains("replaced-body", replaced, StringComparison.Ordinal);
+            Assert.DoesNotContain("body-line", replaced, StringComparison.Ordinal);
+            Assert.True(index.TryGetIndexedRecord(article.ArtId, out var after));
+            Assert.Equal(expected, after.ReceivedAtUnixMilliseconds);
+            Assert.Equal(expected, after.LastAccessedAtUnixMilliseconds);
+            Assert.Equal(1, index.CopyOldest(spool, new ArticleIndexRecord[2]));
+            await ArticleIndexTestSupport.StopAsync(index);
+            index = await ArticleIndexTestSupport.StartAsync(database, catalog);
+            Assert.True(index.Contains(article.ArtId));
+            Assert.True(index.TryGetRetrievableArticle(article.ArtId, out var afterRestart));
+            Assert.Equal(path, afterRestart);
+            Assert.Contains("replaced-body", await File.ReadAllTextAsync(afterRestart), StringComparison.Ordinal);
+            Assert.True(index.TryGetIndexedRecord(article.ArtId, out var reloaded));
+            Assert.Equal(expected, reloaded.ReceivedAtUnixMilliseconds);
+            Assert.Equal(1, index.CopyOldest(spool, new ArticleIndexRecord[2]));
         }
         finally
         {
@@ -58,7 +81,7 @@ public sealed class ArticleIndexPersistenceTests
     }
 
     [Fact]
-    public async Task A_rejected_publish_does_not_index_and_a_failed_commit_is_repaired_from_the_file_name()
+    public async Task A_failed_commit_leaves_the_file_unindexed_until_a_later_delivery()
     {
         var spool = ArticleIndexTestSupport.NewDirectory();
         var database = ArticleIndexTestSupport.NewDirectory();
@@ -89,11 +112,18 @@ public sealed class ArticleIndexPersistenceTests
 
             repaired = await ArticleIndexTestSupport.StartAsync(database, catalog);
             var report = await repaired.Reconciliation.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(report.MissingQueued >= 1);
+            Assert.Equal(0, report.FilesSeen);
+            Assert.Equal(0, report.MissingQueued);
+            Assert.Equal(0, report.RowsProbed);
+            Assert.False(repaired.Contains(article.ArtId));
+            Assert.True(File.Exists(SpoolArticlePath.CombineArticle(spool, article.ArtId)));
+            var again = Processor(catalog, monitor, repaired, TimeProvider.System);
+            Assert.Equal(AcceptedArticleProcessResult.Completed, await again.ProcessAsync(article, CancellationToken.None));
             Assert.True(repaired.Contains(article.ArtId));
             Assert.True(repaired.TryGetRetrievableArticle(article.ArtId, out _));
             Assert.True(repaired.TryGetIndexedRecord(article.ArtId, out var record));
             Assert.Equal(spool, record.SpoolDirectory);
+            Assert.Equal(1, repaired.CopyOldest(spool, new ArticleIndexRecord[2]));
             await ArticleIndexTestSupport.StopAsync(repaired);
             repaired = null;
         }
@@ -111,6 +141,133 @@ public sealed class ArticleIndexPersistenceTests
             }
 
             ArticleIndexTestSupport.Delete(spool);
+            ArticleIndexTestSupport.Delete(database);
+        }
+    }
+
+    [Fact]
+    public async Task Concurrent_deliveries_overwrite_in_order_and_leave_one_row()
+    {
+        var spool = ArticleIndexTestSupport.NewDirectory();
+        var database = ArticleIndexTestSupport.NewDirectory();
+        var catalog = Catalog(spool);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(new DateTimeOffset(2026, 10, 13, 8, 0, 0, TimeSpan.Zero));
+        var expected = clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var monitor = Monitor(catalog, spool);
+        await monitor.StartAsync(CancellationToken.None);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var indexWaiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var index = await ArticleIndexTestSupport.StartAsync(database, catalog, new ArticleIndexSettings
+        {
+            BatchSize = 1,
+            FlushIntervalMilliseconds = 60_000,
+            QueueCapacity = 8,
+            SummaryIntervalMilliseconds = 60_000,
+            BeforeCommit = () =>
+            {
+                indexWaiting.TrySetResult();
+                release.Task.GetAwaiter().GetResult();
+            },
+        });
+        try
+        {
+            await WaitForSpaceAsync(monitor, spool);
+            var processor = Processor(catalog, monitor, index, clock);
+            var first = Build("<concurrent@example.test>", "alpha-body");
+            var second = Build("<concurrent@example.test>", "beta-body");
+            Assert.Equal(first.ArtId, second.ArtId);
+            var firstTask = processor.ProcessAsync(first, CancellationToken.None).AsTask();
+            await indexWaiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            index.OnReservationWaiting = () => secondEntered.TrySetResult();
+            var secondTask = processor.ProcessAsync(second, CancellationToken.None).AsTask();
+            await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(secondTask.IsCompleted);
+            clock.Advance(TimeSpan.FromMinutes(5));
+            release.TrySetResult();
+            Assert.Equal(AcceptedArticleProcessResult.Completed, await firstTask.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(AcceptedArticleProcessResult.Completed, await secondTask.WaitAsync(TimeSpan.FromSeconds(5)));
+            var path = SpoolArticlePath.CombineArticle(spool, first.ArtId);
+            var text = await File.ReadAllTextAsync(path);
+            Assert.Contains("beta-body", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("alpha-body", text, StringComparison.Ordinal);
+            Assert.True(index.TryGetIndexedRecord(first.ArtId, out var record));
+            Assert.Equal(expected, record.ReceivedAtUnixMilliseconds);
+            Assert.Equal(expected, record.LastAccessedAtUnixMilliseconds);
+            Assert.Equal(spool, record.SpoolDirectory);
+            Assert.Equal(1, index.CopyOldest(spool, new ArticleIndexRecord[2]));
+            await ArticleIndexTestSupport.StopAsync(index);
+            index = await ArticleIndexTestSupport.StartAsync(database, catalog);
+            Assert.True(index.Contains(first.ArtId));
+            Assert.Equal(1, index.PresenceCount);
+            Assert.Contains("beta-body", await File.ReadAllTextAsync(path), StringComparison.Ordinal);
+            Assert.True(index.TryGetIndexedRecord(first.ArtId, out var reloaded));
+            Assert.Equal(expected, reloaded.ReceivedAtUnixMilliseconds);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await monitor.StopAsync(CancellationToken.None);
+            await ArticleIndexTestSupport.StopAsync(index);
+            ArticleIndexTestSupport.Delete(spool);
+            ArticleIndexTestSupport.Delete(database);
+        }
+    }
+
+    [Fact]
+    public async Task A_repeat_delivery_overwrites_the_assigned_spool()
+    {
+        var left = ArticleIndexTestSupport.NewDirectory();
+        var right = ArticleIndexTestSupport.NewDirectory();
+        var database = ArticleIndexTestSupport.NewDirectory();
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(new DateTimeOffset(2026, 10, 13, 9, 0, 0, TimeSpan.Zero));
+        var expected = clock.GetUtcNow().ToUnixTimeMilliseconds();
+        var leftCatalog = Catalog(left);
+        var monitor = Monitor(leftCatalog, left);
+        await monitor.StartAsync(CancellationToken.None);
+        var index = await ArticleIndexTestSupport.StartAsync(database, leftCatalog);
+        try
+        {
+            await WaitForSpaceAsync(monitor, left);
+            var processor = Processor(leftCatalog, monitor, index, clock);
+            var article = Build("<pinned@example.test>", "left-body");
+            Assert.Equal(AcceptedArticleProcessResult.Completed, await processor.ProcessAsync(article, CancellationToken.None));
+            await ArticleIndexTestSupport.StopAsync(index);
+            await monitor.StopAsync(CancellationToken.None);
+
+            var both = new SegmentPoolCatalog();
+            both.Publish([new SegmentPoolDevice("block:test", [right, left])]);
+            var probe = new StaticFreeSpaceProbe();
+            probe.Set(left, total: 100_000_000_000, available: 80_000_000_000);
+            probe.Set(right, total: 100_000_000_000, available: 90_000_000_000);
+            monitor = Monitor(both, probe);
+            await monitor.StartAsync(CancellationToken.None);
+            await WaitForSpaceAsync(monitor, left);
+            await WaitForSpaceAsync(monitor, right);
+            clock.Advance(TimeSpan.FromHours(1));
+            index = await ArticleIndexTestSupport.StartAsync(database, both);
+            var again = Processor(both, monitor, index, clock);
+            var repeat = Build("<pinned@example.test>", "still-on-left");
+            Assert.Equal(AcceptedArticleProcessResult.Completed, await again.ProcessAsync(repeat, CancellationToken.None));
+            var leftPath = SpoolArticlePath.CombineArticle(left, article.ArtId);
+            var rightPath = SpoolArticlePath.CombineArticle(right, article.ArtId);
+            Assert.Contains("still-on-left", await File.ReadAllTextAsync(leftPath), StringComparison.Ordinal);
+            Assert.False(File.Exists(rightPath));
+            Assert.True(index.TryGetIndexedRecord(article.ArtId, out var record));
+            Assert.Equal(left, record.SpoolDirectory);
+            Assert.Equal(expected, record.ReceivedAtUnixMilliseconds);
+            Assert.Equal(1, index.CopyOldest(left, new ArticleIndexRecord[2]));
+            Assert.Equal(0, index.CopyOldest(right, new ArticleIndexRecord[2]));
+            Assert.Equal(1, index.PresenceCount);
+        }
+        finally
+        {
+            await monitor.StopAsync(CancellationToken.None);
+            await ArticleIndexTestSupport.StopAsync(index);
+            ArticleIndexTestSupport.Delete(left);
+            ArticleIndexTestSupport.Delete(right);
             ArticleIndexTestSupport.Delete(database);
         }
     }
@@ -164,12 +321,16 @@ public sealed class ArticleIndexPersistenceTests
             index);
     }
 
-    private static AcceptedArticle Build(string messageId)
+    private static AcceptedArticle Build(string messageId) => Build(messageId, "body-line");
+
+    private static AcceptedArticle Build(string messageId, string body)
     {
         var parser = new NntpArticleParser("nntpd01.usenet.ninja");
         var text = "Path: peer.example\r\nDate: Fri, 23 Aug 2024 07:30:10 +0000\r\nMessage-ID: "
             + messageId
-            + "\r\nNewsgroups: alt.test\r\nFrom: user@example.test\r\nSubject: vatp\r\n\r\nbody-line\r\n";
+            + "\r\nNewsgroups: alt.test\r\nFrom: user@example.test\r\nSubject: vatp\r\n\r\n"
+            + body
+            + "\r\n";
         var created = ArticleRecordFactory.TryCreate(parser, Encoding.ASCII.GetBytes(text));
         Assert.True(created.IsAccepted, created.MaterializeFailure.ToString());
         return new AcceptedArticle(created.Record.ArtId, created.Record.ArtHash, created.Record.ArtSize, created.Record.ArtData);

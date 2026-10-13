@@ -71,19 +71,14 @@ internal readonly record struct ArticleIndexRecord(
 /// <param name="CheckpointedFrames">Frames copied back to the database.</param>
 internal readonly record struct ArticleIndexCheckpoint(int Busy, int LogFrames, int CheckpointedFrames);
 
-/// <summary>Startup spool reconciliation counts. Nothing in this report was deleted.</summary>
-/// <param name="FilesSeen">Final article file names visited. Payloads were not read.</param>
-/// <param name="MissingQueued">Names absent from the membership index and then committed.</param>
-/// <param name="AlreadyPresent">Names already in the membership index.</param>
-/// <param name="RowsProbed">Index rows checked for a missing final file.</param>
-/// <param name="StaleRows">Index rows whose final file was absent. The row and membership entry stay.</param>
-/// <param name="ReceiptTimeFromClock">
-/// Missing files whose last-write time was at or before the Unix epoch, or could not be read.
-/// Those rows store the reconciliation clock instead of zero.
-/// </param>
-/// <param name="CrossSpoolDuplicates">
-/// Files or hashes that already belonged to another spool. Both copies were kept.
-/// </param>
+/// <summary>Startup membership counters. Startup does not walk spool files, so every count stays zero.</summary>
+/// <param name="FilesSeen">Always zero. Startup does not visit article file names.</param>
+/// <param name="MissingQueued">Always zero. Startup does not insert rows from file names.</param>
+/// <param name="AlreadyPresent">Always zero.</param>
+/// <param name="RowsProbed">Always zero. Startup does not stat indexed payloads.</param>
+/// <param name="StaleRows">Always zero. A row whose file is missing is left in place and is not counted here.</param>
+/// <param name="ReceiptTimeFromClock">Always zero. Startup does not invent a receipt time from a file.</param>
+/// <param name="CrossSpoolDuplicates">Always zero. Cross-spool hash copies found while loading membership are logged separately.</param>
 internal readonly record struct ArticleIndexReconciliationReport(
     long FilesSeen,
     long MissingQueued,

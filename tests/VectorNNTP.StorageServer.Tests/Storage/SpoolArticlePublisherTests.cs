@@ -26,7 +26,7 @@ public sealed class SpoolArticlePublisherTests
     }
 
     [Fact]
-    public void Duplicate_matching_bytes_are_kept_and_conflicting_bytes_are_not_replaced()
+    public void Duplicate_matching_bytes_and_different_bytes_replace_the_final_file()
     {
         var files = new MemorySpoolArticleFiles();
         var publisher = new SpoolArticlePublisher(files);
@@ -37,9 +37,9 @@ public sealed class SpoolArticlePublisherTests
         var duplicate = publisher.Publish(root, id, first, CancellationToken.None);
         var conflict = publisher.Publish(root, id, "beta"u8, CancellationToken.None);
 
-        Assert.Equal(SpoolPublishKind.Duplicate, duplicate.Kind);
-        Assert.Equal(SpoolPublishKind.Conflict, conflict.Kind);
-        Assert.True(files.ContentsEqual(stored.FinalPath, first));
+        Assert.Equal(SpoolPublishKind.Replaced, duplicate.Kind);
+        Assert.Equal(SpoolPublishKind.Replaced, conflict.Kind);
+        Assert.True(files.ContentsEqual(stored.FinalPath, "beta"u8));
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public sealed class SpoolArticlePublisherTests
     }
 
     [Fact]
-    public void Real_filesystem_publish_round_trips_and_rejects_a_conflict()
+    public void Real_filesystem_publish_round_trips_and_replaces_an_existing_file()
     {
         var root = Path.Combine(Path.GetTempPath(), "vectornntp-spool-" + Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(root);
@@ -95,9 +95,9 @@ public sealed class SpoolArticlePublisherTests
             var onDisk = File.ReadAllBytes(stored.FinalPath);
 
             Assert.Equal(SpoolPublishKind.Stored, stored.Kind);
-            Assert.Equal(SpoolPublishKind.Duplicate, duplicate.Kind);
-            Assert.Equal(SpoolPublishKind.Conflict, conflict.Kind);
-            Assert.Equal(body, onDisk);
+            Assert.Equal(SpoolPublishKind.Replaced, duplicate.Kind);
+            Assert.Equal(SpoolPublishKind.Replaced, conflict.Kind);
+            Assert.Equal("other"u8.ToArray(), onDisk);
             Assert.StartsWith(root, stored.FinalPath, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
             Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(stored.FinalPath)!, "*.writing-*"));
         }
@@ -216,14 +216,13 @@ public sealed class SpoolArticlePublisherTests
         release.TrySetResult();
 
         var results = await Task.WhenAll(first, second);
-        Assert.Equal(1, results.Count(static result => result.Kind == SpoolPublishKind.Stored));
-        Assert.Equal(1, results.Count(static result => result.Kind == SpoolPublishKind.Duplicate));
-        Assert.True(files.ContentsEqual(results.Single(static result => result.Kind == SpoolPublishKind.Stored).FinalPath, body));
+        Assert.All(results, static result => Assert.True(result.Kind is SpoolPublishKind.Stored or SpoolPublishKind.Replaced));
+        Assert.True(files.ContentsEqual(results[0].FinalPath, body));
         Assert.DoesNotContain(files.Snapshot(), static path => path.Contains(".writing-", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task Overlapping_conflicting_writes_keep_the_first_published_bytes()
+    public async Task Overlapping_writes_leave_one_complete_body()
     {
         var files = new MemorySpoolArticleFiles();
         var publisher = new SpoolArticlePublisher(files);
@@ -257,11 +256,12 @@ public sealed class SpoolArticlePublisherTests
         await bothEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
         release.TrySetResult();
         var results = await Task.WhenAll(first, second);
-        var stored = results.Single(static result => result.Kind == SpoolPublishKind.Stored);
-        Assert.Single(results, static result => result.Kind == SpoolPublishKind.Conflict);
-        var storedBody = stored.FinalPath.Length > 0 && files.ContentsEqual(stored.FinalPath, alpha) ? alpha : beta;
-        Assert.True(files.ContentsEqual(stored.FinalPath, storedBody));
-        Assert.False(files.ContentsEqual(stored.FinalPath, storedBody == alpha ? beta : alpha));
+        Assert.All(results, static result => Assert.True(result.Kind is SpoolPublishKind.Stored or SpoolPublishKind.Replaced));
+        var final = results[0].FinalPath;
+        var alphaWon = files.ContentsEqual(final, alpha);
+        var betaWon = files.ContentsEqual(final, beta);
+        Assert.True(alphaWon || betaWon);
+        Assert.False(alphaWon && betaWon);
     }
 }
 
@@ -379,9 +379,9 @@ file sealed class MemorySpoolArticleFiles : ISpoolArticleFiles
     {
         lock (_gate)
         {
-            if (_files.ContainsKey(destination) || !_files.Remove(source, out var bytes))
+            if (!_files.Remove(source, out var bytes))
             {
-                throw new IOException("exists");
+                throw new IOException("missing");
             }
 
             _files[destination] = bytes;

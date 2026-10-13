@@ -476,7 +476,7 @@ public sealed class ArticleIndexTests
     }
 
     [Fact]
-    public async Task Reconciliation_inserts_a_spooled_hash_and_counts_a_stale_row_without_deleting_it()
+    public async Task Startup_retains_a_row_without_a_payload_and_does_not_index_an_untracked_file()
     {
         var root = ArticleIndexTestSupport.NewDirectory();
         var spool = ArticleIndexTestSupport.NewDirectory();
@@ -490,21 +490,26 @@ public sealed class ArticleIndexTests
             catalog.Publish([new SegmentPoolDevice("block:test", [spool])]);
             var index = await ArticleIndexTestSupport.StartAsync(root, catalog);
             var report = await index.Reconciliation.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(1, report.MissingQueued);
-            Assert.True(index.Contains(planted));
-            Assert.True(index.TryGetRetrievableArticle(planted, out var retrieved));
-            Assert.Equal(path, retrieved);
+            Assert.Equal(0, report.FilesSeen);
+            Assert.Equal(0, report.MissingQueued);
+            Assert.Equal(0, report.RowsProbed);
+            Assert.False(index.Contains(planted));
+            Assert.Equal("stored", await File.ReadAllTextAsync(path));
 
             var stale = ArticleIndexTestSupport.Id(71);
             await index.InsertStoredAsync(stale, spool, 80, CancellationToken.None);
             await ArticleIndexTestSupport.StopAsync(index);
             var again = await ArticleIndexTestSupport.StartAsync(root, catalog);
             var second = await again.Reconciliation.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(second.StaleRows >= 1);
+            Assert.Equal(0, second.FilesSeen);
+            Assert.Equal(0, second.StaleRows);
+            Assert.Equal(0, second.RowsProbed);
             Assert.True(again.Contains(stale));
             Assert.False(again.TryGetRetrievableArticle(stale, out _));
             Assert.True(again.TryGetIndexedRecord(stale, out var staleRecord));
             Assert.Equal(80, staleRecord.ReceivedAtUnixMilliseconds);
+            Assert.True(File.Exists(path));
+            Assert.False(again.Contains(planted));
             await ArticleIndexTestSupport.StopAsync(again);
         }
         finally
@@ -660,7 +665,7 @@ public sealed class ArticleIndexTests
     }
 
     [Fact]
-    public async Task Recovery_uses_file_time_and_does_not_store_zero_when_that_time_is_unusable()
+    public async Task Startup_does_not_index_payload_files_and_a_later_insert_keeps_received_at()
     {
         var root = ArticleIndexTestSupport.NewDirectory();
         var spool = ArticleIndexTestSupport.NewDirectory();
@@ -675,27 +680,28 @@ public sealed class ArticleIndexTests
             await File.WriteAllTextAsync(datedPath, "dated");
             await File.WriteAllTextAsync(undatedPath, "undated");
             await File.WriteAllTextAsync(Path.Combine(spool, "not-an-article.txt"), "skip");
-            var fileTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            File.SetLastWriteTimeUtc(datedPath, fileTime);
-            File.SetLastWriteTimeUtc(undatedPath, new DateTime(1960, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-            var before = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var catalog = new SegmentPoolCatalog();
             catalog.Publish([new SegmentPoolDevice("block:test", [spool])]);
             var index = await ArticleIndexTestSupport.StartAsync(root, catalog);
             var report = await index.Reconciliation;
-            Assert.Equal(2, report.FilesSeen);
-            Assert.Equal(2, report.MissingQueued);
-            Assert.Equal(1, report.ReceiptTimeFromClock);
-            Assert.True(index.TryGetIndexedRecord(dated, out var datedRecord));
-            Assert.Equal(new DateTimeOffset(fileTime).ToUnixTimeMilliseconds(), datedRecord.ReceivedAtUnixMilliseconds);
-            Assert.True(index.TryGetIndexedRecord(undated, out var undatedRecord));
-            Assert.True(undatedRecord.ReceivedAtUnixMilliseconds >= before);
-            Assert.NotEqual(0, undatedRecord.ReceivedAtUnixMilliseconds);
+            Assert.Equal(0, report.FilesSeen);
+            Assert.Equal(0, report.MissingQueued);
+            Assert.Equal(0, report.RowsProbed);
+            Assert.Equal(0, report.ReceiptTimeFromClock);
+            Assert.False(index.Contains(dated));
+            Assert.False(index.Contains(undated));
+            Assert.Equal("dated", await File.ReadAllTextAsync(datedPath));
+            Assert.Equal("undated", await File.ReadAllTextAsync(undatedPath));
 
-            var kept = await index.InsertStoredAsync(dated, spool, before + 10_000, CancellationToken.None);
+            var first = await index.InsertStoredAsync(dated, spool, 80, CancellationToken.None);
+            var kept = await index.InsertStoredAsync(dated, spool, 90_000, CancellationToken.None);
+            Assert.True(first.Inserted);
             Assert.False(kept.Inserted);
             Assert.True(index.TryGetIndexedRecord(dated, out var still));
-            Assert.Equal(datedRecord.ReceivedAtUnixMilliseconds, still.ReceivedAtUnixMilliseconds);
+            Assert.Equal(80, still.ReceivedAtUnixMilliseconds);
+            Assert.Equal(80, still.LastAccessedAtUnixMilliseconds);
+            var rows = new ArticleIndexRecord[4];
+            Assert.Equal(1, index.CopyOldest(spool, rows));
             await ArticleIndexTestSupport.StopAsync(index);
         }
         finally
@@ -892,7 +898,8 @@ public sealed class ArticleIndexTests
             Assert.Equal(ArticleIngestionHold.Acquired, await waiting.WaitAsync(TimeSpan.FromSeconds(5)));
             await index.InsertStoredAsync(id, spool, 40, CancellationToken.None);
             index.ReleaseIngestion(id);
-            Assert.Equal(ArticleIngestionHold.AlreadyPresent, await index.ReserveIngestionAsync(id, CancellationToken.None));
+            Assert.Equal(ArticleIngestionHold.Acquired, await index.ReserveIngestionAsync(id, CancellationToken.None));
+            index.ReleaseIngestion(id);
             await ArticleIndexTestSupport.StopAsync(index);
         }
         finally
@@ -1116,7 +1123,7 @@ public sealed class ArticleIndexTests
     }
 
     [Fact]
-    public async Task Reconciliation_ignores_invalid_names_and_keeps_a_named_file_without_hashing_its_bytes()
+    public async Task Startup_leaves_payload_names_and_invalid_names_unindexed()
     {
         var root = ArticleIndexTestSupport.NewDirectory();
         var spool = ArticleIndexTestSupport.NewDirectory();
@@ -1126,18 +1133,22 @@ public sealed class ArticleIndexTests
             var ignored = ArticleIndexTestSupport.Id(99);
             var path = ArticleIndexTestSupport.PlacePayload(spool, stored, "not-the-digest");
             var leaf = Path.GetDirectoryName(path)!;
+            var uppercase = Path.Combine(leaf, ignored.ToLowerHexString().ToUpperInvariant());
+            var temporary = path + ".writing-0123456789abcdef0123456789abcdef";
             await File.WriteAllTextAsync(Path.Combine(leaf, "not-a-hash"), "ignored");
-            await File.WriteAllTextAsync(Path.Combine(leaf, ignored.ToLowerHexString().ToUpperInvariant()), "uppercase");
-            await File.WriteAllTextAsync(path + ".writing-0123456789abcdef0123456789abcdef", "temp");
+            await File.WriteAllTextAsync(uppercase, "uppercase");
+            await File.WriteAllTextAsync(temporary, "temp");
             await File.WriteAllTextAsync(Path.Combine(leaf, stored.ToLowerHexString()[..63]), "short");
             var index = await ArticleIndexTestSupport.StartSpoolAsync(root, spool);
             var report = await index.Reconciliation.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(1, report.FilesSeen);
-            Assert.Equal(1, report.MissingQueued);
-            Assert.True(index.Contains(stored));
-            Assert.True(index.TryGetRetrievableArticle(stored, out var retrieved));
-            Assert.Equal(path, retrieved);
-            Assert.Equal("not-the-digest", await File.ReadAllTextAsync(retrieved));
+            Assert.Equal(0, report.FilesSeen);
+            Assert.Equal(0, report.MissingQueued);
+            Assert.Equal(0, report.RowsProbed);
+            Assert.False(index.Contains(stored));
+            Assert.False(index.Contains(ignored));
+            Assert.Equal("not-the-digest", await File.ReadAllTextAsync(path));
+            Assert.Equal("uppercase", await File.ReadAllTextAsync(uppercase));
+            Assert.Equal("temp", await File.ReadAllTextAsync(temporary));
             await ArticleIndexTestSupport.StopAsync(index);
         }
         finally
