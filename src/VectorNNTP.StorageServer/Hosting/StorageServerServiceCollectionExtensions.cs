@@ -17,6 +17,7 @@ using VectorNNTP.StorageServer.Listener;
 using VectorNNTP.StorageServer.NntpDb;
 using VectorNNTP.StorageServer.Storage;
 using VectorNNTP.StorageServer.Storage.SegmentPools;
+using VectorNNTP.StorageServer.Storage.SpoolShards;
 using VectorNNTP.Common.Configuration;
 
 namespace VectorNNTP.StorageServer.Hosting;
@@ -137,7 +138,9 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILinuxSysfs, LinuxSysfsReader>();
         builder.Services.TryAddSingleton<ISegmentPoolInspector, PlatformSegmentPoolInspector>();
         builder.Services.TryAddSingleton<IBlockDeviceCounterSource, PlatformBlockDeviceCounterSource>();
+        builder.Services.TryAddSingleton<ISpoolShardDirectorySystem, FileSpoolShardDirectorySystem>();
         builder.Services.TryAddSingleton<SegmentPoolValidationService>();
+        builder.Services.TryAddSingleton<SpoolShardInitializationService>();
         builder.Services.TryAddSingleton<BlockDeviceMonitorService>();
 
         builder.Services.TryAddSingleton<INntpDbConnectionFactory, MySqlNntpDbConnectionFactory>();
@@ -147,8 +150,9 @@ public static class StorageServerServiceCollectionExtensions
             provider.GetRequiredService<StorageServerSharedConfigurationService>());
 
         // Startup order: NntpDB → nntpsharedconfig → Cloudflare → RabbitMQ → ACME →
-        // segment-pool validation → block-device monitor → accepted-article worker → Listener → AdvertisementPublisher.
-        // Validation throws before the worker, listener, or advertisement publisher start.
+        // segment-pool validation → spool shard initialization → block-device monitor →
+        // accepted-article worker → Listener → AdvertisementPublisher.
+        // Validation and shard initialization throw before the worker, listener, or advertisement publisher start.
         // ApplicationServiceManager stops in reverse, so advertisement stops first and the worker stops after the listener completes the queue.
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, NntpDbService>(static provider =>
@@ -166,6 +170,9 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, SegmentPoolValidationService>(static provider =>
                 provider.GetRequiredService<SegmentPoolValidationService>()));
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IApplicationService, SpoolShardInitializationService>(static provider =>
+                provider.GetRequiredService<SpoolShardInitializationService>()));
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, BlockDeviceMonitorService>(static provider =>
                 provider.GetRequiredService<BlockDeviceMonitorService>()));
