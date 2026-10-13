@@ -32,13 +32,14 @@ internal static class ArticleIndexTestSupport
     internal static ArticleIndexService Create(
         string databaseDirectory,
         SegmentPoolCatalog? catalog = null,
-        ArticleIndexSettings? settings = null)
+        ArticleIndexSettings? settings = null,
+        TimeProvider? time = null)
     {
         return new ArticleIndexService(
             new StorageServerOptions { DbDir = databaseDirectory },
             catalog ?? new SegmentPoolCatalog(),
             NullLogger<ArticleIndexService>.Instance,
-            TimeProvider.System,
+            time ?? TimeProvider.System,
             settings ?? FastSettings());
     }
 
@@ -52,15 +53,17 @@ internal static class ArticleIndexTestSupport
     internal static Task<ArticleIndexService> StartSpoolAsync(
         string databaseDirectory,
         string spool,
-        ArticleIndexSettings? settings = null) =>
-        StartAsync(databaseDirectory, Catalog(spool), settings);
+        ArticleIndexSettings? settings = null,
+        TimeProvider? time = null) =>
+        StartAsync(databaseDirectory, Catalog(spool), settings, time);
 
     internal static async Task<ArticleIndexService> StartAsync(
         string databaseDirectory,
         SegmentPoolCatalog? catalog = null,
-        ArticleIndexSettings? settings = null)
+        ArticleIndexSettings? settings = null,
+        TimeProvider? time = null)
     {
-        var service = Create(databaseDirectory, catalog, settings);
+        var service = Create(databaseDirectory, catalog, settings, time);
         await service.StartAsync(CancellationToken.None);
         return service;
     }

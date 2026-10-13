@@ -82,6 +82,13 @@ public sealed partial class StorageVatpSession
             return false;
         }
 
+        if (store.MetaSeen || store.BodyAuthorized || store.AdmissionTask is not null)
+        {
+            RemoveStore(streamId);
+            await WriteFailAsync(streamId, VatpErrorCode.InvalidStateTransition, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
         Span<byte> metaBytes = stackalloc byte[VatpProtocol.MetaPayloadLength];
         if (frame.Payload.Length != VatpProtocol.MetaPayloadLength)
         {
@@ -98,7 +105,183 @@ public sealed partial class StorageVatpSession
             return true;
         }
 
-        var apply = store.Receive.TryAcceptMeta(frame.Payload);
+        if (meta.ArtSize < 1 || meta.ArtSize > ArticleResourceLimits.MaxArticleBytes)
+        {
+            RemoveStore(streamId);
+            await WriteFailAsync(streamId, VatpErrorCode.ArticleTooLarge, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        var queue = _acceptedArticles;
+        if (queue is null)
+        {
+            return await AcceptMetaWithoutReservationAsync(streamId, store, frame.Payload, meta, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (meta.ArtSize > queue.MaxQueuedBytes || queue.IsCompleted)
+        {
+            RemoveStore(streamId);
+            if (meta.ArtSize > queue.MaxQueuedBytes && !queue.IsCompleted)
+            {
+                await WriteEncodedAsync(
+                        VatpFrameEncoder.EncodeResult(streamId, VatpStoreOutcome.RejectedCapacity),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return true;
+            }
+
+            await WriteFailAsync(streamId, VatpErrorCode.Cancelled, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        if (queue.TryReserve(meta.ArtSize, out var reserved))
+        {
+            return await AuthorizeReservedBodyAsync(streamId, store, frame.Payload, meta, reserved, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var metaCopy = new byte[VatpProtocol.MetaPayloadLength];
+        frame.Payload.CopyTo(metaCopy);
+        lock (_storeGate)
+        {
+            if (store.MetaSeen || store.AdmissionTask is not null)
+            {
+                RemoveStore(streamId);
+            }
+            else
+            {
+                store.PendingMeta = metaCopy;
+                store.AdmissionCts = CancellationTokenSource.CreateLinkedTokenSource(_runCancellation);
+                store.AdmissionTask = AdmitWhenCapacityAsync(streamId, store, meta.ArtSize, store.AdmissionCts.Token);
+                SyncAdmissionReadTimeout();
+            }
+        }
+
+        if (store.AdmissionTask is null)
+        {
+            await WriteFailAsync(streamId, VatpErrorCode.InvalidStateTransition, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        StorageVatpSessionLogMessages.StoreAdmissionWaiting(_logger, streamId, meta.ArtSize);
+        return true;
+    }
+
+    private async Task AdmitWhenCapacityAsync(
+        uint streamId,
+        StoreStream store,
+        int bytes,
+        CancellationToken cancellationToken)
+    {
+        QueueReservation? reservation = null;
+        try
+        {
+            reservation = await _acceptedArticles!.ReserveAsync(bytes, cancellationToken).ConfigureAwait(false);
+            byte[]? metaCopy;
+            lock (_storeGate)
+            {
+                if (store.Closed || !_storeStreams.ContainsKey(streamId) || store.PendingMeta is null)
+                {
+                    metaCopy = null;
+                }
+                else if (reservation is null)
+                {
+                    metaCopy = null;
+                    store.AdmissionFailed = true;
+                }
+                else
+                {
+                    metaCopy = store.PendingMeta;
+                    store.Reservation = reservation.Value;
+                    store.HasReservation = true;
+                    reservation = null;
+                }
+            }
+
+            if (metaCopy is null)
+            {
+                if (reservation is { } abandoned)
+                {
+                    _acceptedArticles.Release(abandoned);
+                }
+
+                if (store.AdmissionFailed && !store.Closed)
+                {
+                    RemoveStore(streamId);
+                    await WriteFailAsync(streamId, VatpErrorCode.Cancelled, CancellationToken.None).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            if (!VatpMetaCodec.TryDecode(metaCopy, out var meta, out var decodeError))
+            {
+                RemoveStore(streamId);
+                await WriteFailAsync(streamId, decodeError, CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+
+            await AuthorizeReservedBodyAsync(
+                    streamId,
+                    store,
+                    new ReadOnlySequence<byte>(metaCopy),
+                    meta,
+                    store.Reservation,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            if (reservation is { } abandoned)
+            {
+                _acceptedArticles?.Release(abandoned);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            if (reservation is { } abandoned)
+            {
+                _acceptedArticles?.Release(abandoned);
+            }
+        }
+        finally
+        {
+            lock (_storeGate)
+            {
+                SyncAdmissionReadTimeout();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Suspends the read no-progress timeout while a STORE is waiting for queue capacity.
+    /// Resumes it when no such wait remains, including after WINDOW is granted.
+    /// Caller holds <see cref="_storeGate"/>.
+    /// </summary>
+    private void SyncAdmissionReadTimeout()
+    {
+        var pending = false;
+        foreach (var store in _storeStreams.Values)
+        {
+            if (!store.Closed && !store.BodyAuthorized && store.AdmissionTask is { IsCompleted: false })
+            {
+                pending = true;
+                break;
+            }
+        }
+
+        _transport.SetReadProgressSuspended(pending);
+    }
+
+    private async Task<bool> AcceptMetaWithoutReservationAsync(
+        uint streamId,
+        StoreStream store,
+        ReadOnlySequence<byte> payload,
+        ArticleCanonicalTransferMeta meta,
+        CancellationToken cancellationToken)
+    {
+        var apply = store.Receive.TryAcceptMeta(payload);
         if (!apply.Success)
         {
             RemoveStore(streamId);
@@ -109,6 +292,72 @@ public sealed partial class StorageVatpSession
         store.MetaArtHash = meta.ArtHash;
         store.MetaArtSize = meta.ArtSize;
         store.MetaSeen = true;
+        store.BodyAuthorized = true;
+        return true;
+    }
+
+    private async Task<bool> AuthorizeReservedBodyAsync(
+        uint streamId,
+        StoreStream store,
+        ReadOnlySequence<byte> payload,
+        ArticleCanonicalTransferMeta meta,
+        QueueReservation reservation,
+        CancellationToken cancellationToken)
+    {
+        VatpErrorCode failure;
+        lock (_storeGate)
+        {
+            if (store.Closed || store.BodyAuthorized)
+            {
+                failure = VatpErrorCode.InvalidStateTransition;
+            }
+            else
+            {
+                var apply = store.Receive.TryAcceptMeta(payload);
+                if (!apply.Success)
+                {
+                    failure = store.Receive.Failure;
+                }
+                else
+                {
+                    store.Reservation = reservation;
+                    store.HasReservation = true;
+                    store.MetaArtHash = meta.ArtHash;
+                    store.MetaArtSize = meta.ArtSize;
+                    store.MetaSeen = true;
+                    store.BodyAuthorized = true;
+                    Interlocked.Increment(ref StoreBodiesAllocated);
+                    failure = VatpErrorCode.None;
+                }
+            }
+        }
+
+        if (failure != VatpErrorCode.None)
+        {
+            if (store.HasReservation)
+            {
+                store.HasReservation = false;
+                _acceptedArticles?.Release(store.Reservation);
+            }
+            else
+            {
+                _acceptedArticles?.Release(reservation);
+            }
+
+            RemoveStore(streamId);
+            await WriteFailAsync(streamId, failure, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        var grant = _limits.InitialStreamWindowBytes;
+        if (grant > 0)
+        {
+            await WriteEncodedAsync(
+                    VatpFrameEncoder.EncodeWindow(streamId, (uint)grant),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         return true;
     }
 
@@ -121,8 +370,29 @@ public sealed partial class StorageVatpSession
             return false;
         }
 
+        ArticleTransferApplyResult apply;
+        var unauthorized = false;
         var dataStarted = Stopwatch.GetTimestamp();
-        var apply = store.Receive.TryAcceptData(frame.Payload, frame.Header.HasFin);
+        lock (_storeGate)
+        {
+            if (!store.BodyAuthorized || store.Closed)
+            {
+                unauthorized = true;
+                apply = ArticleTransferApplyResult.Fail(VatpErrorCode.FlowControlViolation);
+            }
+            else
+            {
+                apply = store.Receive.TryAcceptData(frame.Payload, frame.Header.HasFin);
+            }
+        }
+
+        if (unauthorized)
+        {
+            RemoveStore(streamId);
+            await WriteFailAsync(streamId, VatpErrorCode.FlowControlViolation, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
         Interlocked.Add(ref _dataAcceptTicks, Stopwatch.GetTimestamp() - dataStarted);
         Interlocked.Increment(ref _dataAcceptCount);
         if (apply.Success)
@@ -169,12 +439,16 @@ public sealed partial class StorageVatpSession
         }
 
         var endStarted = Stopwatch.GetTimestamp();
-        var apply = store.Receive.TryAcceptEnd();
+        ArticleTransferApplyResult apply;
         var tookRecord = false;
         ArticleRecord record = default;
-        if (apply.Success)
+        lock (_storeGate)
         {
-            tookRecord = store.Receive.TryTakeRecord(out record);
+            apply = store.Receive.TryAcceptEnd();
+            if (apply.Success)
+            {
+                tookRecord = store.Receive.TryTakeRecord(out record);
+            }
         }
 
         Interlocked.Add(ref _endValidateTicks, Stopwatch.GetTimestamp() - endStarted);
@@ -205,7 +479,24 @@ public sealed partial class StorageVatpSession
         }
 
         var queued = new AcceptedArticle(record.ArtId, record.ArtHash, record.ArtSize, record.ArtData);
-        if (!_acceptedArticles.TryEnqueue(queued))
+        var committed = false;
+        if (store.HasReservation)
+        {
+            try
+            {
+                committed = _acceptedArticles.TryCommit(store.Reservation, queued);
+            }
+            catch
+            {
+                RemoveStore(streamId);
+                throw;
+            }
+
+            store.HasReservation = false;
+            store.Committed = committed;
+        }
+
+        if (!committed)
         {
             RemoveStore(streamId);
             await WriteFailAsync(streamId, VatpErrorCode.IncompleteTransfer, cancellationToken).ConfigureAwait(false);
@@ -255,10 +546,30 @@ public sealed partial class StorageVatpSession
 
     private void RemoveStore(uint streamId)
     {
-        if (_storeStreams.TryRemove(streamId, out var store) && store.SlotHeld)
+        if (!_storeStreams.TryRemove(streamId, out var store))
+        {
+            return;
+        }
+
+        store.Closed = true;
+        if (store.SlotHeld)
         {
             store.SlotHeld = false;
             _storeAdmission?.Exit();
+        }
+
+        try
+        {
+            store.AdmissionCts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        if (store.HasReservation && !store.Committed)
+        {
+            store.HasReservation = false;
+            _acceptedArticles?.Release(store.Reservation);
         }
     }
 
@@ -296,5 +607,23 @@ public sealed partial class StorageVatpSession
         public int MetaArtSize { get; set; }
 
         public bool AcceptStarted { get; set; }
+
+        public bool BodyAuthorized { get; set; }
+
+        public bool HasReservation { get; set; }
+
+        public bool Committed { get; set; }
+
+        public bool Closed { get; set; }
+
+        public bool AdmissionFailed { get; set; }
+
+        public QueueReservation Reservation { get; set; }
+
+        public byte[]? PendingMeta { get; set; }
+
+        public CancellationTokenSource? AdmissionCts { get; set; }
+
+        public Task? AdmissionTask { get; set; }
     }
 }

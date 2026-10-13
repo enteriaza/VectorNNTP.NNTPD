@@ -227,6 +227,16 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
     {
         private Func<RabbitMqManualAckDelivery, Task>? _onDelivery;
 
+        /// <summary>
+        /// Serializes appends to <see cref="Settlements"/>.
+        /// </summary>
+        /// <remarks>
+        /// A queued delivery cancelled because <c>DrainQueuedWork</c> is false is settled while the
+        /// active delivery may settle on this same channel. <see cref="List{T}"/> loses an append
+        /// when those two calls overlap.
+        /// </remarks>
+        private readonly Lock _settlementsGate = new();
+
         public long Generation { get; } = generation;
 
         public bool IsOpen { get; set; } = true;
@@ -384,7 +394,10 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
                 throw AckException;
             }
 
-            Settlements.Add(new FakeRabbitMqSettlement(deliveryTag, Acknowledge: true, Requeue: false));
+            lock (_settlementsGate)
+            {
+                Settlements.Add(new FakeRabbitMqSettlement(deliveryTag, Acknowledge: true, Requeue: false));
+            }
         }
 
         public Task BasicNackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken)
@@ -401,7 +414,11 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
                 throw NackException;
             }
 
-            Settlements.Add(new FakeRabbitMqSettlement(deliveryTag, Acknowledge: false, requeue));
+            lock (_settlementsGate)
+            {
+                Settlements.Add(new FakeRabbitMqSettlement(deliveryTag, Acknowledge: false, requeue));
+            }
+
             return Task.CompletedTask;
         }
 

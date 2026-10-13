@@ -1,5 +1,7 @@
+using System.Runtime.ExceptionServices;
 using System.Text;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Time.Testing;
 using VectorNNTP.Common.Articles;
 using VectorNNTP.StorageServer.Storage.ArticleIndex;
 using VectorNNTP.StorageServer.Storage.SegmentPools;
@@ -9,6 +11,12 @@ namespace VectorNNTP.StorageServer.Tests.Storage;
 
 public sealed class ArticleIndexTests
 {
+    /// <summary>
+    /// Marks the execution context of one interval-flush test so a process-wide first-chance
+    /// handler can ignore exceptions thrown by tests running on other contexts.
+    /// </summary>
+    private static readonly AsyncLocal<int> IntervalFlushExceptionScope = new();
+
     [Fact]
     public async Task Database_reopens_with_schema_version_2_and_page_size_8192()
     {
@@ -1296,6 +1304,375 @@ public sealed class ArticleIndexTests
             ArticleIndexTestSupport.Delete(root + "-reserve");
             ArticleIndexTestSupport.Delete(spool);
         }
+    }
+
+    [Fact]
+    public async Task A_command_arriving_during_the_flush_interval_joins_the_open_batch()
+    {
+        var root = ArticleIndexTestSupport.NewDirectory();
+        var spool = ArticleIndexTestSupport.NewDirectory();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var index = await ArticleIndexTestSupport.StartSpoolAsync(root, spool, new ArticleIndexSettings
+            {
+                BatchSize = 2,
+                FlushIntervalMilliseconds = 60_000,
+                QueueCapacity = 8,
+                SummaryIntervalMilliseconds = 60_000,
+                BeforeReadAsync = async cancellationToken =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.WaitAsync(cancellationToken);
+                },
+            });
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var first = index.InsertStoredAsync(ArticleIndexTestSupport.Id(1), spool, 10, CancellationToken.None).AsTask();
+            await WaitAsync(() => index.Counters.QueueDepth == 1);
+            release.TrySetResult();
+            await WaitAsync(() => index.Counters.QueueDepth == 0 && index.Counters.Batches == 0);
+            var second = index.InsertStoredAsync(ArticleIndexTestSupport.Id(2), spool, 11, CancellationToken.None).AsTask();
+            await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(1, index.Counters.Batches);
+            Assert.Equal(2, index.PresenceCount);
+            await ArticleIndexTestSupport.StopAsync(index).WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            ArticleIndexTestSupport.Delete(root);
+            ArticleIndexTestSupport.Delete(spool);
+        }
+    }
+
+    [Fact]
+    public async Task Partial_batch_flushes_once_when_the_provider_clock_advances()
+    {
+        var root = ArticleIndexTestSupport.NewDirectory();
+        var spool = ArticleIndexTestSupport.NewDirectory();
+        var clock = new FakeTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var index = await StartHeldAsync(root, spool, clock, entered, release, batchSize: 32, flushMilliseconds: 1_000);
+            var insert = index.InsertStoredAsync(ArticleIndexTestSupport.Id(1), spool, 10, CancellationToken.None).AsTask();
+            await WaitAsync(() => index.Counters.QueueDepth == 1);
+            release.TrySetResult();
+            await WaitAsync(() => index.ActiveIntervalWaits == 1 && index.Counters.Batches == 0);
+            clock.Advance(TimeSpan.FromMilliseconds(1_000));
+            await insert.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(1, index.Counters.Batches);
+            Assert.Equal(0, index.ActiveIntervalWaits);
+            Assert.True(index.PendingReads <= 1);
+            clock.Advance(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, index.Counters.Batches);
+            Assert.True(index.Contains(ArticleIndexTestSupport.Id(1)));
+            await ArticleIndexTestSupport.StopAsync(index).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(0, index.PendingReads);
+            Assert.Equal(0, index.ActiveIntervalWaits);
+        }
+        finally
+        {
+            ArticleIndexTestSupport.Delete(root);
+            ArticleIndexTestSupport.Delete(spool);
+        }
+    }
+
+    [Fact]
+    public async Task A_command_arriving_before_the_interval_commits_without_advancing_the_clock()
+    {
+        var root = ArticleIndexTestSupport.NewDirectory();
+        var spool = ArticleIndexTestSupport.NewDirectory();
+        var clock = new FakeTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var index = await StartHeldAsync(root, spool, clock, entered, release, batchSize: 2, flushMilliseconds: 60_000);
+            var first = index.InsertStoredAsync(ArticleIndexTestSupport.Id(1), spool, 10, CancellationToken.None).AsTask();
+            await WaitAsync(() => index.Counters.QueueDepth == 1);
+            release.TrySetResult();
+            await WaitAsync(() => index.ActiveIntervalWaits == 1 && index.Counters.Batches == 0);
+            var second = index.InsertStoredAsync(ArticleIndexTestSupport.Id(2), spool, 11, CancellationToken.None).AsTask();
+            await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(1, index.Counters.Batches);
+            Assert.Equal(2, index.PresenceCount);
+            Assert.Equal(0, index.ActiveIntervalWaits);
+            Assert.True(index.PendingReads <= 1);
+            await ArticleIndexTestSupport.StopAsync(index).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(0, index.PendingReads);
+        }
+        finally
+        {
+            ArticleIndexTestSupport.Delete(root);
+            ArticleIndexTestSupport.Delete(spool);
+        }
+    }
+
+    [Fact]
+    public async Task Repeated_interval_flushes_do_not_accumulate_reads_timers_or_cancellation_exceptions()
+    {
+        var root = ArticleIndexTestSupport.NewDirectory();
+        var spool = ArticleIndexTestSupport.NewDirectory();
+        var clock = new FakeTimeProvider();
+        var reachedStop = false;
+        var thrown = new int[1];
+        ArticleIndexService? index = null;
+        EventHandler<FirstChanceExceptionEventArgs>? firstChance = null;
+        try
+        {
+            IntervalFlushExceptionScope.Value = 1;
+            index = await ArticleIndexTestSupport.StartSpoolAsync(root, spool, new ArticleIndexSettings
+            {
+                BatchSize = 32,
+                FlushIntervalMilliseconds = 1_000,
+                QueueCapacity = 8,
+                SummaryIntervalMilliseconds = 60_000,
+            }, clock);
+            const int count = 20;
+            firstChance = (_, _) =>
+            {
+                if (IntervalFlushExceptionScope.Value == 1)
+                {
+                    Interlocked.Increment(ref thrown[0]);
+                }
+            };
+            AppDomain.CurrentDomain.FirstChanceException += firstChance;
+            for (var i = 0; i < count; i++)
+            {
+                var insert = index.InsertStoredAsync(ArticleIndexTestSupport.Id(i), spool, 1_000 + i, CancellationToken.None).AsTask();
+                await WaitAsync(() => index.ActiveIntervalWaits == 1 && index.Counters.Batches == i);
+                Assert.True(index.PendingReads <= 1);
+                clock.Advance(TimeSpan.FromMilliseconds(1_000));
+                await insert.WaitAsync(TimeSpan.FromSeconds(2));
+                Assert.Equal(i + 1, index.Counters.Batches);
+                Assert.Equal(0, index.ActiveIntervalWaits);
+            }
+
+            AppDomain.CurrentDomain.FirstChanceException -= firstChance;
+            firstChance = null;
+            Assert.Equal(count, index.PresenceCount);
+            Assert.Equal(0, index.Counters.Duplicates);
+            Assert.True(thrown[0] < count, $"exception delta {thrown[0]} for {count} interval flushes");
+            await ArticleIndexTestSupport.StopAsync(index).WaitAsync(TimeSpan.FromSeconds(2));
+            reachedStop = true;
+            Assert.Equal(0, index.PendingReads);
+            Assert.Equal(0, index.ActiveIntervalWaits);
+        }
+        finally
+        {
+            if (firstChance is not null)
+            {
+                AppDomain.CurrentDomain.FirstChanceException -= firstChance;
+            }
+
+            IntervalFlushExceptionScope.Value = 0;
+            if (index is not null && !reachedStop)
+            {
+                try
+                {
+                    await index.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _ = ex;
+                }
+            }
+
+            ArticleIndexTestSupport.Delete(root);
+            ArticleIndexTestSupport.Delete(spool);
+        }
+    }
+
+    [Fact]
+    public async Task Stop_during_the_interval_wait_commits_the_open_batch_and_releases_the_wait()
+    {
+        var root = ArticleIndexTestSupport.NewDirectory();
+        var spool = ArticleIndexTestSupport.NewDirectory();
+        var clock = new FakeTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var index = await StartHeldAsync(root, spool, clock, entered, release, batchSize: 32, flushMilliseconds: 60_000);
+            var insert = index.InsertStoredAsync(ArticleIndexTestSupport.Id(7), spool, 70, CancellationToken.None).AsTask();
+            await WaitAsync(() => index.Counters.QueueDepth == 1);
+            release.TrySetResult();
+            await WaitAsync(() => index.ActiveIntervalWaits == 1 && index.Counters.Batches == 0);
+            await index.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+            await insert.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(index.Contains(ArticleIndexTestSupport.Id(7)));
+            Assert.Equal(0, index.PendingReads);
+            Assert.Equal(0, index.ActiveIntervalWaits);
+        }
+        finally
+        {
+            ArticleIndexTestSupport.Delete(root);
+            ArticleIndexTestSupport.Delete(spool);
+        }
+    }
+
+    [Fact]
+    public async Task A_command_and_interval_completing_together_commit_each_record_once()
+    {
+        var root = ArticleIndexTestSupport.NewDirectory();
+        var spool = ArticleIndexTestSupport.NewDirectory();
+        var clock = new FakeTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var index = await StartHeldAsync(root, spool, clock, entered, release, batchSize: 32, flushMilliseconds: 1_000);
+            var first = index.InsertStoredAsync(ArticleIndexTestSupport.Id(1), spool, 10, CancellationToken.None).AsTask();
+            await WaitAsync(() => index.Counters.QueueDepth == 1);
+            release.TrySetResult();
+            await WaitAsync(() => index.ActiveIntervalWaits == 1 && index.Counters.Batches == 0);
+            var second = index.InsertStoredAsync(ArticleIndexTestSupport.Id(2), spool, 11, CancellationToken.None).AsTask();
+            clock.Advance(TimeSpan.FromMilliseconds(1_000));
+            await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(2, index.PresenceCount);
+            Assert.Equal(0, index.Counters.Duplicates);
+            Assert.True(index.Contains(ArticleIndexTestSupport.Id(1)));
+            Assert.True(index.Contains(ArticleIndexTestSupport.Id(2)));
+            Assert.Equal(0, index.ActiveIntervalWaits);
+            await ArticleIndexTestSupport.StopAsync(index).WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            ArticleIndexTestSupport.Delete(root);
+            ArticleIndexTestSupport.Delete(spool);
+        }
+    }
+
+    [Fact]
+    public async Task A_faulted_command_channel_fails_the_open_batch()
+    {
+        var root = ArticleIndexTestSupport.NewDirectory();
+        var spool = ArticleIndexTestSupport.NewDirectory();
+        var clock = new FakeTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var index = await StartHeldAsync(root, spool, clock, entered, release, batchSize: 32, flushMilliseconds: 60_000);
+            var insert = index.InsertStoredAsync(ArticleIndexTestSupport.Id(4), spool, 40, CancellationToken.None).AsTask();
+            await WaitAsync(() => index.Counters.QueueDepth == 1);
+            release.TrySetResult();
+            await WaitAsync(() => index.ActiveIntervalWaits == 1 && index.Counters.Batches == 0);
+            index.FaultWritersForTests(new InvalidOperationException("index channel failed"));
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => insert);
+            Assert.Equal("index channel failed", error.Message);
+            await index.StopAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(index.Contains(ArticleIndexTestSupport.Id(4)));
+            Assert.Equal(0, index.PendingReads);
+            Assert.Equal(0, index.ActiveIntervalWaits);
+        }
+        finally
+        {
+            ArticleIndexTestSupport.Delete(root);
+            ArticleIndexTestSupport.Delete(spool);
+        }
+    }
+
+    private static async Task<ArticleIndexService> StartHeldAsync(
+        string root,
+        string spool,
+        FakeTimeProvider clock,
+        TaskCompletionSource entered,
+        TaskCompletionSource release,
+        int batchSize,
+        int flushMilliseconds)
+    {
+        var index = await ArticleIndexTestSupport.StartSpoolAsync(root, spool, new ArticleIndexSettings
+        {
+            BatchSize = batchSize,
+            FlushIntervalMilliseconds = flushMilliseconds,
+            QueueCapacity = 8,
+            SummaryIntervalMilliseconds = 60_000,
+            BeforeReadAsync = async cancellationToken =>
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(cancellationToken);
+            },
+        }, clock);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        return index;
+    }
+
+    [Fact]
+    public async Task Partial_batch_flushes_do_not_throw_once_per_interval()
+    {
+        var root = ArticleIndexTestSupport.NewDirectory();
+        var spool = ArticleIndexTestSupport.NewDirectory();
+        try
+        {
+            var index = await ArticleIndexTestSupport.StartSpoolAsync(root, spool, new ArticleIndexSettings
+            {
+                BatchSize = 512,
+                FlushIntervalMilliseconds = 1,
+                QueueCapacity = 1024,
+                SummaryIntervalMilliseconds = 60_000,
+            });
+            var probeSeconds = 0;
+            var configured = Environment.GetEnvironmentVariable("VECTORNNTP_INDEX_FLUSH_PROBE_SECONDS");
+            if (int.TryParse(configured, out var parsed) && parsed > 0)
+            {
+                probeSeconds = Math.Min(parsed, 30);
+            }
+
+            var before = ExceptionCount();
+            var started = TimeProvider.System.GetTimestamp();
+            var inserts = 0;
+            if (probeSeconds == 0)
+            {
+                const int count = 40;
+                for (var i = 0; i < count; i++)
+                {
+                    var inserted = await index.InsertStoredAsync(ArticleIndexTestSupport.Id(i), spool, 1_000 + i, CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+                    Assert.True(inserted.Inserted);
+                }
+
+                inserts = count;
+            }
+            else
+            {
+                while (TimeProvider.System.GetElapsedTime(started) < TimeSpan.FromSeconds(probeSeconds))
+                {
+                    var inserted = await index.InsertStoredAsync(ArticleIndexTestSupport.Id(inserts), spool, 1_000 + inserts, CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+                    Assert.True(inserted.Inserted);
+                    inserts++;
+                }
+            }
+
+            var delta = ExceptionCount() - before;
+            Console.WriteLine($"index-flush-probe inserts={inserts} exceptionDelta={delta}");
+            await ArticleIndexTestSupport.StopAsync(index).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.Equal(inserts, index.PresenceCount);
+            // The runtime counter is process-wide. A filtered run can require fewer throws than flushes.
+            // The suite only rejects a retry storm, because other tests throw on the same counter.
+            var limit = probeSeconds > 0 ? inserts / 2 : inserts * 20;
+            Assert.True(delta < limit, $"exception delta {delta} for {inserts} partial flushes");
+        }
+        finally
+        {
+            ArticleIndexTestSupport.Delete(root);
+            ArticleIndexTestSupport.Delete(spool);
+        }
+    }
+
+    /// <summary>
+    /// Reads the runtime throw counter. It is an internal <c>uint</c> method, the same value
+    /// <c>System.Runtime</c> <c>exception-count</c> polls.
+    /// </summary>
+    /// <returns>The cumulative throw count for this process.</returns>
+    private static uint ExceptionCount()
+    {
+        var method = typeof(Exception).GetMethod(
+            "GetExceptionCount",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return (uint)method.Invoke(null, null)!;
     }
 
     private static async Task WaitAsync(Func<bool> condition)

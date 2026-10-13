@@ -372,6 +372,17 @@ namespace VectorNNTP.Common.Cloudflare
             Message = "Starting Cloudflare DNS reconciliation for {Fqdn} in zone {ZoneId}")]
         internal static partial void StartingReconciliation(ILogger logger, string Fqdn, string ZoneId);
 
+        /// <summary>
+        /// Emitted when this process validates DNS settings but does not call Cloudflare until its listener has bound.
+        /// </summary>
+        /// <param name="logger">Reconciliation-service logger.</param>
+        /// <param name="Fqdn">Generated server FQDN that will be published after the listener binds.</param>
+        [LoggerMessage(
+            EventId = 1830,
+            Level = LogLevel.Information,
+            Message = "Deferring Cloudflare DNS publication for {Fqdn} until the listener has bound")]
+        internal static partial void PublicationDeferredUntilListenerBound(ILogger logger, string Fqdn);
+
         /// <summary>Emitted after reconcile returns and this process marks FQDN ownership active.</summary>
         /// <param name="logger">Reconciliation-service logger.</param>
         /// <param name="Fqdn">Generated server FQDN that was reconciled.</param>

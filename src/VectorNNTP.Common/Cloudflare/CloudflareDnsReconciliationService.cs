@@ -14,12 +14,19 @@ namespace VectorNNTP.Common.Cloudflare
     /// </para>
     /// <para>
     /// Registered first among application services so reverse-order stop runs clean-up after other services
-    /// (including future listeners) have stopped. Startup failure after reconcile work begins attempts clean-up
+    /// (including listeners) have stopped. Startup failure after reconcile work begins attempts clean-up
     /// so partial A/AAAA publications are not left without a recovery path. Concurrent start/stop are rejected
     /// by the application host; reconcile and clean-up share the reconciler gate.
     /// </para>
+    /// <para>
+    /// When an <see cref="IDnsPublicationLease"/> withholds publication, <see cref="StartAsync"/> validates
+    /// and returns without calling Cloudflare. <see cref="PublishAfterListenerBoundAsync"/> publishes only
+    /// after the listener has bound. A failed publication deletes record ids created by that attempt and
+    /// does not remove records that were already present. <see cref="StopAsync"/> removes the FQDN only
+    /// after a verified publication in this process.
+    /// </para>
     /// </remarks>
-    internal sealed class CloudflareDnsReconciliationService
+    internal sealed class CloudflareDnsReconciliationService : IListenerDnsPublication
     {
         /// <summary>Maximum wall-clock budget for best-effort clean-up after a failed or cancelled startup reconcile.</summary>
         public static readonly TimeSpan FailedStartCleanupTimeout = TimeSpan.FromSeconds(15);
@@ -37,6 +44,12 @@ namespace VectorNNTP.Common.Cloudflare
         private readonly ILogger<CloudflareDnsReconciliationService> _logger;
 
         /// <summary>
+        /// When set and <see cref="IDnsPublicationLease.PublishDuringStart"/> is false, start does not mutate DNS.
+        /// Null keeps the immediate-publication behavior used by NNTPD and BackFiller.
+        /// </summary>
+        private readonly IDnsPublicationLease? _publicationLease;
+
+        /// <summary>
         /// Non-zero after a reconcile in this process returns successfully.
         /// <see cref="StopAsync"/> exchanges it back to zero and skips cleanup when it was already zero.
         /// </summary>
@@ -49,11 +62,17 @@ namespace VectorNNTP.Common.Cloudflare
         /// <param name="bindAddressResolver">Resolves addresses published as A and AAAA records.</param>
         /// <param name="reconciler">Cloudflare DNS reconciler.</param>
         /// <param name="logger">Reconciliation-service logger.</param>
+        /// <param name="publicationLease">
+        /// Optional lease. Null publishes during <see cref="StartAsync"/>. A lease with
+        /// <see cref="IDnsPublicationLease.PublishDuringStart"/> false waits for
+        /// <see cref="PublishAfterListenerBoundAsync"/>.
+        /// </param>
         public CloudflareDnsReconciliationService(
             IOptions<AcmeCloudflareOptions> options,
             IBindAddressResolver bindAddressResolver,
             ICloudflareDnsReconciler reconciler,
-            ILogger<CloudflareDnsReconciliationService> logger)
+            ILogger<CloudflareDnsReconciliationService> logger,
+            IDnsPublicationLease? publicationLease = null)
         {
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(bindAddressResolver);
@@ -64,6 +83,7 @@ namespace VectorNNTP.Common.Cloudflare
             _bindAddressResolver = bindAddressResolver;
             _reconciler = reconciler;
             _logger = logger;
+            _publicationLease = publicationLease;
         }
 
         /// <summary>Gets the stable service name recorded by the application service manager.</summary>
@@ -102,40 +122,14 @@ namespace VectorNNTP.Common.Cloudflare
 
             CloudflareLogMessages.StartingReconciliation(_logger, fqdn, options.CloudFlareZoneId);
 
-            var resolved = _bindAddressResolver.Resolve(options);
-            if (!resolved.HasAny)
+            var resolved = ResolveEligibleAddresses(options);
+            if (_publicationLease is { PublishDuringStart: false })
             {
-                throw new InvalidOperationException(
-                    "No eligible IP addresses were obtained from BindAddress. " +
-                    "Wildcard binding requires at least one non-loopback, non-link-local, non-multicast " +
-                    "unicast address on a local interface; explicit entries must be eligible for DNS publication. " +
-                    "Startup cannot continue with an empty address set.");
+                CloudflareLogMessages.PublicationDeferredUntilListenerBound(_logger, fqdn);
+                return;
             }
 
-            var reconcileBegun = false;
-            try
-            {
-                reconcileBegun = true;
-                await _reconciler
-                    .ReconcileAsync(options.CloudFlareZoneId, fqdn, resolved, cancellationToken)
-                    .ConfigureAwait(false);
-
-                Volatile.Write(ref _fqdnOwnershipActive, 1);
-
-                CloudflareLogMessages.ReconciliationCompleted(_logger, fqdn, resolved.All.Count);
-            }
-            catch (Exception ex) when (reconcileBegun && ex is not OperationCanceledException)
-            {
-                // Partial reconcile may have published records; remove the entire FQDN before failing startup.
-                await TryCleanupAfterFailedStartAsync(options.CloudFlareZoneId, fqdn, ex).ConfigureAwait(false);
-                throw;
-            }
-            catch (OperationCanceledException) when (reconcileBegun)
-            {
-                await TryCleanupAfterFailedStartAsync(options.CloudFlareZoneId, fqdn, cancellationException: true)
-                    .ConfigureAwait(false);
-                throw;
-            }
+            await PublishCoreAsync(options.CloudFlareZoneId, fqdn, resolved, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -177,20 +171,144 @@ namespace VectorNNTP.Common.Cloudflare
         }
 
         /// <summary>
-        /// Best-effort exact-FQDN removal after a failed or canceled startup reconcile, bounded by
-        /// <see cref="FailedStartCleanupTimeout"/>.
+        /// Publishes A/AAAA after the caller has bound its listener, and marks FQDN ownership only after verification.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels publication. Cancellation after the attempt begins deletes only ids created by that attempt.</param>
+        /// <returns>A task that completes when Cloudflare has verified the desired address set, or when this process already owns the name.</returns>
+        /// <exception cref="InvalidOperationException">The FQDN, zone, or eligible address set is missing.</exception>
+        /// <remarks>
+        /// A second call after ownership is active returns without another reconcile. If publication fails before
+        /// ownership is set, cleanup deletes record ids that were absent before the attempt and leaves every
+        /// pre-existing id in place. It does not call <see cref="ICloudflareDnsReconciler.RemoveAllRecordsForFqdnAsync"/>.
+        /// </remarks>
+        /// <inheritdoc />
+        Task IListenerDnsPublication.PublishAfterListenerBoundAsync(CancellationToken cancellationToken) =>
+            PublishAfterListenerBoundAsync(cancellationToken);
+
+        internal async Task PublishAfterListenerBoundAsync(CancellationToken cancellationToken)
+        {
+            if (Volatile.Read(ref _fqdnOwnershipActive) == 1)
+            {
+                return;
+            }
+
+            var (zoneId, fqdn, resolved) = ValidateForPublication();
+            await PublishCoreAsync(zoneId, fqdn, resolved, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Reconciles one publication and marks ownership only after verification.
+        /// A failure before pre-existing records are deleted removes only ids created by the attempt.
         /// </summary>
         /// <param name="zoneId">Cloudflare zone id.</param>
-        /// <param name="fqdn">Exact FQDN to remove.</param>
-        /// <param name="original">Startup failure logged with the cleanup attempt. Null when startup was canceled.</param>
-        /// <param name="cancellationException"><see langword="true"/> when startup failed because it was canceled.</param>
-        /// <remarks>
-        /// Success clears <see cref="_fqdnOwnershipActive"/>. Timeout, cancellation, and other cleanup failures are logged
-        /// and swallowed so the original startup exception remains the one propagated by <see cref="StartAsync"/>.
-        /// </remarks>
-        private async Task TryCleanupAfterFailedStartAsync(
+        /// <param name="fqdn">Exact FQDN.</param>
+        /// <param name="resolved">Eligible addresses to publish.</param>
+        /// <param name="cancellationToken">Cancels the publication.</param>
+        private async Task PublishCoreAsync(
             string zoneId,
             string fqdn,
+            ResolvedBindAddresses resolved,
+            CancellationToken cancellationToken)
+        {
+            IReadOnlyList<string>? before = null;
+            try
+            {
+                before = await _reconciler
+                    .ListRecordIdsAsync(zoneId, fqdn, cancellationToken)
+                    .ConfigureAwait(false);
+                await _reconciler
+                    .ReconcileAsync(zoneId, fqdn, resolved, cancellationToken)
+                    .ConfigureAwait(false);
+                Volatile.Write(ref _fqdnOwnershipActive, 1);
+                CloudflareLogMessages.ReconciliationCompleted(_logger, fqdn, resolved.All.Count);
+            }
+            catch (Exception ex) when (CanCompensateFailedPublication(before, ex))
+            {
+                await TryDeleteRecordsCreatedByThisAttemptAsync(zoneId, fqdn, before!, ex).ConfigureAwait(false);
+                throw;
+            }
+            catch (OperationCanceledException) when (before is not null && !_reconciler.DeletedPreExistingDuringLastReconcile)
+            {
+                await TryDeleteRecordsCreatedByThisAttemptAsync(zoneId, fqdn, before, cancellationException: true)
+                    .ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Returns whether a failed publication may delete only the ids it created.
+        /// </summary>
+        /// <param name="before">Ids observed before reconcile. Null when the snapshot itself failed.</param>
+        /// <param name="exception">The publication failure.</param>
+        /// <returns>
+        /// <see langword="false"/> when the snapshot is missing, the caller canceled after stale deletion began,
+        /// or reconciliation already deleted a pre-existing record.
+        /// </returns>
+        private bool CanCompensateFailedPublication(IReadOnlyList<string>? before, Exception exception) =>
+            before is not null
+            && exception is not OperationCanceledException
+            && !_reconciler.DeletedPreExistingDuringLastReconcile;
+
+        /// <summary>
+        /// Validates the FQDN, zone, and eligible bind addresses used for publication.
+        /// </summary>
+        /// <returns>The zone id, exact FQDN, and resolved addresses.</returns>
+        /// <exception cref="InvalidOperationException">Any required value is missing or the address set is empty.</exception>
+        private (string ZoneId, string Fqdn, ResolvedBindAddresses Resolved) ValidateForPublication()
+        {
+            var options = _options.Value;
+            var fqdn = options.Fqdn;
+            if (string.IsNullOrWhiteSpace(fqdn))
+            {
+                throw new InvalidOperationException(
+                    "Generated FQDN is empty; ServerId and DnsSuffix must be validated before DNS reconciliation.");
+            }
+
+            if (string.IsNullOrWhiteSpace(options.CloudFlareZoneId))
+            {
+                throw new InvalidOperationException(
+                    $"{AcmeCloudflareOptions.CloudFlareZoneIdConfigurationKey} is required for DNS reconciliation.");
+            }
+
+            return (options.CloudFlareZoneId, fqdn, ResolveEligibleAddresses(options));
+        }
+
+        /// <summary>Resolves bind addresses and fails when none are eligible for publication.</summary>
+        /// <param name="options">Options whose bind addresses are resolved.</param>
+        /// <returns>The eligible address set.</returns>
+        /// <exception cref="InvalidOperationException">The resolved set is empty.</exception>
+        private ResolvedBindAddresses ResolveEligibleAddresses(AcmeCloudflareOptions options)
+        {
+            var resolved = _bindAddressResolver.Resolve(options);
+            if (!resolved.HasAny)
+            {
+                throw new InvalidOperationException(
+                    "No eligible IP addresses were obtained from BindAddress. " +
+                    "Wildcard binding requires at least one non-loopback, non-link-local, non-multicast " +
+                    "unicast address on a local interface; explicit entries must be eligible for DNS publication. " +
+                    "Startup cannot continue with an empty address set.");
+            }
+
+            return resolved;
+        }
+
+        /// <summary>
+        /// Deletes record ids that appeared during a failed publication and leaves every pre-existing id.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Exact FQDN.</param>
+        /// <param name="idsBeforeAttempt">Ids present before this process called reconcile.</param>
+        /// <param name="original">Publication failure. Null when publication was canceled.</param>
+        /// <param name="cancellationException"><see langword="true"/> when publication was canceled.</param>
+        /// <remarks>
+        /// Does not call <see cref="ICloudflareDnsReconciler.RemoveAllRecordsForFqdnAsync"/>. A list failure
+        /// before the snapshot leaves <paramref name="idsBeforeAttempt"/> unused only when the caller skips
+        /// this method. Cleanup failure is logged and does not replace the original exception.
+        /// </remarks>
+        private async Task TryDeleteRecordsCreatedByThisAttemptAsync(
+            string zoneId,
+            string fqdn,
+            IReadOnlyList<string> idsBeforeAttempt,
             Exception? original = null,
             bool cancellationException = false)
         {
@@ -202,17 +320,28 @@ namespace VectorNNTP.Common.Cloudflare
                     fqdn,
                     cancellationException);
 
-                // Best-effort clean-up after failed/cancelled reconcile: dedicated 15s budget (not unbounded).
                 using var cleanupCts = new CancellationTokenSource(FailedStartCleanupTimeout);
+                var after = await _reconciler
+                    .ListRecordIdsAsync(zoneId, fqdn, cleanupCts.Token)
+                    .ConfigureAwait(false);
+                var before = new HashSet<string>(idsBeforeAttempt, StringComparer.Ordinal);
+                var created = new List<string>();
+                foreach (var id in after)
+                {
+                    if (!before.Contains(id))
+                    {
+                        created.Add(id);
+                    }
+                }
+
                 await _reconciler
-                    .RemoveAllRecordsForFqdnAsync(
+                    .DeleteRecordIdsAsync(
                         zoneId,
                         fqdn,
+                        created,
                         cleanupCts.Token,
                         operationTimeout: FailedStartCleanupTimeout)
                     .ConfigureAwait(false);
-
-                Volatile.Write(ref _fqdnOwnershipActive, 0);
                 CloudflareLogMessages.PostFailureCleanupVerified(_logger, fqdn);
             }
             catch (OperationCanceledException cleanupEx)
@@ -222,12 +351,10 @@ namespace VectorNNTP.Common.Cloudflare
                     cleanupEx,
                     fqdn,
                     FailedStartCleanupTimeout);
-                // Preserve the original startup failure; do not replace it with clean-up failure.
             }
             catch (Exception cleanupEx)
             {
                 CloudflareLogMessages.PostFailureCleanupFailed(_logger, cleanupEx, fqdn);
-                // Preserve the original startup failure; do not replace it with clean-up failure.
             }
         }
     }

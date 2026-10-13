@@ -29,6 +29,7 @@ using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Transport.Vatp;
 using VectorNNTP.Common.Configuration;
 using VectorNNTP.Common.Networking.Listeners;
+using VectorNNTP.Common.Cloudflare;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -77,6 +78,12 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpTlsListenerService> _logger;
+
+    /// <summary>
+    /// Publishes DNS after every TLS socket is bound. Null skips publication.
+    /// A failure rolls back the sockets bound by this start. The plain listener publishes instead when TLS is disabled.
+    /// </summary>
+    private readonly IListenerDnsPublication? _publication;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
     private readonly List<SocketAcceptListener> _listeners = [];
     private readonly CancellationTokenSource _runCts = new();
@@ -117,7 +124,8 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         PostFilterMetrics? postFilterMetrics = null,
         IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
         INewsLogWriter? newsLog = null,
-        INntpArticlePolicySource? sharedConfiguration = null)
+        INntpArticlePolicySource? sharedConfiguration = null,
+        IListenerDnsPublication? publication = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(certificateProvider);
@@ -159,6 +167,7 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
+        _publication = publication;
     }
 
     /// <inheritdoc />
@@ -240,6 +249,11 @@ public sealed class NntpTlsListenerService : IApplicationService, IAsyncDisposab
                 }
 
                 _listeners.Add(listener);
+            }
+
+            if (_publication is not null)
+            {
+                await _publication.PublishAfterListenerBoundAsync(cancellationToken).ConfigureAwait(false);
             }
 
             _execution = WaitUntilStoppedAsync(_runCts.Token);

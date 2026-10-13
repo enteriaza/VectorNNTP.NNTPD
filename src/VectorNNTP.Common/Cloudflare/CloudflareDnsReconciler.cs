@@ -50,6 +50,12 @@ namespace VectorNNTP.Common.Cloudflare
         private readonly SemaphoreSlim _gate = new(1, 1);
 
         /// <summary>
+        /// Set when the in-flight reconcile begins deleting records that were already present.
+        /// The reconciliation service reads this after <see cref="ReconcileAsync"/> throws.
+        /// </summary>
+        private bool _deletedPreExistingDuringLastReconcile;
+
+        /// <summary>
         /// Gets or sets the delay function used for reconciler attempt backoff (tests may replace this).
         /// </summary>
         internal Func<TimeSpan, CancellationToken, Task> DelayAsync { get; set; } =
@@ -75,6 +81,9 @@ namespace VectorNNTP.Common.Cloudflare
         }
 
         /// <inheritdoc />
+        public bool DeletedPreExistingDuringLastReconcile => _deletedPreExistingDuringLastReconcile;
+
+        /// <inheritdoc />
         public async Task ReconcileAsync(
             string zoneId,
             string fqdn,
@@ -95,6 +104,7 @@ namespace VectorNNTP.Common.Cloudflare
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                _deletedPreExistingDuringLastReconcile = false;
                 using var budget = CloudflareOperationBudget.Begin(
                     _options.Value.CloudFlareOperationTimeout,
                     cancellationToken,
@@ -188,6 +198,7 @@ namespace VectorNNTP.Common.Cloudflare
                     FailedOperation = "ReconcileAsync",
                     StatusCode = (lastFailure as CloudflareDnsException)?.StatusCode,
                     CloudflareErrorCodes = (lastFailure as CloudflareDnsException)?.CloudflareErrorCodes ?? [],
+                    DeletedPreExistingRecords = _deletedPreExistingDuringLastReconcile,
                 };
             }
             finally
@@ -285,6 +296,91 @@ namespace VectorNNTP.Common.Cloudflare
                     StatusCode = (lastFailure as CloudflareDnsException)?.StatusCode,
                     CloudflareErrorCodes = (lastFailure as CloudflareDnsException)?.CloudflareErrorCodes ?? [],
                 };
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+
+        /// <inheritdoc />
+        public async Task<IReadOnlyList<string>> ListRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(zoneId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var records = await ListExactFqdnRecordsAsync(zoneId, fqdn, cancellationToken).ConfigureAwait(false);
+                var ids = new List<string>(records.Count);
+                foreach (var record in records)
+                {
+                    if (!string.IsNullOrWhiteSpace(record.Id))
+                    {
+                        ids.Add(record.Id);
+                    }
+                }
+
+                return ids;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+
+        /// <inheritdoc />
+        public async Task DeleteRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            IReadOnlyCollection<string> recordIds,
+            CancellationToken cancellationToken,
+            TimeSpan? operationTimeout = null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(zoneId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+            ArgumentNullException.ThrowIfNull(recordIds);
+            if (recordIds.Count == 0)
+            {
+                return;
+            }
+
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var timeout = operationTimeout ?? _options.Value.CloudFlareOperationTimeout;
+                using var budget = CloudflareOperationBudget.Begin(timeout, cancellationToken, out var operationToken);
+                var requested = new HashSet<string>(recordIds, StringComparer.Ordinal);
+                var existing = await ListExactFqdnRecordsAsync(zoneId, fqdn, operationToken).ConfigureAwait(false);
+                foreach (var record in existing)
+                {
+                    operationToken.ThrowIfCancellationRequested();
+                    if (string.IsNullOrWhiteSpace(record.Id) || !requested.Contains(record.Id))
+                    {
+                        continue;
+                    }
+
+                    CloudflareLogMessages.DeletingRecordDuringCleanup(_logger, record.Type, record.Id, fqdn);
+                    await _client.DeleteRecordAsync(zoneId, record.Id, operationToken).ConfigureAwait(false);
+                }
+
+                var remaining = await ListExactFqdnRecordsAsync(zoneId, fqdn, operationToken).ConfigureAwait(false);
+                foreach (var record in remaining)
+                {
+                    if (requested.Contains(record.Id))
+                    {
+                        throw new CloudflareDnsException(
+                            $"Cloudflare DNS cleanup for '{fqdn}' still contains record {record.Type}:{record.Id} " +
+                            "after deleting only the ids created by this process.")
+                        {
+                            FailedOperation = "DeleteRecordIds",
+                        };
+                    }
+                }
             }
             finally
             {
@@ -443,6 +539,177 @@ namespace VectorNNTP.Common.Cloudflare
             fqdn.Trim().TrimEnd('.').ToLowerInvariant();
 
         /// <summary>
+        /// Copies kept records whose TTL or proxy state is not yet managed, so a failed attempt can restore them.
+        /// </summary>
+        /// <param name="keptA">Existing A records that match a desired address.</param>
+        /// <param name="keptAaaa">Existing AAAA records that match a desired address.</param>
+        /// <returns>Records that <see cref="EnsureManagedAttributesAsync"/> may update.</returns>
+        private static List<(string Type, CloudflareDnsRecord Record)> RecordsNeedingManagedUpdate(
+            IReadOnlyList<CloudflareDnsRecord> keptA,
+            IReadOnlyList<CloudflareDnsRecord> keptAaaa)
+        {
+            var restore = new List<(string Type, CloudflareDnsRecord Record)>();
+            CollectUnmanaged(keptA, CloudflareDnsRecordTypes.A, restore);
+            CollectUnmanaged(keptAaaa, CloudflareDnsRecordTypes.AAAA, restore);
+            return restore;
+        }
+
+        /// <summary>Appends records that do not already have managed TTL and proxy state.</summary>
+        /// <param name="records">Kept desired records for one family.</param>
+        /// <param name="type">Record type stored with each snapshot.</param>
+        /// <param name="restore">Destination snapshot.</param>
+        private static void CollectUnmanaged(
+            IReadOnlyList<CloudflareDnsRecord> records,
+            string type,
+            List<(string Type, CloudflareDnsRecord Record)> restore)
+        {
+            foreach (var record in records)
+            {
+                if (!CloudflareManagedDnsPolicy.MatchesManagedAttributes(record))
+                {
+                    restore.Add((type, record));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Writes the snapshotted TTL and proxy state back onto records this attempt updated.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Record name.</param>
+        /// <param name="restore">Records captured before the managed-attribute update.</param>
+        /// <param name="cancellationToken">Cancels the restore. A restore failure is logged and does not replace the original exception.</param>
+        /// <remarks>
+        /// A record whose previous TTL or proxy flag was absent cannot be restored faithfully and is left as updated.
+        /// This runs only when pre-existing records have not yet been deleted.
+        /// </remarks>
+        private async Task RestoreManagedAttributesAsync(
+            string zoneId,
+            string fqdn,
+            List<(string Type, CloudflareDnsRecord Record)> restore,
+            CancellationToken cancellationToken)
+        {
+            foreach (var (type, record) in restore)
+            {
+                if (record.Ttl is not int ttl || record.Proxied is not bool proxied || string.IsNullOrWhiteSpace(record.Id))
+                {
+                    continue;
+                }
+
+                var content = NormalizeContent(record.Content, type);
+                if (content is null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await _client.UpdateRecordAsync(
+                            zoneId,
+                            record.Id,
+                            new CloudflareDnsRecordWriteRequest
+                            {
+                                Type = type,
+                                Name = fqdn,
+                                Content = content,
+                                Ttl = ttl,
+                                Proxied = proxied,
+                            },
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    CloudflareLogMessages.ReconciliationAttemptFailed(
+                        _logger,
+                        ex,
+                        0,
+                        MaxAttempts,
+                        fqdn,
+                        true,
+                        "RestoreManagedAttributes");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Lists A and AAAA and requires every desired address to be present with managed attributes.
+        /// Extra records are allowed; they are removed only after this check succeeds.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Exact FQDN.</param>
+        /// <param name="desiredV4">Desired IPv4 contents.</param>
+        /// <param name="desiredV6">Desired IPv6 contents.</param>
+        /// <param name="cancellationToken">Cancels the lists.</param>
+        private async Task VerifyDesiredPresentAsync(
+            string zoneId,
+            string fqdn,
+            HashSet<string> desiredV4,
+            HashSet<string> desiredV6,
+            CancellationToken cancellationToken)
+        {
+            var actualA = await _client
+                .ListRecordsAsync(zoneId, fqdn, CloudflareDnsRecordTypes.A, cancellationToken)
+                .ConfigureAwait(false);
+            var actualAaaa = await _client
+                .ListRecordsAsync(zoneId, fqdn, CloudflareDnsRecordTypes.AAAA, cancellationToken)
+                .ConfigureAwait(false);
+            AssertDesiredPresent(fqdn, CloudflareDnsRecordTypes.A, desiredV4, actualA);
+            AssertDesiredPresent(fqdn, CloudflareDnsRecordTypes.AAAA, desiredV6, actualAaaa);
+        }
+
+        /// <summary>Fails when a desired address is missing or its record is not yet managed. Extra records do not fail this check.</summary>
+        /// <param name="fqdn">FQDN included in the failure message.</param>
+        /// <param name="type">Address family being checked.</param>
+        /// <param name="desired">Desired normalized contents.</param>
+        /// <param name="actual">Records returned by the presence list.</param>
+        private static void AssertDesiredPresent(
+            string fqdn,
+            string type,
+            HashSet<string> desired,
+            IReadOnlyList<CloudflareDnsRecord> actual)
+        {
+            foreach (var content in desired)
+            {
+                var match = false;
+                foreach (var record in actual)
+                {
+                    if (!string.Equals(NormalizeContent(record.Content, type), content, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (!CloudflareManagedDnsPolicy.MatchesManagedAttributes(record))
+                    {
+                        var detail = record.Proxied != CloudflareManagedDnsPolicy.ManagedProxied
+                            ? $"record {record.Id} proxy state is not DNS-only (proxied=false)"
+                            : $"record {record.Id} TTL is not {CloudflareManagedDnsPolicy.ManagedTtl}";
+                        throw new CloudflareDnsException(
+                            $"Cloudflare DNS verification failed for '{fqdn}' ({type}): {detail}. " +
+                            "Stale records are not deleted until every desired record is managed.")
+                        {
+                            FailedOperation = "VerifyDesiredPresent",
+                        };
+                    }
+
+                    match = true;
+                    break;
+                }
+
+                if (!match)
+                {
+                    throw new CloudflareDnsException(
+                        $"Cloudflare DNS verification failed for '{fqdn}' ({type}): " +
+                        $"desired record '{content}' is not present. " +
+                        "Stale records are not deleted until every desired record exists.")
+                    {
+                        FailedOperation = "VerifyDesiredPresent",
+                    };
+                }
+            }
+        }
+
+        /// <summary>
         /// One non-atomic reconcile pass: read A and AAAA, create missing records, update managed TTL and proxy,
         /// delete stale, duplicate, and unparseable records, then re-read and verify.
         /// </summary>
@@ -488,19 +755,41 @@ namespace VectorNNTP.Common.Cloudflare
                 .ConfigureAwait(false);
 
             // Stage 3: ensure kept desired records match managed TTL and DNS-only proxy state.
-            await EnsureManagedAttributesAsync(zoneId, fqdn, CloudflareDnsRecordTypes.A, planA.KeptDesired, cancellationToken)
-                .ConfigureAwait(false);
-            await EnsureManagedAttributesAsync(zoneId, fqdn, CloudflareDnsRecordTypes.AAAA, planAaaa.KeptDesired, cancellationToken)
-                .ConfigureAwait(false);
+            var restore = RecordsNeedingManagedUpdate(planA.KeptDesired, planAaaa.KeptDesired);
+            try
+            {
+                await EnsureManagedAttributesAsync(zoneId, fqdn, CloudflareDnsRecordTypes.A, planA.KeptDesired, cancellationToken)
+                    .ConfigureAwait(false);
+                await EnsureManagedAttributesAsync(zoneId, fqdn, CloudflareDnsRecordTypes.AAAA, planAaaa.KeptDesired, cancellationToken)
+                    .ConfigureAwait(false);
 
-            // Stage 4: delete stale, duplicates, and unparseable — only after desired creates completed.
-            await DeleteRecordsAsync(zoneId, fqdn, CloudflareDnsRecordTypes.A, planA.RecordsToDelete, cancellationToken)
-                .ConfigureAwait(false);
-            await DeleteRecordsAsync(zoneId, fqdn, CloudflareDnsRecordTypes.AAAA, planAaaa.RecordsToDelete, cancellationToken)
-                .ConfigureAwait(false);
+                // Stage 4: desired records must be present before any pre-existing record is deleted.
+                await VerifyDesiredPresentAsync(zoneId, fqdn, desiredV4, desiredV6, cancellationToken)
+                    .ConfigureAwait(false);
 
-            // Stage 5: re-read and verify exact final sets.
-            await VerifyAsync(zoneId, fqdn, desiredV4, desiredV6, cancellationToken).ConfigureAwait(false);
+                // Stage 5: delete stale records only after the desired set is present.
+                if (planA.RecordsToDelete.Count > 0 || planAaaa.RecordsToDelete.Count > 0)
+                {
+                    _deletedPreExistingDuringLastReconcile = true;
+                }
+
+                await DeleteRecordsAsync(zoneId, fqdn, CloudflareDnsRecordTypes.A, planA.RecordsToDelete, cancellationToken)
+                    .ConfigureAwait(false);
+                await DeleteRecordsAsync(zoneId, fqdn, CloudflareDnsRecordTypes.AAAA, planAaaa.RecordsToDelete, cancellationToken)
+                    .ConfigureAwait(false);
+
+                // Stage 6: re-read and verify the exact final sets.
+                await VerifyAsync(zoneId, fqdn, desiredV4, desiredV6, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                if (!_deletedPreExistingDuringLastReconcile)
+                {
+                    await RestoreManagedAttributesAsync(zoneId, fqdn, restore, cancellationToken).ConfigureAwait(false);
+                }
+
+                throw;
+            }
         }
 
         /// <summary>

@@ -185,6 +185,7 @@ public sealed class StorageServerHostCompositionTests
             Assert.IsType<NntpDbService>(application[0]);
             Assert.IsType<StorageServerSharedConfigurationService>(application[1]);
             Assert.IsType<CloudflareDnsReconciliationApplicationService>(application[2]);
+            Assert.False(host.Services.GetRequiredService<IDnsPublicationLease>().PublishDuringStart);
             Assert.IsType<RabbitMqService>(application[3]);
             Assert.IsType<ImmediateAcmeReadyApplicationService>(application[4]);
             Assert.IsType<SegmentPoolValidationService>(application[5]);

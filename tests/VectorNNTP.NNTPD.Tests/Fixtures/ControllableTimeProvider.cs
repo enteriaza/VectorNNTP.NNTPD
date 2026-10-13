@@ -44,6 +44,29 @@ internal sealed class ControllableTimeProvider : TimeProvider
         }
     }
 
+    /// <summary>
+    /// Gets whether a timer is waiting for its due instant.
+    /// A fired one-shot timer is not pending, so this becomes true again only when the next delay is registered.
+    /// </summary>
+    public bool HasPendingTimer
+    {
+        get
+        {
+            lock (_gate)
+            {
+                foreach (var timer in _timers)
+                {
+                    if (timer.IsPending)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+    }
+
     /// <summary>Advances virtual time and invokes timers that are now due.</summary>
     public void Advance(TimeSpan delta)
     {
@@ -125,6 +148,8 @@ internal sealed class ControllableTimeProvider : TimeProvider
             _period = period;
             _dueTicks = dueTime == Timeout.InfiniteTimeSpan ? null : nowTicks + dueTime.Ticks;
         }
+
+        public bool IsPending => _dueTicks is not null;
 
         public bool CollectIfDue(long nowTicks)
         {

@@ -12,6 +12,9 @@ internal sealed class VatpClientOptions
     /// <summary>TLS handshake timeout.</summary>
     public TimeSpan TlsHandshakeTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
-    /// <summary>Per-read I/O timeout while a connection is active.</summary>
+    /// <summary>
+    /// Per-read I/O timeout while a connection is active.
+    /// It is not armed while a STORE on the connection is still waiting for its first WINDOW.
+    /// </summary>
     public TimeSpan IoTimeout { get; init; } = TimeSpan.FromMinutes(5);
 }

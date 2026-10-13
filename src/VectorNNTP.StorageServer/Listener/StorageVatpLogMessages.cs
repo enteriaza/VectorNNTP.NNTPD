@@ -126,4 +126,14 @@ internal static partial class StorageVatpSessionLogMessages
         Level = LogLevel.Warning,
         Message = "Storage VATP STORE failed artId={ArtId} failure={Failure} attempt=1")]
     public static partial void StoreFailed(ILogger logger, string ArtId, string Failure);
+
+    /// <summary>Logs that STORE body credit is withheld until queue capacity is reserved.</summary>
+    /// <param name="logger">Session logger.</param>
+    /// <param name="StreamId">STORE stream.</param>
+    /// <param name="Bytes">META ArtSize waiting for a reservation.</param>
+    [LoggerMessage(
+        EventId = 5508,
+        Level = LogLevel.Debug,
+        Message = "Storage VATP STORE waiting for queue capacity streamId={StreamId} bytes={Bytes}")]
+    public static partial void StoreAdmissionWaiting(ILogger logger, uint StreamId, int Bytes);
 }

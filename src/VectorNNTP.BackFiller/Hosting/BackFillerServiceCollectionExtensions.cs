@@ -129,6 +129,7 @@ namespace VectorNNTP.BackFiller.Hosting
                     validateSharedDatabaseFields: false,
                     validateSharedCredentials: false));
             builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, TlsOnlyAcmeCloudflareOptionsValidator>();
+            builder.Services.AddSingleton<IDnsPublicationLease, ListenerBoundDnsPublicationLease>();
             builder.Services.AddAcmeCloudflareInfrastructure();
             builder.Services.AddNntpDbOptions();
 
@@ -239,7 +240,8 @@ namespace VectorNNTP.BackFiller.Hosting
                 provider.GetRequiredService<IArticleRetentionAuthority>(),
                 provider.GetRequiredService<IAcmeCertificateReadiness>(),
                 provider.GetRequiredService<IBackFillerStartupJournal>(),
-                provider.GetRequiredService<ILogger<CacheListenerService>>()));
+                provider.GetRequiredService<ILogger<CacheListenerService>>(),
+                provider.GetRequiredService<CloudflareDnsReconciliationService>()));
             builder.Services.TryAddEnumerable(
                 ServiceDescriptor.Singleton<IApplicationService, CacheListenerService>(static provider =>
                     provider.GetRequiredService<CacheListenerService>()));

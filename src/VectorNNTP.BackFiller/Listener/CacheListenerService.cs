@@ -8,6 +8,7 @@ using VectorNNTP.BackFiller.Configuration;
 using VectorNNTP.BackFiller.Hosting;
 using VectorNNTP.BackFiller.Retention;
 using VectorNNTP.Common.Acme;
+using VectorNNTP.Common.Cloudflare;
 using VectorNNTP.Common.Core;
 using VectorNNTP.Common.Networking.Certificates;
 using VectorNNTP.Common.Networking.Listeners;
@@ -53,6 +54,12 @@ namespace VectorNNTP.BackFiller.Listener
 
         /// <summary>Logger for <see cref="CacheListenerLogMessages"/>.</summary>
         private readonly ILogger<CacheListenerService> _logger;
+
+        /// <summary>
+        /// Publishes DNS after at least one socket is bound. Null skips publication.
+        /// A failure disposes the bound sockets and fails startup before the listener accepts connections.
+        /// </summary>
+        private readonly CloudflareDnsReconciliationService? _publication;
 
         /// <summary>
         /// Non-recursive lock for <see cref="_state"/> and <see cref="_listenSockets"/>.
@@ -112,6 +119,9 @@ namespace VectorNNTP.BackFiller.Listener
         /// <param name="readiness">Certificate readiness gate consulted by <see cref="StartAsync"/>.</param>
         /// <param name="journal">Startup journal that records listener start.</param>
         /// <param name="logger">Listener logger. Must not be null.</param>
+        /// <param name="publication">
+        /// DNS publication invoked after a socket binds. Null skips publication, which unit tests use.
+        /// </param>
         /// <exception cref="ArgumentNullException">Thrown when any argument is null.</exception>
         internal CacheListenerService(
             BackFillerRuntimeOptions runtime,
@@ -119,7 +129,8 @@ namespace VectorNNTP.BackFiller.Listener
             IArticleRetentionAuthority retention,
             IAcmeCertificateReadiness readiness,
             IBackFillerStartupJournal journal,
-            ILogger<CacheListenerService> logger)
+            ILogger<CacheListenerService> logger,
+            CloudflareDnsReconciliationService? publication = null)
         {
             ArgumentNullException.ThrowIfNull(runtime);
             ArgumentNullException.ThrowIfNull(certificates);
@@ -133,6 +144,7 @@ namespace VectorNNTP.BackFiller.Listener
             _readiness = readiness;
             _journal = journal;
             _logger = logger;
+            _publication = publication;
         }
 
         /// <summary>Builds a readiness gate that is already marked ready for the test constructor.</summary>
@@ -244,6 +256,11 @@ namespace VectorNNTP.BackFiller.Listener
                 if (_listenSockets.Count == 0)
                 {
                     throw new InvalidOperationException("Cache Listener failed to bind any endpoint.");
+                }
+
+                if (_publication is not null)
+                {
+                    await _publication.PublishAfterListenerBoundAsync(cancellationToken).ConfigureAwait(false);
                 }
 
                 lock (_gate)

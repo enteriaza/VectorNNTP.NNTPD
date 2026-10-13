@@ -141,6 +141,30 @@ The initial window is **outstanding-byte credit**, not an article-size ceiling. 
 consume credit on accepted DATA and replenish the same amount locally when advertising
 outbound WINDOW so transfers larger than the initial window can complete under pacing.
 
+StorageServer STORE is the exception to the assumed 1 MiB send credit. A placement
+client starts that stream at zero credit and does not send DATA until the server
+sends WINDOW. After META, the server reserves `ArtSize` bytes in the 1 GiB accept
+queue. It sends the initial WINDOW only after that reservation exists, and it does
+not allocate the article buffer before then. A full queue leaves the client waiting
+on WINDOW; it is not `FAIL/IncompleteTransfer` after the body. That silent wait is queue
+admission, not a stalled read. StorageServer suspends its I/O no-progress timeout until
+the wait ends, then arms it again so a peer that receives WINDOW and sends nothing still
+times out. The placement client does the same with its per-read I/O timeout until the
+first WINDOW for that STORE. An article larger
+than the whole queue budget is `RESULT` outcome `RejectedCapacity` (`6`) and no
+body is authorized. Retrieval OPEN is unchanged and still assumes the 1 MiB initial
+window. A placement client and StorageServer that disagree about this STORE credit
+deadlock, so those two ship together.
+
+Queue admission is strict FIFO. A waiting STORE whose `ArtSize` does not fit
+blocks every later STORE, including a smaller one that would fit in the bytes
+free right now. The head waits until a dequeue frees enough for it, or until
+that waiter is cancelled. Cancellation admits the next waiter that fits and
+does not leave its reservation behind. A live head is not skipped, so later
+small articles cannot pass a larger one that arrived first. That wait is the
+time required to free the head's bytes. It is not an indefinite skip of the
+head, and a new STORE cannot reserve while any waiter is queued.
+
 WINDOW on an unknown or terminal stream is `UnknownStream`.
 
 ## Fairness (scheduling model)

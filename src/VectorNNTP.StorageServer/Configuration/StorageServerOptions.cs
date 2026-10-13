@@ -219,7 +219,11 @@ public sealed class StorageServerListenerOptions
     /// <summary>TLS handshake timeout in seconds.</summary>
     public int TlsHandshakeTimeoutSeconds { get; set; } = 30;
 
-    /// <summary>Per-operation I/O no-progress timeout in seconds.</summary>
+    /// <summary>
+    /// Per-operation I/O no-progress timeout in seconds.
+    /// A STORE waiting for queue capacity is not inactivity: the read timer is suspended
+    /// until that wait ends, then armed again so a stall after WINDOW still times out.
+    /// </summary>
     public int IoProgressTimeoutSeconds { get; set; } = 60;
 
     /// <summary>Maximum concurrently active accepted connections.</summary>

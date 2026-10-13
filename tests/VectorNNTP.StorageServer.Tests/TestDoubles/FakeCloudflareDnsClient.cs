@@ -164,12 +164,6 @@ internal sealed class FakeCloudflareDnsClient : ICloudflareDnsClient
             throw ListException;
         }
 
-        if (CreateCallCount + UpdateCallCount + DeleteCallCount >= MutationsBeforeListFailure
-            && FailListAfterMutationsException is not null)
-        {
-            throw FailListAfterMutationsException;
-        }
-
         IReadOnlyList<CloudflareDnsRecord> matches;
         lock (_sync)
         {

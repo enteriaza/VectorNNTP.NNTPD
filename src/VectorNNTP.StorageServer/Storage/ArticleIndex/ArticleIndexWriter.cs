@@ -36,6 +36,20 @@ internal sealed class ArticleIndexWriter
     private readonly Dictionary<ArticleId, ArticleIndexMutation> _byId = new();
     private readonly List<ArticleIndexMutation> _mutations = new();
     private long _batchStarted;
+
+    /// <summary>
+    /// Set when the flush timer completed. The batch commits once and the wait is not started again for that batch.
+    /// </summary>
+    private bool _intervalElapsed;
+
+    /// <summary>The single channel read owned by the writer, or null when none is outstanding.</summary>
+    private Task<bool>? _pendingRead;
+
+    /// <summary>Zero or one. Incremented when a read starts and decremented when it is consumed.</summary>
+    private int _pendingReads;
+
+    /// <summary>Flush timers that have been armed and not disposed.</summary>
+    private int _activeIntervalWaits;
     private long _lastSummary;
     private int _batchesSinceCheckpoint;
 
@@ -101,6 +115,16 @@ internal sealed class ArticleIndexWriter
 
     /// <summary>Stops accepting commands. Commands already queued are still committed.</summary>
     internal void Complete() => _channel.Writer.TryComplete();
+
+    /// <summary>Gets channel reads that have been started and not yet consumed. The writer keeps at most one.</summary>
+    internal int PendingReads => Volatile.Read(ref _pendingReads);
+
+    /// <summary>Gets interval timers that have been armed and not yet disposed.</summary>
+    internal int ActiveIntervalWaits => Volatile.Read(ref _activeIntervalWaits);
+
+    /// <summary>Faults the command channel. Test seam for a failed writer.</summary>
+    /// <param name="exception">Exception readers observe.</param>
+    internal void FaultForTests(Exception exception) => _channel.Writer.TryComplete(exception);
 
     /// <summary>
     /// Enqueues an insert and waits until that batch commits.
@@ -216,6 +240,18 @@ internal sealed class ArticleIndexWriter
             failure = ex;
         }
 
+        try
+        {
+            await ObservePendingReadAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (failure is null)
+        {
+            failure = ex;
+        }
+
         if (failure is null)
         {
             while (_channel.Reader.TryRead(out var pending))
@@ -303,49 +339,152 @@ internal sealed class ArticleIndexWriter
         _counters.NoteQueue(_channel.Reader.Count, _settings.QueueCapacity);
     }
 
-    /// <summary>Fills <paramref name="batch"/> until it is full, the flush interval elapses, or the channel completes.</summary>
+    /// <summary>
+    /// Fills <paramref name="batch"/> until it is full, the flush interval elapses, or the channel completes.
+    /// </summary>
     /// <param name="batch">Current batch. Empty when the writer is idle.</param>
-    /// <param name="cancellationToken">Cancels the idle or interval wait.</param>
+    /// <param name="cancellationToken">Cancels the idle or interval wait. Cancellation still throws so the caller can drain.</param>
     /// <returns><see langword="false"/> when the channel is completed and no further command was read.</returns>
+    /// <remarks>
+    /// One channel read is outstanding at a time. The flush interval is a <see cref="TimeProvider"/> timer,
+    /// not a cancelled read. When the timer completes, the open batch is flushed once and that read stays
+    /// owned until it completes or the writer stops. When the read completes first, the timer is disposed
+    /// without cancelling its task. Caller cancellation still throws.
+    /// </remarks>
     private async ValueTask<bool> ReadMoreAsync(List<ArticleIndexRequest> batch, CancellationToken cancellationToken)
     {
         if (batch.Count == 0)
         {
+            _intervalElapsed = false;
             if (_settings.BeforeReadAsync is not null)
             {
                 await _settings.BeforeReadAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            if (!await _channel.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            if (!await WaitForCommandAsync(cancellationToken).ConfigureAwait(false))
             {
                 return false;
             }
 
             _batchStarted = _time.GetTimestamp();
         }
-        else if (batch.Count < _settings.BatchSize)
+        else if (!_intervalElapsed && batch.Count < _settings.BatchSize)
         {
             var remaining = TimeSpan.FromMilliseconds(_settings.FlushIntervalMilliseconds) - _time.GetElapsedTime(_batchStarted);
             if (remaining <= TimeSpan.Zero)
             {
-                return true;
+                _intervalElapsed = true;
             }
-
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(remaining);
-            try
+            else if (!await WaitForMoreOrIntervalAsync(batch, remaining, cancellationToken).ConfigureAwait(false))
             {
-                if (!await _channel.Reader.WaitToReadAsync(timeout.Token).ConfigureAwait(false))
-                {
-                    return false;
-                }
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                return true;
+                return false;
             }
         }
 
+        return Pull(batch);
+    }
+
+    /// <summary>Waits for the owned channel read, or starts the single outstanding read.</summary>
+    /// <param name="cancellationToken">Cancels the read. Cancellation throws to the caller.</param>
+    /// <returns><see langword="false"/> when the channel is completed.</returns>
+    private async ValueTask<bool> WaitForCommandAsync(CancellationToken cancellationToken)
+    {
+        var read = StartRead(cancellationToken);
+        return await ConsumeReadAsync(read).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Waits until another command arrives or the flush interval elapses.
+    /// A completed interval is remembered so the caller flushes this batch once.
+    /// </summary>
+    /// <param name="batch">Batch that already holds at least one command.</param>
+    /// <param name="remaining">Time left in the flush interval.</param>
+    /// <param name="cancellationToken">Cancels the wait.</param>
+    /// <returns><see langword="false"/> when the channel completed and its last commands were pulled.</returns>
+    private async ValueTask<bool> WaitForMoreOrIntervalAsync(
+        List<ArticleIndexRequest> batch,
+        TimeSpan remaining,
+        CancellationToken cancellationToken)
+    {
+        var read = StartRead(cancellationToken);
+        using var interval = new IntervalSignal(this, remaining, cancellationToken);
+        await Task.WhenAny(read, interval.Task).ConfigureAwait(false);
+        if (read.IsCompleted)
+        {
+            if (!await ConsumeReadAsync(read).ConfigureAwait(false))
+            {
+                Pull(batch);
+                return false;
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (interval.Task.IsCompletedSuccessfully && interval.Task.Result)
+        {
+            _intervalElapsed = true;
+        }
+
+        return true;
+    }
+
+    /// <summary>Returns the outstanding read, or starts one when none is outstanding.</summary>
+    /// <param name="cancellationToken">Token observed by a newly started read.</param>
+    /// <returns>The single outstanding read.</returns>
+    private Task<bool> StartRead(CancellationToken cancellationToken)
+    {
+        var pending = _pendingRead;
+        if (pending is not null)
+        {
+            return pending;
+        }
+
+        var created = _channel.Reader.WaitToReadAsync(cancellationToken).AsTask();
+        _pendingRead = created;
+        Interlocked.Increment(ref _pendingReads);
+        return created;
+    }
+
+    /// <summary>Consumes <paramref name="read"/> exactly once and propagates its completion.</summary>
+    /// <param name="read">The outstanding read.</param>
+    /// <returns>The channel's wait result.</returns>
+    private async ValueTask<bool> ConsumeReadAsync(Task<bool> read)
+    {
+        if (ReferenceEquals(_pendingRead, read))
+        {
+            _pendingRead = null;
+            Interlocked.Decrement(ref _pendingReads);
+        }
+
+        return await read.ConfigureAwait(false);
+    }
+
+    /// <summary>Awaits a read left outstanding by an interval flush. Shutdown cancellation is expected.</summary>
+    /// <param name="cancellationToken">Writer token. Its cancellation is not a failed batch.</param>
+    /// <returns>A task that finishes after the read is observed.</returns>
+    private async Task ObservePendingReadAsync(CancellationToken cancellationToken)
+    {
+        var read = _pendingRead;
+        if (read is null)
+        {
+            return;
+        }
+
+        _pendingRead = null;
+        Interlocked.Decrement(ref _pendingReads);
+        try
+        {
+            await read.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    /// <summary>Moves queued commands into <paramref name="batch"/> up to the batch size.</summary>
+    /// <param name="batch">Batch being filled.</param>
+    /// <returns><see langword="false"/> when the channel is completed and nothing was read.</returns>
+    private bool Pull(List<ArticleIndexRequest> batch)
+    {
         var read = false;
         while (batch.Count < _settings.BatchSize && _channel.Reader.TryRead(out var request))
         {
@@ -355,6 +494,53 @@ internal sealed class ArticleIndexWriter
 
         _counters.NoteQueue(_channel.Reader.Count, _settings.QueueCapacity);
         return read || !_channel.Reader.Completion.IsCompleted;
+    }
+
+    /// <summary>
+    /// One-shot flush timer. Disposing it completes the wait successfully so a losing timer is not cancelled.
+    /// </summary>
+    private sealed class IntervalSignal : IDisposable
+    {
+        private readonly ITimer _timer;
+        private readonly CancellationTokenRegistration _registration;
+        private readonly TaskCompletionSource<bool> _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ArticleIndexWriter _owner;
+        private int _disposed;
+
+        /// <summary>Arms a timer for <paramref name="remaining"/> on the writer's clock.</summary>
+        /// <param name="owner">Writer whose active-timer count changes.</param>
+        /// <param name="remaining">Delay until the flush interval is due.</param>
+        /// <param name="cancellationToken">Completes the wait as not elapsed when the writer is cancelled.</param>
+        public IntervalSignal(ArticleIndexWriter owner, TimeSpan remaining, CancellationToken cancellationToken)
+        {
+            _owner = owner;
+            Interlocked.Increment(ref owner._activeIntervalWaits);
+            _timer = owner._time.CreateTimer(
+                static state => ((TaskCompletionSource<bool>)state!).TrySetResult(true),
+                _completed,
+                remaining,
+                Timeout.InfiniteTimeSpan);
+            _registration = cancellationToken.UnsafeRegister(
+                static state => ((TaskCompletionSource<bool>)state!).TrySetResult(false),
+                _completed);
+        }
+
+        /// <summary>Gets the wait. True when the interval elapsed. False when it was abandoned or the writer was cancelled.</summary>
+        public Task<bool> Task => _completed.Task;
+
+        /// <summary>Stops the timer and unregisters cancellation. A wait that has not finished completes as not elapsed.</summary>
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            _timer.Dispose();
+            _registration.Dispose();
+            _completed.TrySetResult(false);
+            Interlocked.Decrement(ref _owner._activeIntervalWaits);
+        }
     }
 
     /// <summary>Decides whether the current batch should commit before reading more.</summary>
@@ -368,7 +554,7 @@ internal sealed class ArticleIndexWriter
             return false;
         }
 
-        if (!more || batch.Count >= _settings.BatchSize)
+        if (!more || batch.Count >= _settings.BatchSize || _intervalElapsed)
         {
             return true;
         }

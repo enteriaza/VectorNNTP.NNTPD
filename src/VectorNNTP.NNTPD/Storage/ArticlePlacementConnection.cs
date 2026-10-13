@@ -39,6 +39,10 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
     private long _resultTicks;
     private long _resultCount;
     private long _resultMaxTicks;
+    private long _dataFramesWritten;
+    private int _storesAwaitingInitialCredit;
+    private readonly object _readTimeoutGate = new();
+    private CancellationTokenSource? _activeReadTimeout;
 
     private ArticlePlacementConnection(
         string fqdn,
@@ -82,6 +86,9 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
 
     /// <summary>Gets the longest RESULT wait in ticks.</summary>
     internal long ResultMaxTicks => Volatile.Read(ref _resultMaxTicks);
+
+    /// <summary>Gets DATA frames this connection has written. Credit is zero until the server sends WINDOW.</summary>
+    internal long DataFramesWritten => Volatile.Read(ref _dataFramesWritten);
 
     public bool IsDead => Volatile.Read(ref _dead) != 0;
 
@@ -306,8 +313,11 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
                 .ConfigureAwait(false);
             operation.Started = true;
             var metaBytes = VatpMetaCodec.Encode(in meta);
+            operation.AwaitingInitialCredit = 1;
+            Interlocked.Increment(ref _storesAwaitingInitialCredit);
             await WriteFrameAsync(VatpFrameEncoder.EncodeMeta(operation.StreamId, metaBytes), linked.Token)
                 .ConfigureAwait(false);
+            DisarmReadTimeout();
 
             var artData = record.ArtData;
             var offset = 0;
@@ -332,6 +342,11 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
                     var creditWait = System.Diagnostics.Stopwatch.GetTimestamp();
                     await operation.Credit.WaitAsync(linked.Token).ConfigureAwait(false);
                     Interlocked.Add(ref _creditWaitTicks, System.Diagnostics.Stopwatch.GetTimestamp() - creditWait);
+                    if (operation.IsCompleted)
+                    {
+                        return operation.Result;
+                    }
+
                     continue;
                 }
 
@@ -340,6 +355,7 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
                         VatpFrameEncoder.EncodeData(operation.StreamId, artData.Slice(offset, length), fin),
                         linked.Token)
                     .ConfigureAwait(false);
+                Interlocked.Increment(ref _dataFramesWritten);
                 offset += length;
             }
 
@@ -356,7 +372,7 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
             var result = operation.EndWritten
                 ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
                 : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "timeout");
-            operation.TryFinish(result);
+            Finish(operation, result);
             LogOutcome(operation, result);
             return result;
         }
@@ -370,14 +386,14 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
             if (operation.EndWritten)
             {
                 var ambiguous = new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved);
-                operation.TryFinish(ambiguous);
+                Finish(operation, ambiguous);
                 LogOutcome(operation, ambiguous);
                 return ambiguous;
             }
 
             await TryWriteCancelAsync(operation).ConfigureAwait(false);
             var cancelled = new ArticlePlacementResult(ArticlePlacementKind.Cancelled);
-            operation.TryFinish(cancelled);
+            Finish(operation, cancelled);
             LogOutcome(operation, cancelled);
             return cancelled;
         }
@@ -390,7 +406,7 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
                 : operation.EndWritten
                     ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
                     : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "closed");
-            operation.TryFinish(result);
+            Finish(operation, result);
             LogOutcome(operation, result);
             return result;
         }
@@ -400,7 +416,7 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
             var result = operation.EndWritten
                 ? new ArticlePlacementResult(ArticlePlacementKind.AcknowledgementNotObserved)
                 : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, ex.GetType().Name);
-            operation.TryFinish(result);
+            Finish(operation, result);
             LogOutcome(operation, result);
             return result;
         }
@@ -479,13 +495,20 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
             case VatpFrameType.Window:
                 if (!VatpControlPayload.TryDecodeWindow(Copy(frame.Payload), out var add))
                 {
-                    operation.TryFinish(new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "window"));
+                    Finish(operation, new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "window"));
                     break;
                 }
 
+                var gainedInitialCredit = false;
                 lock (operation.Gate)
                 {
+                    gainedInitialCredit = operation.AwaitingInitialCredit == 1 && add > 0;
                     _ = operation.Window.Add(add);
+                }
+
+                if (gainedInitialCredit && Interlocked.Exchange(ref operation.AwaitingInitialCredit, 0) == 1)
+                {
+                    Interlocked.Decrement(ref _storesAwaitingInitialCredit);
                 }
 
                 try
@@ -500,16 +523,16 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
             case VatpFrameType.Result:
                 if (!VatpResultPayload.TryDecode(frame.Payload, out var outcome, out _))
                 {
-                    operation.TryFinish(new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "result"));
+                    Finish(operation, new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "result"));
                     break;
                 }
 
-                operation.TryFinish(ArticlePlacementResult.FromOutcomeByte(outcome));
+                Finish(operation, ArticlePlacementResult.FromOutcomeByte(outcome));
                 break;
             case VatpFrameType.Fail:
                 if (!VatpControlPayload.TryDecodeFail(Copy(frame.Payload), out var error, out _))
                 {
-                    operation.TryFinish(new ArticlePlacementResult(
+                    Finish(operation, new ArticlePlacementResult(
                         operation.EndWritten
                             ? ArticlePlacementKind.AcknowledgementNotObserved
                             : ArticlePlacementKind.TransportFailure,
@@ -517,12 +540,12 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
                     break;
                 }
 
-                operation.TryFinish(error == VatpErrorCode.Cancelled
+                Finish(operation, error == VatpErrorCode.Cancelled
                     ? new ArticlePlacementResult(ArticlePlacementKind.Cancelled)
                     : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, error.ToString()));
                 break;
             default:
-                operation.TryFinish(new ArticlePlacementResult(
+                Finish(operation, new ArticlePlacementResult(
                     ArticlePlacementKind.TransportFailure,
                     frame.Header.Type.ToString()));
                 break;
@@ -544,7 +567,7 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
                 : shutdown
                     ? new ArticlePlacementResult(ArticlePlacementKind.Cancelled)
                     : new ArticlePlacementResult(ArticlePlacementKind.TransportFailure, "closed");
-            operation.TryFinish(result);
+            Finish(operation, result);
         }
     }
 
@@ -625,8 +648,16 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
                 return frame;
             }
 
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(_ioTimeout);
+            var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            lock (_readTimeoutGate)
+            {
+                _activeReadTimeout = timeout;
+                if (Volatile.Read(ref _storesAwaitingInitialCredit) == 0)
+                {
+                    timeout.CancelAfter(_ioTimeout);
+                }
+            }
+
             int read;
             try
             {
@@ -636,10 +667,60 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
             {
                 throw new TimeoutException("placement-io");
             }
+            finally
+            {
+                lock (_readTimeoutGate)
+                {
+                    if (ReferenceEquals(_activeReadTimeout, timeout))
+                    {
+                        _activeReadTimeout = null;
+                    }
+                }
+
+                timeout.Dispose();
+            }
 
             if (read == 0)
             {
                 return null;
+            }
+        }
+    }
+
+    /// <summary>Completes one STORE and drops its initial-credit wait from the read-timeout count.</summary>
+    private void Finish(StoreOperation operation, ArticlePlacementResult result)
+    {
+        if (operation.TryFinish(result))
+        {
+            Interlocked.Decrement(ref _storesAwaitingInitialCredit);
+        }
+    }
+
+    /// <summary>
+    /// Disarms the outstanding read while at least one STORE is waiting for its first WINDOW.
+    /// The next read arms the timeout again once that count returns to zero.
+    /// </summary>
+    private void DisarmReadTimeout()
+    {
+        lock (_readTimeoutGate)
+        {
+            if (Volatile.Read(ref _storesAwaitingInitialCredit) == 0)
+            {
+                return;
+            }
+
+            var timeout = _activeReadTimeout;
+            if (timeout is null)
+            {
+                return;
+            }
+
+            try
+            {
+                timeout.CancelAfter(Timeout.InfiniteTimeSpan);
+            }
+            catch (ObjectDisposedException)
+            {
             }
         }
     }
@@ -680,7 +761,7 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
         {
             StreamId = streamId;
             ArticleId = articleId;
-            Window = new ArticleTransferWindow(limits.InitialStreamWindowBytes, limits.MaxStreamCreditBytes);
+            Window = new ArticleTransferWindow(0, limits.MaxStreamCreditBytes);
             Credit = new SemaphoreSlim(0);
             Completion = new TaskCompletionSource<ArticlePlacementResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
@@ -711,11 +792,19 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
 
         public ArticlePlacementResult Result { get; private set; }
 
-        public void TryFinish(ArticlePlacementResult result)
+        /// <summary>1 after META until the first WINDOW or a terminal result, then 0.</summary>
+        public int AwaitingInitialCredit;
+
+        /// <summary>
+        /// Completes the operation once.
+        /// Returns <see langword="true"/> when this call clears a pending initial-credit wait.
+        /// </summary>
+        public bool TryFinish(ArticlePlacementResult result)
         {
+            var releasedCreditWait = Interlocked.Exchange(ref AwaitingInitialCredit, 0) == 1;
             if (Interlocked.Exchange(ref _completed, 1) != 0)
             {
-                return;
+                return releasedCreditWait;
             }
 
             Result = result;
@@ -727,6 +816,8 @@ internal sealed class ArticlePlacementConnection : IAsyncDisposable
             catch (ObjectDisposedException)
             {
             }
+
+            return releasedCreditWait;
         }
 
         public void Dispose() => Credit.Dispose();

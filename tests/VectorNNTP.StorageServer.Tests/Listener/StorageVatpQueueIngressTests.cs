@@ -133,6 +133,8 @@ public sealed class StorageVatpQueueIngressTests
         await sizeMismatch.SendRawAsync(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeEnd(1)));
         Assert.Equal(VatpErrorCode.ArtSizeMismatch, FailCode(await sizeMismatch.ReadUntilAsync(static frames =>
             frames.Any(frame => frame.Header.Type == VatpFrameType.Fail))));
+        Assert.Equal(0, queue.ReservedBytes);
+        Assert.Equal(0, queue.AccountedBytes);
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
@@ -165,9 +167,12 @@ public sealed class StorageVatpQueueIngressTests
         var queue = new AcceptedArticleQueue();
         queue.Complete();
         await using var harness = await Harness.StartAsync(queue);
-        await harness.SendStoreAsync(built);
-        Assert.Equal(VatpErrorCode.IncompleteTransfer, FailCode(await harness.ReadUntilAsync(static frames =>
+        await harness.SendRawAsync(StoreFrame(built.Record.ArtId, 1));
+        await harness.SendRawAsync(MetaFrame(built, 1));
+        Assert.Equal(VatpErrorCode.Cancelled, FailCode(await harness.ReadUntilAsync(static frames =>
             frames.Any(frame => frame.Header.Type == VatpFrameType.Fail))));
+        Assert.Equal(0, queue.ReservedBytes);
+        Assert.Equal(0, harness.BodiesAllocated);
         var empty = await queue.DequeueAsync(CancellationToken.None);
         Assert.False(empty.HasArticle);
     }
@@ -230,6 +235,7 @@ public sealed class StorageVatpQueueIngressTests
             received.Any(frame => frame.Header.Type == VatpFrameType.Result));
 
         long credit = 0;
+        var admissionGrant = 0L;
         var resultSeen = false;
         foreach (var frame in frames)
         {
@@ -238,7 +244,14 @@ public sealed class StorageVatpQueueIngressTests
                 Assert.False(resultSeen);
                 Assert.Equal(1u, frame.Header.StreamId);
                 Assert.True(VatpControlPayload.TryDecodeWindow(frame.Payload, out var add));
-                credit += add;
+                if (admissionGrant == 0)
+                {
+                    admissionGrant = add;
+                }
+                else
+                {
+                    credit += add;
+                }
             }
 
             if (frame.Header.Type == VatpFrameType.Result)
@@ -248,6 +261,7 @@ public sealed class StorageVatpQueueIngressTests
             }
         }
 
+        Assert.Equal(ArticleTransferLimits.Default.InitialStreamWindowBytes, admissionGrant);
         Assert.Equal(built.Record.ArtSize, credit);
         Assert.Equal(1, queue.EnqueuedCount);
     }
@@ -275,6 +289,7 @@ public sealed class StorageVatpQueueIngressTests
         var frames = await harness.StoreAndReadAsync(built);
         Assert.Equal(VatpStoreOutcome.Accepted, Outcome(frames));
         long refunded = 0;
+        var sawGrant = false;
         foreach (var frame in frames)
         {
             if (frame.Header.Type != VatpFrameType.Window)
@@ -283,12 +298,191 @@ public sealed class StorageVatpQueueIngressTests
             }
 
             Assert.True(VatpControlPayload.TryDecodeWindow(frame.Payload, out var add));
+            if (!sawGrant)
+            {
+                Assert.Equal((uint)initial, add);
+                sawGrant = true;
+                continue;
+            }
+
             Assert.True(add <= 64 * 1024);
             refunded += add;
         }
 
+        Assert.True(sawGrant);
         Assert.Equal(built.Record.ArtSize, refunded);
         Assert.Equal(1, queue.EnqueuedCount);
+    }
+
+    [Fact]
+    public async Task Full_queue_withholds_body_credit_until_a_dequeue_frees_capacity()
+    {
+        var first = Build("<admit-held@seg.test>", "alpha-body\r\n");
+        var queue = new AcceptedArticleQueue(first.Record.ArtSize, TimeProvider.System);
+        await using var held = await Harness.StartAsync(queue);
+        Assert.Equal(VatpStoreOutcome.Accepted, Outcome(await held.StoreAndReadAsync(first)));
+
+        var second = Build("<admit-wait@seg.test>", "beta-body\r\n");
+        await using var waiting = await Harness.StartAsync(queue);
+        await waiting.SendRawAsync(StoreFrame(second.Record.ArtId, 1));
+        await waiting.SendRawAsync(MetaFrame(second, 1));
+        var credit = waiting.ReadUntilAsync(static frames =>
+            frames.Any(static frame => frame.Header.Type is VatpFrameType.Window or VatpFrameType.Fail or VatpFrameType.Result));
+        await WaitUntilAsync(() => queue.AdmissionWaiters == 1);
+        Assert.Equal(0, queue.ReservedBytes);
+        Assert.Equal(first.Record.ArtSize, queue.AccountedBytes);
+        Assert.Equal(0, waiting.BodiesAllocated);
+        Assert.False(credit.IsCompleted);
+
+        Assert.True((await queue.DequeueAsync(CancellationToken.None)).HasArticle);
+        var granted = await credit.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(VatpFrameType.Window, granted[0].Header.Type);
+        Assert.Equal(1, waiting.BodiesAllocated);
+        Assert.Equal(second.Record.ArtSize, queue.ReservedBytes);
+        Assert.Equal(0, queue.QueuedBytes);
+
+        await waiting.SendRawAsync(VatpFrameEncoder.ToSingleBuffer(
+            VatpFrameEncoder.EncodeData(1, second.Record.ArtData, fin: true)));
+        await waiting.SendRawAsync(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeEnd(1)));
+        var result = await waiting.ReadUntilAsync(static frames =>
+            frames.Any(static frame => frame.Header.Type == VatpFrameType.Result));
+        Assert.Equal(VatpStoreOutcome.Accepted, Outcome(result));
+        Assert.Equal(0, queue.ReservedBytes);
+        Assert.Equal(second.Record.ArtSize, queue.QueuedBytes);
+        var delivery = await queue.DequeueAsync(CancellationToken.None);
+        Assert.True(delivery.Article.ArtData.Span.SequenceEqual(second.Record.ArtData.Span));
+    }
+
+    [Fact]
+    public async Task Body_sent_before_queue_admission_is_rejected_without_allocating_it()
+    {
+        var first = Build("<admit-full@seg.test>", "alpha-body\r\n");
+        var queue = new AcceptedArticleQueue(first.Record.ArtSize, TimeProvider.System);
+        await using var held = await Harness.StartAsync(queue);
+        Assert.Equal(VatpStoreOutcome.Accepted, Outcome(await held.StoreAndReadAsync(first)));
+
+        var second = Build("<admit-early@seg.test>", "beta-body\r\n");
+        await using var early = await Harness.StartAsync(queue);
+        await early.SendStoreAsync(second);
+        var frames = await early.ReadUntilAsync(static received =>
+            received.Any(static frame => frame.Header.Type is VatpFrameType.Fail or VatpFrameType.Result));
+        Assert.Equal(VatpErrorCode.FlowControlViolation, FailCode(frames));
+        Assert.Equal(1, queue.EnqueuedCount);
+        Assert.Equal(0, queue.ReservedBytes);
+        Assert.Equal(0, queue.AdmissionWaiters);
+        Assert.Equal(0, early.BodiesAllocated);
+    }
+
+    [Fact]
+    public async Task Cancel_before_body_admission_releases_the_waiter()
+    {
+        var first = Build("<admit-cancel-held@seg.test>", "alpha-body\r\n");
+        var queue = new AcceptedArticleQueue(first.Record.ArtSize, TimeProvider.System);
+        await using var held = await Harness.StartAsync(queue);
+        Assert.Equal(VatpStoreOutcome.Accepted, Outcome(await held.StoreAndReadAsync(first)));
+        var second = Build("<admit-cancel@seg.test>", "beta-body\r\n");
+        await using var waiting = await Harness.StartAsync(queue);
+        await waiting.SendRawAsync(StoreFrame(second.Record.ArtId, 1));
+        await waiting.SendRawAsync(MetaFrame(second, 1));
+        await WaitUntilAsync(() => queue.AdmissionWaiters == 1);
+        await waiting.SendRawAsync(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeCancel(1)));
+        var frames = await waiting.ReadUntilAsync(static received =>
+            received.Any(static frame => frame.Header.Type == VatpFrameType.Fail));
+        Assert.Equal(VatpErrorCode.Cancelled, FailCode(frames));
+        await WaitUntilAsync(() => queue.AdmissionWaiters == 0);
+        Assert.Equal(0, queue.ReservedBytes);
+        Assert.Equal(first.Record.ArtSize, queue.AccountedBytes);
+    }
+
+    [Fact]
+    public async Task Article_larger_than_the_queue_budget_is_rejected_before_the_body()
+    {
+        var built = Build("<admit-oversize@seg.test>", "too-big-for-budget\r\n");
+        var queue = new AcceptedArticleQueue(8, TimeProvider.System);
+        await using var harness = await Harness.StartAsync(queue);
+        await harness.SendRawAsync(StoreFrame(built.Record.ArtId, 1));
+        await harness.SendRawAsync(MetaFrame(built, 1));
+        var frames = await harness.ReadUntilAsync(static received =>
+            received.Any(static frame => frame.Header.Type == VatpFrameType.Result));
+        Assert.Equal(VatpStoreOutcome.RejectedCapacity, Outcome(frames));
+        Assert.Equal(0, queue.EnqueuedCount);
+        Assert.Equal(0, queue.ReservedBytes);
+        Assert.Equal(0, harness.BodiesAllocated);
+    }
+
+    [Fact]
+    public async Task Two_sessions_cannot_both_reserve_the_last_free_slot()
+    {
+        var held = Build("<admit-shared-held@seg.test>", "held-body\r\n");
+        var queue = new AcceptedArticleQueue(held.Record.ArtSize, TimeProvider.System);
+        await using var owner = await Harness.StartAsync(queue);
+        Assert.Equal(VatpStoreOutcome.Accepted, Outcome(await owner.StoreAndReadAsync(held)));
+
+        var left = Build("<admit-shared-aaaa@seg.test>", "peer-body\r\n");
+        var right = Build("<admit-shared-bbbb@seg.test>", "peer-body\r\n");
+        Assert.Equal(held.Record.ArtSize, left.Record.ArtSize);
+        Assert.Equal(held.Record.ArtSize, right.Record.ArtSize);
+        await using var first = await Harness.StartAsync(queue);
+        await using var second = await Harness.StartAsync(queue);
+        await first.SendRawAsync(StoreFrame(left.Record.ArtId, 1));
+        await first.SendRawAsync(MetaFrame(left, 1));
+        await second.SendRawAsync(StoreFrame(right.Record.ArtId, 1));
+        await second.SendRawAsync(MetaFrame(right, 1));
+        await WaitUntilAsync(() => queue.AdmissionWaiters == 2);
+        Assert.Equal(0, queue.ReservedBytes);
+
+        var firstCredit = first.ReadUntilAsync(static frames =>
+            frames.Any(static frame => frame.Header.Type is VatpFrameType.Window or VatpFrameType.Fail or VatpFrameType.Result));
+        var secondCredit = second.ReadUntilAsync(static frames =>
+            frames.Any(static frame => frame.Header.Type is VatpFrameType.Window or VatpFrameType.Fail or VatpFrameType.Result));
+        Assert.True((await queue.DequeueAsync(CancellationToken.None)).HasArticle);
+        var winner = await Task.WhenAny(firstCredit, secondCredit).WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => queue.AdmissionWaiters == 1 && queue.ReservedBytes == held.Record.ArtSize);
+        Assert.True(winner.IsCompletedSuccessfully);
+        Assert.Equal(VatpFrameType.Window, (await winner)[0].Header.Type);
+        Assert.Equal(1, (firstCredit.IsCompleted ? 1 : 0) + (secondCredit.IsCompleted ? 1 : 0));
+        Assert.Equal(0, queue.QueuedBytes);
+    }
+
+    [Fact]
+    public async Task Disconnect_during_body_reception_releases_the_reservation()
+    {
+        var built = Build("<admit-drop@seg.test>", new string('x', 128) + "\r\n");
+        var queue = new AcceptedArticleQueue(built.Record.ArtSize, TimeProvider.System);
+        var session = await Harness.StartAsync(queue);
+        await session.SendRawAsync(StoreFrame(built.Record.ArtId, 1));
+        await session.SendRawAsync(MetaFrame(built, 1));
+        var granted = await session.ReadUntilAsync(static frames =>
+            frames.Any(static frame => frame.Header.Type == VatpFrameType.Window));
+        Assert.Equal(VatpFrameType.Window, granted[0].Header.Type);
+        Assert.Equal(1, session.BodiesAllocated);
+        Assert.Equal(built.Record.ArtSize, queue.ReservedBytes);
+
+        var chunk = built.Record.ArtData.Slice(0, 1);
+        await session.SendRawAsync(VatpFrameEncoder.ToSingleBuffer(VatpFrameEncoder.EncodeData(1, chunk, fin: false)));
+        await session.ReadUntilAsync(static frames =>
+            frames.Any(static frame => frame.Header.Type == VatpFrameType.Window));
+        Assert.Equal(built.Record.ArtSize, queue.ReservedBytes);
+        Assert.Equal(0, queue.QueuedBytes);
+
+        await session.DisposeAsync();
+        Assert.Equal(0, queue.ReservedBytes);
+        Assert.Equal(0, queue.AccountedBytes);
+        Assert.Equal(0, queue.AdmissionWaiters);
+
+        await using var retry = await Harness.StartAsync(queue);
+        Assert.Equal(VatpStoreOutcome.Accepted, Outcome(await retry.StoreAndReadAsync(built)));
+        Assert.Equal(0, queue.ReservedBytes);
+        Assert.Equal(built.Record.ArtSize, queue.QueuedBytes);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (!condition())
+        {
+            await Task.Delay(5, timeout.Token);
+        }
     }
 
     [Fact]
@@ -512,15 +706,20 @@ public sealed class StorageVatpQueueIngressTests
     private sealed class Harness : IAsyncDisposable
     {
         private readonly CancellationTokenSource _cts = new();
+        private readonly StorageVatpSession _session;
         private readonly Task _run;
 
         private Harness(PipeTransport transport, StorageVatpSession session)
         {
             Transport = transport;
+            _session = session;
             _run = session.RunAsync(_cts.Token);
         }
 
         public PipeTransport Transport { get; }
+
+        /// <summary>Article buffers this session allocated after admission.</summary>
+        public long BodiesAllocated => Volatile.Read(ref _session.StoreBodiesAllocated);
 
         public static async Task<Harness> StartAsync(IAcceptedArticleQueue queue, ArticleTransferLimits? limits = null)
         {

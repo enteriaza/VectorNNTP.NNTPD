@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
@@ -1136,6 +1137,14 @@ public sealed class ArticlePlacementTests
                             VatpFrameEncoder.EncodeHello(VatpProtocol.DefaultMaxFramePayload));
                         await stream.WriteAsync(hello);
                     }
+                    else if (frame.Header.Type == VatpFrameType.Meta
+                        && TryDecodeMeta(frame.Payload, out var meta)
+                        && meta.ArtSize > 0)
+                    {
+                        var grant = VatpFrameEncoder.ToSingleBuffer(
+                            VatpFrameEncoder.EncodeWindow(frame.Header.StreamId, (uint)meta.ArtSize));
+                        await stream.WriteAsync(grant);
+                    }
                     else if (frame.Header.Type == VatpFrameType.Data && frame.Payload.Length > 0)
                     {
                         windows++;
@@ -1160,6 +1169,13 @@ public sealed class ArticlePlacementTests
                     }
                 }
             }
+        }
+
+        private static bool TryDecodeMeta(ReadOnlySequence<byte> payload, out ArticleCanonicalTransferMeta meta)
+        {
+            var bytes = new byte[payload.Length];
+            payload.CopyTo(bytes);
+            return VatpMetaCodec.TryDecode(bytes, out meta, out _);
         }
     }
 }

@@ -557,7 +557,12 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
     private readonly ConcurrentDictionary<uint, StoreStream> _storeStreams = [];
     private readonly ArticleTransferReadyRing _readyRing = new();
     private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private readonly object _storeGate = new();
     private readonly byte[] _smallWrite = new byte[512];
+    private CancellationToken _runCancellation;
+
+    /// <summary>Article buffers allocated by this session after a STORE reservation was granted.</summary>
+    internal long StoreBodiesAllocated;
     private Exception? _fatalSessionException;
     private uint _maxFramePayload = VatpProtocol.DefaultMaxFramePayload;
     private bool _clientHelloComplete;
@@ -590,6 +595,7 @@ public sealed partial class StorageVatpSession : IAsyncDisposable
     /// <summary>Runs until peer close, cancellation, or fatal protocol error.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        _runCancellation = cancellationToken;
         var capacity = _listener.ParserAccumulationMaxBytes;
         var parseBuffer = ArrayPool<byte>.Shared.Rent(capacity);
         var usable = Math.Min(parseBuffer.Length, capacity);

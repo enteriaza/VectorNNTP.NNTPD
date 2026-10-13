@@ -504,6 +504,8 @@ internal sealed class AcceptedArticleWorker : IApplicationService
             _counters.StoredBytes,
             _counters.Deferred,
             Volatile.Read(ref _active),
-            _queue.QueuedCount);
+            _queue.QueuedCount,
+            _queue.QueuedBytes,
+            _queue.ReservedBytes);
     }
 }

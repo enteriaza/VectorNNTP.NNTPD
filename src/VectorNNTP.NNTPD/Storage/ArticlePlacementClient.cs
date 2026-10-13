@@ -379,7 +379,8 @@ internal readonly record struct PlacementTransportCounters(
     long ResultCount,
     long ResultTicks,
     long ResultMaxTicks,
-    int PeakActive)
+    int PeakActive,
+    long DataFramesWritten)
 {
     /// <summary>Adds one connection's counters.</summary>
     internal PlacementTransportCounters Add(ArticlePlacementConnection connection) =>
@@ -389,7 +390,8 @@ internal readonly record struct PlacementTransportCounters(
             ResultCount + connection.ResultCount,
             ResultTicks + connection.ResultTicks,
             Math.Max(ResultMaxTicks, connection.ResultMaxTicks),
-            Math.Max(PeakActive, connection.PeakActive));
+            Math.Max(PeakActive, connection.PeakActive),
+            DataFramesWritten + connection.DataFramesWritten);
 }
 
 /// <summary>STORE/META/DATA/END sender over an already connected stream.</summary>
@@ -431,7 +433,7 @@ internal static class VatpPlacementTransfer
             var metaBytes = VatpMetaCodec.Encode(in meta);
             await WriteAsync(stream, VatpFrameEncoder.EncodeMeta(streamId, metaBytes), cancellationToken).ConfigureAwait(false);
 
-            var window = new ArticleTransferWindow(limits.InitialStreamWindowBytes, limits.MaxStreamCreditBytes);
+            var window = new ArticleTransferWindow(0, limits.MaxStreamCreditBytes);
             var offset = 0;
             var artData = record.ArtData;
             while (offset < record.ArtSize)

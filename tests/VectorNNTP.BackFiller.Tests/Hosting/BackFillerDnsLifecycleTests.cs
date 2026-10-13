@@ -42,28 +42,7 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
         }
 
         [Fact]
-        public async Task Dns_startup_failure_does_not_start_later_services_and_cleans_up()
-        {
-            var harness = CreateDnsHarness();
-            harness.Reconciler.ReconcileException = new CloudflareDnsException("reconcile failed");
-            var order = new List<string>();
-            var dns = new OrderRecordingService(harness.Adapter, order);
-            var later = new OrderRecordingService("AcmeCertificate", order);
-            var manager = CreateManager(dns, later);
-
-            await Assert.ThrowsAsync<CloudflareDnsException>(() => manager.StartAsync(CancellationToken.None));
-
-            Assert.Equal(["start:CloudflareDnsReconciliation"], order);
-            Assert.Equal(0, later.StartCount);
-            Assert.Empty(manager.StartedServices);
-            Assert.Equal([harness.Options.Fqdn], harness.Reconciler.ReconcileCalls.Select(static call => call.Fqdn));
-            Assert.Equal([harness.Options.Fqdn], harness.Reconciler.RemoveCalls.Select(static call => call.Fqdn));
-            Assert.DoesNotContain(UnrelatedFqdn, harness.Reconciler.RemoveCalls.Select(static call => call.Fqdn));
-            Assert.Equal(1, harness.Resolver.ResolveCount);
-        }
-
-        [Fact]
-        public async Task Dns_succeeds_then_acme_failure_rolls_back_exact_backfiller_fqdn()
+        public async Task Dns_start_does_not_publish_and_acme_failure_does_not_remove_the_fqdn()
         {
             var harness = CreateDnsHarness();
             var order = new List<string>();
@@ -81,15 +60,28 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
                 ["start:CloudflareDnsReconciliation", "start:AcmeCertificate", "stop:CloudflareDnsReconciliation"],
                 order);
             Assert.Equal(0, listener.StartCount);
+            Assert.Empty(harness.Reconciler.ReconcileCalls);
+            Assert.Empty(harness.Reconciler.RemoveCalls);
             Assert.Equal(1, harness.Resolver.ResolveCount);
-            Assert.Equal([harness.Options.Fqdn], harness.Reconciler.ReconcileCalls.Select(static call => call.Fqdn));
-            Assert.Equal([harness.Options.Fqdn], harness.Reconciler.RemoveCalls.Select(static call => call.Fqdn));
-            Assert.DoesNotContain(UnrelatedFqdn, harness.Reconciler.RemoveCalls.Select(static call => call.Fqdn));
-            Assert.Empty(manager.StartedServices);
         }
 
         [Fact]
-        public async Task Dns_succeeds_then_listener_failure_rolls_back_exact_backfiller_fqdn()
+        public async Task Publish_failure_after_validation_does_not_remove_the_fqdn()
+        {
+            var harness = CreateDnsHarness();
+            harness.Reconciler.ReconcileException = new CloudflareDnsException("reconcile failed");
+
+            await harness.Service.StartAsync(CancellationToken.None);
+            await Assert.ThrowsAsync<CloudflareDnsException>(() =>
+                harness.Service.PublishAfterListenerBoundAsync(CancellationToken.None));
+            await harness.Service.StopAsync(CancellationToken.None);
+
+            Assert.Equal([harness.Options.Fqdn], harness.Reconciler.ReconcileCalls.Select(static call => call.Fqdn));
+            Assert.Empty(harness.Reconciler.RemoveCalls);
+        }
+
+        [Fact]
+        public async Task Listener_bind_failure_does_not_remove_the_fqdn()
         {
             var harness = CreateDnsHarness();
             var order = new List<string>();
@@ -112,8 +104,8 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
                     "stop:CloudflareDnsReconciliation",
                 ],
                 order);
-            Assert.Equal([harness.Options.Fqdn], harness.Reconciler.RemoveCalls.Select(static call => call.Fqdn));
-            Assert.DoesNotContain(UnrelatedFqdn, harness.Reconciler.RemoveCalls.Select(static call => call.Fqdn));
+            Assert.Empty(harness.Reconciler.ReconcileCalls);
+            Assert.Empty(harness.Reconciler.RemoveCalls);
             Assert.Empty(manager.StartedServices);
         }
 
@@ -124,12 +116,15 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
             var order = new List<string>();
             var dns = new OrderRecordingService(harness.Adapter, order);
             var acme = new OrderRecordingService("AcmeCertificate", order);
-            var listener = new OrderRecordingService("CacheListener", order);
+            var listener = new OrderRecordingService(
+                "CacheListener",
+                order,
+                onStart: harness.Service.PublishAfterListenerBoundAsync);
             var manager = CreateManager(dns, acme, listener);
 
             await manager.StartAsync(CancellationToken.None);
             Assert.Equal([dns, acme, listener], manager.StartedServices.ToArray());
-            Assert.Equal(1, harness.Resolver.ResolveCount);
+            Assert.Equal(2, harness.Resolver.ResolveCount);
             Assert.Empty(harness.Reconciler.RemoveCalls);
 
             await manager.StopAsync(CancellationToken.None);
@@ -224,9 +219,11 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
                 Options.Create(options),
                 resolver,
                 reconciler,
-                NullLogger<CloudflareDnsReconciliationService>.Instance);
+                NullLogger<CloudflareDnsReconciliationService>.Instance,
+                new ListenerBoundDnsPublicationLease());
             return new DnsHarness(
                 new CloudflareDnsReconciliationApplicationService(inner),
+                inner,
                 reconciler,
                 resolver,
                 options);
@@ -246,6 +243,7 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
 
         private sealed record DnsHarness(
             CloudflareDnsReconciliationApplicationService Adapter,
+            CloudflareDnsReconciliationService Service,
             RecordingCloudflareDnsReconciler Reconciler,
             CountingBindAddressResolver Resolver,
             AcmeCloudflareOptions Options);
@@ -268,6 +266,7 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
             private readonly IApplicationService? _inner;
             private readonly List<string> _order;
             private readonly Exception? _startException;
+            private readonly Func<CancellationToken, Task>? _onStart;
 
             public OrderRecordingService(IApplicationService inner, List<string> order)
             {
@@ -278,13 +277,18 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
                 Name = inner.Name;
             }
 
-            public OrderRecordingService(string name, List<string> order, Exception? startException = null)
+            public OrderRecordingService(
+                string name,
+                List<string> order,
+                Exception? startException = null,
+                Func<CancellationToken, Task>? onStart = null)
             {
                 ArgumentException.ThrowIfNullOrWhiteSpace(name);
                 ArgumentNullException.ThrowIfNull(order);
                 Name = name;
                 _order = order;
                 _startException = startException;
+                _onStart = onStart;
             }
 
             public string Name { get; }
@@ -300,6 +304,11 @@ namespace VectorNNTP.BackFiller.Tests.Hosting
                 if (_startException is not null)
                 {
                     throw _startException;
+                }
+
+                if (_onStart is not null)
+                {
+                    await _onStart(cancellationToken).ConfigureAwait(false);
                 }
 
                 if (_inner is not null)

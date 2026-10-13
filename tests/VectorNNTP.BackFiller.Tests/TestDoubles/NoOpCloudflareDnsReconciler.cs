@@ -12,9 +12,25 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
             CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
+        public bool DeletedPreExistingDuringLastReconcile => false;
+
         public Task RemoveAllRecordsForFqdnAsync(
             string zoneId,
             string fqdn,
+            CancellationToken cancellationToken,
+            TimeSpan? operationTimeout = null) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<string>> ListRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+
+        public Task DeleteRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            IReadOnlyCollection<string> recordIds,
             CancellationToken cancellationToken,
             TimeSpan? operationTimeout = null) =>
             Task.CompletedTask;

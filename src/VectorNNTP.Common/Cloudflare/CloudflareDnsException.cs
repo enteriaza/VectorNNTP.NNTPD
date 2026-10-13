@@ -55,6 +55,15 @@ namespace VectorNNTP.Common.Cloudflare
         internal string? FailedOperation { get; init; }
 
         /// <summary>
+        /// Gets whether this failure happened after reconciliation began deleting records that already existed.
+        /// </summary>
+        /// <remarks>
+        /// Compensating cleanup must not remove the desired records created by that attempt, and must not
+        /// call a whole-FQDN delete. The provider API has no transaction that can restore the deleted records.
+        /// </remarks>
+        internal bool DeletedPreExistingRecords { get; init; }
+
+        /// <summary>
         /// Returns whether an HTTP status should be treated as a permanent Cloudflare API failure.
         /// </summary>
         /// <remarks>429 is transient. Other 4xx (including 401/403) are permanent for this host.</remarks>

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Time.Testing;
 using VectorNNTP.NNTPD.Configuration;
 using VectorNNTP.NNTPD.NntpDb;
 using VectorNNTP.NNTPD.PostFilter;
+using VectorNNTP.NNTPD.Tests.Fixtures;
 
 namespace VectorNNTP.NNTPD.Tests.PostFilter;
 
@@ -122,13 +123,14 @@ public sealed class PostFilterPolicyServiceTests
                 new PostFilterOptions { Gate = PostFilterGateState.Closed },
                 revision: 1),
         };
-        var time = new FakeTimeProvider();
+        var time = new ControllableTimeProvider();
         await using var service = CreateService(repository, time, TimeSpan.FromSeconds(60));
         await service.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => time.HasPendingTimer);
 
         repository.Exception = new NntpDbUnavailableException("down");
         time.Advance(TimeSpan.FromSeconds(60));
-        await Task.Yield();
+        await WaitUntilAsync(() => time.HasPendingTimer);
         Assert.Equal(1, service.Current.Revision);
 
         repository.Exception = null;

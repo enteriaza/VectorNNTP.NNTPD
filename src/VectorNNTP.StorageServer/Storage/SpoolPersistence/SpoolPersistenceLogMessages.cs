@@ -61,6 +61,8 @@ internal static partial class SpoolPersistenceLogMessages
     /// <param name="deferred">Deferred selection attempts.</param>
     /// <param name="active">Running workers.</param>
     /// <param name="queued">Queued articles.</param>
-    [LoggerMessage(EventId = 5707, Level = LogLevel.Information, Message = "Spool persistence stored={Stored} storedBytes={StoredBytes} deferred={Deferred} activeWorkers={Active} queued={Queued}")]
-    public static partial void Summary(ILogger logger, long stored, long storedBytes, long deferred, int active, int queued);
+    /// <param name="queuedBytes">Bytes in the queue.</param>
+    /// <param name="reservedBytes">Bytes reserved for admitted bodies that are not queued yet.</param>
+    [LoggerMessage(EventId = 5707, Level = LogLevel.Information, Message = "Spool persistence stored={Stored} storedBytes={StoredBytes} deferred={Deferred} activeWorkers={Active} queued={Queued} queuedBytes={QueuedBytes} reservedBytes={ReservedBytes}")]
+    public static partial void Summary(ILogger logger, long stored, long storedBytes, long deferred, int active, int queued, long queuedBytes, long reservedBytes);
 }

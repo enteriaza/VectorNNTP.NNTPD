@@ -17,6 +17,10 @@ using VectorNNTP.NNTPD.Session.Authentication;
 using VectorNNTP.NNTPD.Tests.Fixtures;
 using VectorNNTP.NNTPD.Tests.Hosting.Systemd;
 using VectorNNTP.Common.Networking.Listeners;
+using VectorNNTP.Common.Cloudflare;
+using VectorNNTP.Common.Configuration;
+using VectorNNTP.Common.Networking;
+using VectorNNTP.NNTPD.Tests.TestDoubles;
 
 namespace VectorNNTP.NNTPD.Tests.Networking.Listeners;
 
@@ -370,10 +374,67 @@ public sealed class ListenerBindStartupTests
         return options;
     }
 
+    [Fact]
+    public async Task Plain_bind_failure_with_tls_disabled_does_not_publish()
+    {
+        var options = MultiEndpointPlainOptions();
+        options.BindPortTls = 0;
+        options.BindAddress = [TestHostFactory.TestIpv4.ToString(), TestHostFactory.TestIpv6.ToString()];
+        var client = new FakeCloudflareDnsClient();
+        client.Seed(new CloudflareDnsRecord
+        {
+            Id = "healthy-a",
+            Type = "A",
+            Name = options.Fqdn,
+            Content = "198.18.0.10",
+            Ttl = 300,
+            Proxied = false,
+        });
+        var publication = CreatePublication(options, client);
+        await publication.StartAsync(CancellationToken.None);
+        await using var service = CreatePlain(options, new ScriptedListenSocketBinder(AddressInUse()), publication: publication);
+
+        await Assert.ThrowsAsync<SocketException>(() => service.StartAsync(CancellationToken.None));
+        await publication.StopAsync(CancellationToken.None);
+
+        Assert.Equal(0, client.CreateCallCount);
+        Assert.Equal(0, client.DeleteCallCount);
+        Assert.Contains(client.Snapshot(), static record => record.Id == "healthy-a");
+    }
+
+    [Fact]
+    public async Task Tls_bind_failure_does_not_publish()
+    {
+        var options = TestHostFactory.CreateValidOptions();
+        options.BindAddress = [TestHostFactory.TestIpv4.ToString()];
+        options.BindPortTls = 563;
+        var client = new FakeCloudflareDnsClient();
+        client.Seed(new CloudflareDnsRecord
+        {
+            Id = "healthy-a",
+            Type = "A",
+            Name = options.Fqdn,
+            Content = "198.18.0.10",
+            Ttl = 300,
+            Proxied = false,
+        });
+        var publication = CreatePublication(options, client);
+        await publication.StartAsync(CancellationToken.None);
+        await using var service = CreateTls(options, new ScriptedListenSocketBinder(AddressInUse()), publication: publication);
+
+        await Assert.ThrowsAsync<SocketException>(() => service.StartAsync(CancellationToken.None));
+        await publication.StopAsync(CancellationToken.None);
+
+        Assert.Equal(0, client.CreateCallCount);
+        Assert.Equal(0, client.DeleteCallCount);
+        Assert.Contains(client.Snapshot(), static record => record.Id == "healthy-a");
+    }
+
     private static NntpPlainListenerService CreatePlain(
         NntpdOptions options,
         IListenSocketBinder? listenBinder,
-        ILogger<NntpPlainListenerService>? logger = null)
+        ILogger<NntpPlainListenerService>? logger = null,
+        CloudflareDnsReconciliationService? publication = null)
     {
         return new NntpPlainListenerService(
             Options.Create(options),
@@ -384,13 +445,15 @@ public sealed class ListenerBindStartupTests
             TransitPeerAuthorization.Disabled,
             NullLoggerFactory.Instance,
             logger ?? NullLogger<NntpPlainListenerService>.Instance,
-            listenBinder: listenBinder);
+            listenBinder: listenBinder,
+            publication: publication);
     }
 
     private static NntpTlsListenerService CreateTls(
         NntpdOptions options,
         IListenSocketBinder listenBinder,
-        ILogger<NntpTlsListenerService>? logger = null)
+        ILogger<NntpTlsListenerService>? logger = null,
+        CloudflareDnsReconciliationService? publication = null)
     {
         return new NntpTlsListenerService(
             Options.Create(options),
@@ -401,7 +464,25 @@ public sealed class ListenerBindStartupTests
             TransitPeerAuthorization.Disabled,
             NullLoggerFactory.Instance,
             logger ?? NullLogger<NntpTlsListenerService>.Instance,
-            listenBinder: listenBinder);
+            listenBinder: listenBinder,
+            publication: publication);
+    }
+
+    private static CloudflareDnsReconciliationService CreatePublication(NntpdOptions options, FakeCloudflareDnsClient client)
+    {
+        var resolver = new BindAddressResolver(
+            new FakeLocalIpAddressAssignee(TestHostFactory.TestIpv4, TestHostFactory.TestIpv6),
+            NullLogger<BindAddressResolver>.Instance);
+        var reconciler = new CloudflareDnsReconciler(
+            client,
+            Options.Create<AcmeCloudflareOptions>(options),
+            NullLogger<CloudflareDnsReconciler>.Instance);
+        return new CloudflareDnsReconciliationService(
+            Options.Create<AcmeCloudflareOptions>(options),
+            resolver,
+            reconciler,
+            NullLogger<CloudflareDnsReconciliationService>.Instance,
+            new ListenerBoundDnsPublicationLease());
     }
 
     private sealed class ScriptedListenSocketBinder : IListenSocketBinder

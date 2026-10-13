@@ -464,6 +464,47 @@ internal sealed class ArticleIndexService : IArticleIndex, IApplicationService
         }
     }
 
+    /// <summary>Gets channel reads owned by running writers and not yet consumed.</summary>
+    internal int PendingReads
+    {
+        get
+        {
+            var count = 0;
+            foreach (var spool in _spools)
+            {
+                count += spool.Writer?.PendingReads ?? 0;
+            }
+
+            return count;
+        }
+    }
+
+    /// <summary>Gets flush timers armed by running writers and not yet disposed.</summary>
+    internal int ActiveIntervalWaits
+    {
+        get
+        {
+            var count = 0;
+            foreach (var spool in _spools)
+            {
+                count += spool.Writer?.ActiveIntervalWaits ?? 0;
+            }
+
+            return count;
+        }
+    }
+
+    /// <summary>Faults every running writer channel. Test seam.</summary>
+    /// <param name="exception">Exception the writer observes.</param>
+    internal void FaultWritersForTests(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        foreach (var spool in _spools)
+        {
+            spool.Writer?.FaultForTests(exception);
+        }
+    }
+
     /// <summary>Gets or sets a test signal invoked when a reservation caller is about to wait.</summary>
     internal Action? OnReservationWaiting
     {

@@ -212,10 +212,18 @@ public sealed class CloudflareDnsDeadlineTests
                 IsPermanentFailure = true,
                 FailedOperation = "List",
             },
-            ListAllException = new CloudflareDnsException("cleanup-still-failing")
+            TransformListedAllRecords = (_, callCount) =>
             {
-                IsPermanentFailure = true,
-                FailedOperation = "ListAll",
+                if (callCount > 1)
+                {
+                    throw new CloudflareDnsException("cleanup-still-failing")
+                    {
+                        IsPermanentFailure = true,
+                        FailedOperation = "ListAll",
+                    };
+                }
+
+                return [];
             },
         };
 

@@ -28,6 +28,7 @@ using VectorNNTP.NNTPD.RabbitMq.ArticleWork;
 using VectorNNTP.NNTPD.Storage;
 using VectorNNTP.NNTPD.Transport.Vatp;
 using VectorNNTP.Common.Networking.Listeners;
+using VectorNNTP.Common.Cloudflare;
 
 namespace VectorNNTP.NNTPD.Networking.Listeners;
 
@@ -74,6 +75,13 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
     private readonly IListenSocketBinder _listenBinder;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<NntpPlainListenerService> _logger;
+
+    /// <summary>
+    /// Publishes DNS after every plain socket is bound, and only when the TLS listener is disabled.
+    /// When TLS is enabled, <see cref="NntpTlsListenerService"/> publishes after its own bind.
+    /// Null skips publication. A failure rolls back the sockets bound by this start.
+    /// </summary>
+    private readonly IListenerDnsPublication? _publication;
     private readonly ConcurrentDictionary<NntpConnection, byte> _connections = new();
     private readonly List<SocketAcceptListener> _listeners = [];
     private readonly CancellationTokenSource _runCts = new();
@@ -114,7 +122,8 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         PostFilterMetrics? postFilterMetrics = null,
         IPostFilterRejectionEvidenceQueue? postFilterEvidence = null,
         INewsLogWriter? newsLog = null,
-        INntpArticlePolicySource? sharedConfiguration = null)
+        INntpArticlePolicySource? sharedConfiguration = null,
+        IListenerDnsPublication? publication = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(trustedProxyHosts);
@@ -156,6 +165,7 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
         _listenBinder = listenBinder ?? SocketListenBinder.Instance;
         _loggerFactory = loggerFactory;
         _logger = logger;
+        _publication = publication;
     }
 
     /// <inheritdoc />
@@ -222,6 +232,11 @@ public sealed class NntpPlainListenerService : IApplicationService, IAsyncDispos
                 }
 
                 _listeners.Add(listener);
+            }
+
+            if (_publication is not null && !_options.Value.IsTlsListenerEnabled)
+            {
+                await _publication.PublishAfterListenerBoundAsync(cancellationToken).ConfigureAwait(false);
             }
 
             _execution = WaitUntilStoppedAsync(_runCts.Token);

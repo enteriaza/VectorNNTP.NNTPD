@@ -32,9 +32,13 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
 
     private readonly object _gate = new();
     private readonly Queue<long> _stamps = new();
+    private readonly Dictionary<long, int> _reservations = new();
+    private readonly Queue<ReservationWaiter> _waiters = new();
     private long _enqueued;
     private long _dequeued;
     private long _queuedBytes;
+    private long _reservedBytes;
+    private long _nextReservationId;
     private bool _completed;
 
     /// <summary>Initializes the queue with the default one-gibibyte budget.</summary>
@@ -85,7 +89,7 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
         }
     }
 
-    /// <summary>Bytes currently held by the channel.</summary>
+    /// <inheritdoc />
     public long QueuedBytes
     {
         get
@@ -93,6 +97,42 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
             lock (_gate)
             {
                 return _queuedBytes;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public long ReservedBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _reservedBytes;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public long AccountedBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _queuedBytes + _reservedBytes;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public int AdmissionWaiters
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _waiters.Count;
             }
         }
     }
@@ -150,7 +190,8 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
 
         lock (_gate)
         {
-            if (_completed || article.ArtSize > _maxQueuedBytes || _queuedBytes > _maxQueuedBytes - article.ArtSize)
+            var accounted = _queuedBytes + _reservedBytes;
+            if (_completed || article.ArtSize > _maxQueuedBytes || accounted > _maxQueuedBytes - article.ArtSize)
             {
                 return false;
             }
@@ -176,16 +217,13 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
             return false;
         }
 
+        List<ReservationWaiter>? granted;
         lock (_gate)
         {
-            _dequeued++;
-            _queuedBytes -= article.ArtSize;
-            if (_stamps.Count > 0)
-            {
-                _stamps.Dequeue();
-            }
+            granted = NoteDequeued(article.ArtSize);
         }
 
+        DisposeRegistrations(granted);
         delivery = new AcceptedArticleDelivery(true, article);
         return true;
     }
@@ -196,16 +234,13 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
         try
         {
             var article = await _channel.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            List<ReservationWaiter>? granted;
             lock (_gate)
             {
-                _dequeued++;
-                _queuedBytes -= article.ArtSize;
-                if (_stamps.Count > 0)
-                {
-                    _stamps.Dequeue();
-                }
+                granted = NoteDequeued(article.ArtSize);
             }
 
+            DisposeRegistrations(granted);
             return new AcceptedArticleDelivery(true, article);
         }
         catch (ChannelClosedException)
@@ -217,10 +252,295 @@ public sealed class AcceptedArticleQueue : IAcceptedArticleQueue
     /// <inheritdoc />
     public void Complete()
     {
+        ReservationWaiter[] pending;
         lock (_gate)
         {
             _completed = true;
             _channel.Writer.TryComplete();
+            pending = _waiters.ToArray();
+            _waiters.Clear();
+        }
+
+        foreach (var waiter in pending)
+        {
+            waiter.DisposeRegistration();
+            waiter.Completion.TrySetResult(null);
+        }
+    }
+
+    /// <inheritdoc />
+    public bool TryReserve(int bytes, out QueueReservation reservation)
+    {
+        if (bytes < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bytes));
+        }
+
+        lock (_gate)
+        {
+            if (!TryTakeReservation(bytes, out reservation))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public ValueTask<QueueReservation?> ReserveAsync(int bytes, CancellationToken cancellationToken)
+    {
+        if (bytes < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bytes));
+        }
+
+        ReservationWaiter waiter;
+        List<ReservationWaiter>? granted = null;
+        lock (_gate)
+        {
+            if (TryTakeReservation(bytes, out var reservation))
+            {
+                return new ValueTask<QueueReservation?>(reservation);
+            }
+
+            if (_completed || bytes > _maxQueuedBytes)
+            {
+                return new ValueTask<QueueReservation?>((QueueReservation?)null);
+            }
+
+            waiter = new ReservationWaiter(bytes, this);
+            _waiters.Enqueue(waiter);
+            granted = PumpWaiters();
+        }
+
+        DisposeRegistrations(granted);
+        if (cancellationToken.CanBeCanceled)
+        {
+            waiter.Registration = cancellationToken.Register(static state =>
+            {
+                var self = (ReservationWaiter)state!;
+                self.Owner.CancelWaiter(self);
+            }, waiter);
+            if (waiter.Completion.Task.IsCompleted)
+            {
+                waiter.DisposeRegistration();
+            }
+        }
+
+        return new ValueTask<QueueReservation?>(waiter.Completion.Task);
+    }
+
+    /// <inheritdoc />
+    public bool TryCommit(QueueReservation reservation, AcceptedArticle article)
+    {
+        if (article.ArtSize < 1 || article.ArtData.Length != article.ArtSize)
+        {
+            throw new ArgumentException("ArtSize must match ArtData.Length and be at least 1.", nameof(article));
+        }
+
+        bool committed;
+        List<ReservationWaiter>? granted;
+        lock (_gate)
+        {
+            if (!_reservations.Remove(reservation.Id, out var reserved))
+            {
+                return false;
+            }
+
+            _reservedBytes -= reserved;
+            if (article.ArtSize == reserved && _channel.Writer.TryWrite(article))
+            {
+                _enqueued++;
+                _queuedBytes += article.ArtSize;
+                _stamps.Enqueue(_time.GetTimestamp());
+                committed = true;
+                granted = null;
+            }
+            else
+            {
+                committed = false;
+                granted = PumpWaiters();
+            }
+        }
+
+        DisposeRegistrations(granted);
+        return committed;
+    }
+
+    /// <inheritdoc />
+    public void Release(QueueReservation reservation)
+    {
+        List<ReservationWaiter>? granted;
+        lock (_gate)
+        {
+            if (!_reservations.Remove(reservation.Id, out var reserved))
+            {
+                return;
+            }
+
+            _reservedBytes -= reserved;
+            granted = PumpWaiters();
+        }
+
+        DisposeRegistrations(granted);
+    }
+
+    /// <summary>Accounts a dequeue and grants the oldest waiter that now fits.</summary>
+    /// <param name="bytes">Bytes removed from the queue.</param>
+    /// <returns>Waiters whose registrations must be disposed after the lock is released.</returns>
+    private List<ReservationWaiter>? NoteDequeued(int bytes)
+    {
+        _dequeued++;
+        _queuedBytes -= bytes;
+        if (_stamps.Count > 0)
+        {
+            _stamps.Dequeue();
+        }
+
+        return PumpWaiters();
+    }
+
+    /// <summary>
+    /// Reserves <paramref name="bytes"/> when the queue is open, nobody is waiting, and the bytes fit.
+    /// </summary>
+    /// <param name="bytes">Positive article length.</param>
+    /// <param name="reservation">Set when the method returns <see langword="true"/>.</param>
+    private bool TryTakeReservation(int bytes, out QueueReservation reservation)
+    {
+        reservation = default;
+        if (_completed || _waiters.Count > 0 || bytes > _maxQueuedBytes)
+        {
+            return false;
+        }
+
+        var accounted = _queuedBytes + _reservedBytes;
+        if (accounted > _maxQueuedBytes - bytes)
+        {
+            return false;
+        }
+
+        reservation = AddReservation(bytes);
+        return true;
+    }
+
+    /// <summary>Records a reservation. Caller holds <see cref="_gate"/>.</summary>
+    /// <param name="bytes">Reserved article length.</param>
+    private QueueReservation AddReservation(int bytes)
+    {
+        var id = ++_nextReservationId;
+        _reservations.Add(id, bytes);
+        _reservedBytes += bytes;
+        return new QueueReservation(id, bytes);
+    }
+
+    /// <summary>
+    /// Grants reservations to the oldest waiters while the head of the line fits.
+    /// A head that does not fit blocks later waiters, so one session cannot skip the line.
+    /// Completions are published under the lock. Registrations are disposed by the caller
+    /// after the lock is released, so a cancellation callback cannot deadlock on this gate.
+    /// </summary>
+    /// <returns>Granted waiters whose registrations are still outstanding.</returns>
+    private List<ReservationWaiter>? PumpWaiters()
+    {
+        List<ReservationWaiter>? granted = null;
+        while (_waiters.Count > 0)
+        {
+            var head = _waiters.Peek();
+            var accounted = _queuedBytes + _reservedBytes;
+            if (head.Bytes > _maxQueuedBytes || accounted > _maxQueuedBytes - head.Bytes)
+            {
+                return granted;
+            }
+
+            _waiters.Dequeue();
+            var reservation = AddReservation(head.Bytes);
+            head.Completion.TrySetResult(reservation);
+            granted ??= new List<ReservationWaiter>(1);
+            granted.Add(head);
+        }
+
+        return granted;
+    }
+
+    /// <summary>Disposes cancellation registrations for waiters that already have a reservation.</summary>
+    /// <param name="granted">Waiters granted by <see cref="PumpWaiters"/>.</param>
+    private static void DisposeRegistrations(List<ReservationWaiter>? granted)
+    {
+        if (granted is null)
+        {
+            return;
+        }
+
+        foreach (var waiter in granted)
+        {
+            waiter.DisposeRegistration();
+        }
+    }
+
+    /// <summary>Removes a cancelled waiter. A reservation already granted stays with the caller.</summary>
+    /// <param name="waiter">The waiter to drop.</param>
+    private void CancelWaiter(ReservationWaiter waiter)
+    {
+        List<ReservationWaiter>? granted = null;
+        lock (_gate)
+        {
+            if (waiter.Completion.Task.IsCompleted)
+            {
+                return;
+            }
+
+            var removed = false;
+            var kept = new Queue<ReservationWaiter>(_waiters.Count);
+            while (_waiters.Count > 0)
+            {
+                var current = _waiters.Dequeue();
+                if (ReferenceEquals(current, waiter))
+                {
+                    removed = true;
+                    continue;
+                }
+
+                kept.Enqueue(current);
+            }
+
+            while (kept.Count > 0)
+            {
+                _waiters.Enqueue(kept.Dequeue());
+            }
+
+            if (removed)
+            {
+                granted = PumpWaiters();
+            }
+        }
+
+        waiter.DisposeRegistration();
+        waiter.Completion.TrySetCanceled();
+        DisposeRegistrations(granted);
+    }
+
+    /// <summary>One FIFO admission waiter. The completion runs asynchronously.</summary>
+    private sealed class ReservationWaiter
+    {
+        public ReservationWaiter(int bytes, AcceptedArticleQueue owner)
+        {
+            Bytes = bytes;
+            Owner = owner;
+            Completion = new TaskCompletionSource<QueueReservation?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public int Bytes { get; }
+
+        public AcceptedArticleQueue Owner { get; }
+
+        public TaskCompletionSource<QueueReservation?> Completion { get; }
+
+        public CancellationTokenRegistration Registration { get; set; }
+
+        public void DisposeRegistration()
+        {
+            Registration.Dispose();
         }
     }
 }

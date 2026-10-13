@@ -109,6 +109,7 @@ public static class StorageServerServiceCollectionExtensions
                 validateSharedDatabaseFields: false,
                 validateSharedCredentials: false));
         builder.Services.AddSingleton<IValidateOptions<AcmeCloudflareOptions>, TlsOnlyAcmeCloudflareOptionsValidator>();
+        builder.Services.AddSingleton<IDnsPublicationLease, ListenerBoundDnsPublicationLease>();
         builder.Services.AddAcmeCloudflareInfrastructure();
 
         builder.Services.TryAddSingleton<StorageServerRuntimeOptionsSource>();
@@ -201,6 +202,7 @@ public static class StorageServerServiceCollectionExtensions
         builder.Services.AddSingleton(static provider =>
         {
             var listener = provider.GetRequiredService<IOptions<StorageServerOptions>>().Value.Listener;
+            var dns = provider.GetRequiredService<CloudflareDnsReconciliationService>();
             return new StorageVatpListenerService(
                 provider.GetRequiredService<StorageServerRuntimeOptionsSource>(),
                 provider.GetRequiredService<VectorNNTP.Common.Networking.Certificates.ITlsCertificateContextProvider>(),
@@ -208,7 +210,8 @@ public static class StorageServerServiceCollectionExtensions
                 provider.GetRequiredService<IAcmeCertificateReadiness>(),
                 provider.GetRequiredService<ILogger<StorageVatpListenerService>>(),
                 provider.GetRequiredService<IAcceptedArticleQueue>(),
-                new StoreAssemblyAdmission(listener.MaxActiveConnections));
+                new StoreAssemblyAdmission(listener.MaxActiveConnections),
+                publishAfterBind: dns.PublishAfterListenerBoundAsync);
         });
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IApplicationService, StorageVatpListenerService>(static provider =>

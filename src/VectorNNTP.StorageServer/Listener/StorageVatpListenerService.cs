@@ -29,6 +29,12 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
     private readonly IAcceptedArticleQueue? _acceptedArticles;
     private readonly StoreAssemblyAdmission? _storeAdmission;
     private readonly ArticleTransferLimits? _transferLimits;
+
+    /// <summary>
+    /// Publishes DNS after at least one socket is bound. Null skips publication.
+    /// A failure disposes the bound sockets and fails startup before the listener accepts connections.
+    /// </summary>
+    private readonly Func<CancellationToken, Task>? _publishAfterBind;
     private readonly object _gate = new();
     private readonly List<Socket> _listenSockets = [];
     private readonly ConcurrentDictionary<Task, byte> _connections = new();
@@ -66,7 +72,8 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         ILogger<StorageVatpListenerService> logger,
         IAcceptedArticleQueue? acceptedArticles = null,
         StoreAssemblyAdmission? storeAdmission = null,
-        ArticleTransferLimits? transferLimits = null)
+        ArticleTransferLimits? transferLimits = null,
+        Func<CancellationToken, Task>? publishAfterBind = null)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(certificates);
@@ -81,6 +88,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         _acceptedArticles = acceptedArticles;
         _storeAdmission = storeAdmission;
         _transferLimits = transferLimits;
+        _publishAfterBind = publishAfterBind;
     }
 
     /// <summary>
@@ -95,7 +103,8 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         ILogger<StorageVatpListenerService> logger,
         IAcceptedArticleQueue? acceptedArticles,
         StoreAssemblyAdmission? storeAdmission,
-        ArticleTransferLimits? transferLimits = null)
+        ArticleTransferLimits? transferLimits = null,
+        Func<CancellationToken, Task>? publishAfterBind = null)
     {
         ArgumentNullException.ThrowIfNull(runtimeSource);
         ArgumentNullException.ThrowIfNull(certificates);
@@ -110,6 +119,7 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
         _acceptedArticles = acceptedArticles;
         _storeAdmission = storeAdmission;
         _transferLimits = transferLimits;
+        _publishAfterBind = publishAfterBind;
     }
 
     /// <summary>
@@ -202,6 +212,11 @@ public sealed class StorageVatpListenerService : IApplicationService, IAsyncDisp
             if (_listenSockets.Count == 0)
             {
                 throw new InvalidOperationException("Storage VATP Listener failed to bind any endpoint.");
+            }
+
+            if (_publishAfterBind is not null)
+            {
+                await _publishAfterBind(cancellationToken).ConfigureAwait(false);
             }
 
             lock (_gate)

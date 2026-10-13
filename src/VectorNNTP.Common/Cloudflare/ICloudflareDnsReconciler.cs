@@ -36,6 +36,16 @@ namespace VectorNNTP.Common.Cloudflare
             CancellationToken cancellationToken);
 
         /// <summary>
+        /// Gets whether the most recent <see cref="ReconcileAsync"/> on this instance deleted, or began deleting,
+        /// a record that was already present.
+        /// </summary>
+        /// <remarks>
+        /// When this is <see langword="true"/>, compensating cleanup must not delete the desired records created
+        /// by that attempt: the previous records may already be gone. Cloudflare provides no transaction to undo that.
+        /// </remarks>
+        bool DeletedPreExistingDuringLastReconcile { get; }
+
+        /// <summary>
         /// Deletes every DNS record for the exact <paramref name="fqdn"/> (all types), then verifies none remain.
         /// </summary>
         /// <param name="zoneId">Cloudflare zone id.</param>
@@ -56,6 +66,35 @@ namespace VectorNNTP.Common.Cloudflare
         Task RemoveAllRecordsForFqdnAsync(
             string zoneId,
             string fqdn,
+            CancellationToken cancellationToken,
+            TimeSpan? operationTimeout = null);
+
+        /// <summary>
+        /// Lists record ids for the exact <paramref name="fqdn"/> without mutating them.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Exact DNS name.</param>
+        /// <param name="cancellationToken">Cancels the list.</param>
+        /// <returns>Ids of records whose name matches <paramref name="fqdn"/> exactly. Records without an id are omitted.</returns>
+        Task<IReadOnlyList<string>> ListRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Deletes only the given record ids when they still exist for the exact <paramref name="fqdn"/>.
+        /// </summary>
+        /// <param name="zoneId">Cloudflare zone id.</param>
+        /// <param name="fqdn">Exact DNS name. Ids that belong to another name are not deleted.</param>
+        /// <param name="recordIds">Ids created by this process. Other ids on the name are left in place.</param>
+        /// <param name="cancellationToken">Cancels the delete.</param>
+        /// <param name="operationTimeout">Optional wall-clock budget. When null, <c>CloudFlareOperationTimeout</c> is used.</param>
+        /// <returns>A task that completes when every requested id is absent. Already-absent ids are success.</returns>
+        /// <exception cref="CloudflareDnsException">Thrown when a requested id is still present after the delete attempt.</exception>
+        Task DeleteRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            IReadOnlyCollection<string> recordIds,
             CancellationToken cancellationToken,
             TimeSpan? operationTimeout = null);
     }

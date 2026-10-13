@@ -13,6 +13,8 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
 
         public Exception? ReconcileException { get; set; }
 
+        public bool DeletedPreExistingDuringLastReconcile => false;
+
         public Task ReconcileAsync(
             string zoneId,
             string fqdn,
@@ -52,6 +54,31 @@ namespace VectorNNTP.BackFiller.Tests.TestDoubles
                 RemoveCalls.Add((zoneId, fqdn));
             }
 
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<string>> ListRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(zoneId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        }
+
+        public Task DeleteRecordIdsAsync(
+            string zoneId,
+            string fqdn,
+            IReadOnlyCollection<string> recordIds,
+            CancellationToken cancellationToken,
+            TimeSpan? operationTimeout = null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(zoneId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(fqdn);
+            ArgumentNullException.ThrowIfNull(recordIds);
+            cancellationToken.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }

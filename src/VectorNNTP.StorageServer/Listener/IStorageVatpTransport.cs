@@ -10,19 +10,36 @@ public interface IStorageVatpTransport : IAsyncDisposable
 
     /// <summary>Writes bytes and returns how many were accepted.</summary>
     ValueTask<int> WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Suspends or resumes the read no-progress timeout.
+    /// STORE admission suspends it while the client must stay silent, then resumes it
+    /// when that wait ends so a later stall still times out. The default does nothing.
+    /// </summary>
+    /// <param name="suspended"><see langword="true"/> to disarm the outstanding read timer.</param>
+    void SetReadProgressSuspended(bool suspended) { }
 }
 
 /// <summary>
 /// Stream adapter that applies the configured I/O no-progress timeout to each read or write.
-/// Successive operations reuse one timeout source. A session must not overlap a read and a write.
+/// Successive reads reuse one timeout source, and successive writes reuse another.
+/// One read may overlap one write. STORE admission does that when it grants WINDOW while the
+/// session is blocked waiting for the next client frame. Two overlapping reads, or two
+/// overlapping writes, are not supported. A read and a write keep separate timeout sources,
+/// so a WINDOW write that passes <see cref="CancellationToken.None"/> cannot cancel the read.
 /// </summary>
 public sealed class StreamStorageVatpTransport : IStorageVatpTransport
 {
     private readonly Stream _stream;
     private readonly TimeSpan _ioProgressTimeout;
     private readonly bool _leaveInnerStreamOpen;
-    private CancellationTokenSource? _ioTimeout;
-    private CancellationToken _ioTimeoutCaller;
+    private readonly object _readTimeoutGate = new();
+    private readonly object _writeTimeoutGate = new();
+    private CancellationTokenSource? _readTimeout;
+    private CancellationToken _readTimeoutCaller;
+    private CancellationTokenSource? _writeTimeout;
+    private CancellationToken _writeTimeoutCaller;
+    private int _suspendReadProgress;
     private int _disposed;
     private static long _ioTimeoutTicks;
     private static long _streamReadTicks;
@@ -144,7 +161,16 @@ public sealed class StreamStorageVatpTransport : IStorageVatpTransport
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
         var timeoutStarted = Stopwatch.GetTimestamp();
-        var timeoutCts = RentIoTimeout(cancellationToken);
+        CancellationTokenSource timeoutCts;
+        lock (_readTimeoutGate)
+        {
+            timeoutCts = RentIoTimeout(ref _readTimeout, ref _readTimeoutCaller, cancellationToken);
+            if (_suspendReadProgress != 0)
+            {
+                timeoutCts.CancelAfter(Timeout.InfiniteTimeSpan);
+            }
+        }
+
         Interlocked.Add(ref _ioTimeoutTicks, Stopwatch.GetTimestamp() - timeoutStarted);
         try
         {
@@ -181,7 +207,11 @@ public sealed class StreamStorageVatpTransport : IStorageVatpTransport
             return 0;
         }
 
-        var timeoutCts = RentIoTimeout(cancellationToken);
+        CancellationTokenSource timeoutCts;
+        lock (_writeTimeoutGate)
+        {
+            timeoutCts = RentIoTimeout(ref _writeTimeout, ref _writeTimeoutCaller, cancellationToken);
+        }
         try
         {
             var threadId = ThreadCpuTimes.CurrentThreadId;
@@ -214,28 +244,74 @@ public sealed class StreamStorageVatpTransport : IStorageVatpTransport
             return;
         }
 
-        _ioTimeout?.Dispose();
+        CancellationTokenSource? readTimeout;
+        CancellationTokenSource? writeTimeout;
+        lock (_readTimeoutGate)
+        {
+            readTimeout = _readTimeout;
+            _readTimeout = null;
+        }
+
+        lock (_writeTimeoutGate)
+        {
+            writeTimeout = _writeTimeout;
+            _writeTimeout = null;
+        }
+
+        readTimeout?.Dispose();
+        writeTimeout?.Dispose();
         if (!_leaveInnerStreamOpen)
         {
             await _stream.DisposeAsync().ConfigureAwait(false);
         }
     }
 
-    /// <summary>
-    /// Reuses one timeout source for successive operations on this transport.
-    /// The session does not overlap a read and a write, so one source is sufficient.
-    /// </summary>
-    private CancellationTokenSource RentIoTimeout(CancellationToken cancellationToken)
+    /// <inheritdoc />
+    public void SetReadProgressSuspended(bool suspended)
     {
-        var timeout = _ioTimeout;
-        if (timeout is null || _ioTimeoutCaller != cancellationToken || !timeout.TryReset())
+        lock (_readTimeoutGate)
+        {
+            var next = suspended ? 1 : 0;
+            if (_suspendReadProgress == next || Volatile.Read(ref _disposed) == 1)
+            {
+                return;
+            }
+
+            _suspendReadProgress = next;
+            var timeout = _readTimeout;
+            if (timeout is null)
+            {
+                return;
+            }
+
+            try
+            {
+                timeout.CancelAfter(suspended ? Timeout.InfiniteTimeSpan : _ioProgressTimeout);
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reuses one timeout source for successive operations of the same direction.
+    /// Caller holds the gate for that direction. Read and write never share a source.
+    /// </summary>
+    private CancellationTokenSource RentIoTimeout(
+        ref CancellationTokenSource? slot,
+        ref CancellationToken caller,
+        CancellationToken cancellationToken)
+    {
+        var timeout = slot;
+        if (timeout is null || caller != cancellationToken || !timeout.TryReset())
         {
             timeout?.Dispose();
             timeout = cancellationToken.CanBeCanceled
                 ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
                 : new CancellationTokenSource();
-            _ioTimeout = timeout;
-            _ioTimeoutCaller = cancellationToken;
+            slot = timeout;
+            caller = cancellationToken;
         }
 
         timeout.CancelAfter(_ioProgressTimeout);

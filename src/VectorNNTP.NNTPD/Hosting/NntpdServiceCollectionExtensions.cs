@@ -180,6 +180,7 @@ public static class NntpdServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<NntpdOptions>, TransitLeftoverConfigurationValidator>();
         services.AddSingleton<IOptions<AcmeCloudflareOptions>>(static sp =>
             Options.Create<AcmeCloudflareOptions>(sp.GetRequiredService<IOptions<NntpdOptions>>().Value));
+        services.AddSingleton<IDnsPublicationLease, ListenerBoundDnsPublicationLease>();
         services.AddAcmeCloudflareInfrastructure();
 
         services

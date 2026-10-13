@@ -67,7 +67,15 @@ namespace VectorNNTP.Common.Hosting
                     sp.GetRequiredService<ILoggerFactory>()));
             services.TryAddSingleton<IServerCertificateProvider>(static sp =>
                 sp.GetRequiredService<AcmeComponentFactory>().GetCertificateProvider());
-            services.TryAddSingleton<CloudflareDnsReconciliationService>();
+            services.TryAddSingleton(static provider =>
+                new CloudflareDnsReconciliationService(
+                    provider.GetRequiredService<IOptions<AcmeCloudflareOptions>>(),
+                    provider.GetRequiredService<IBindAddressResolver>(),
+                    provider.GetRequiredService<ICloudflareDnsReconciler>(),
+                    provider.GetRequiredService<ILogger<CloudflareDnsReconciliationService>>(),
+                    provider.GetService<IDnsPublicationLease>()));
+            services.TryAddSingleton<IListenerDnsPublication>(static provider =>
+                provider.GetRequiredService<CloudflareDnsReconciliationService>());
             services.TryAddSingleton<AcmeCertificateService>(static sp =>
                 new AcmeCertificateService(
                     sp.GetRequiredService<IOptions<AcmeCloudflareOptions>>(),

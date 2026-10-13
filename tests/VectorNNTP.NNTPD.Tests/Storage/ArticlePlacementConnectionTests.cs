@@ -307,6 +307,25 @@ public sealed class ArticlePlacementConnectionTests
     }
 
     [Fact]
+    public async Task Client_does_not_send_the_body_before_window_credit()
+    {
+        await using var server = StoreServer.Start(initialCredit: 0);
+        await using var client = Client(maxOutstanding: 1, ioTimeout: TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource();
+        var article = CanonicalArticleText.CreateQueued(
+            "<no-body-yet@example.test>",
+            InboundArticleProducer.TakeThis,
+            body: new string('d', 400) + "\r\n");
+        var pending = client.PlaceAsync(article.Record, Entry(server.Port), cts.Token).AsTask();
+        await server.WaitForStoresAsync(1);
+        Assert.Equal(0, server.DataFrames);
+        await cts.CancelAsync();
+        var result = await pending;
+        Assert.Equal(ArticlePlacementKind.Cancelled, result.Kind);
+        Assert.Equal(0, server.DataFrames);
+    }
+
+    [Fact]
     public async Task Timeout_after_end_is_ambiguous()
     {
         await using var server = StoreServer.Start(holdResult: true);
@@ -638,6 +657,11 @@ public sealed class ArticlePlacementConnectionTests
                         credit[frame.Header.StreamId] = InitialCredit;
                         _streamIds.Enqueue(frame.Header.StreamId);
                         order.Add(frame.Header.StreamId);
+                        if (InitialCredit > 0)
+                        {
+                            await WriteAsync(ssl, VatpFrameEncoder.EncodeWindow(frame.Header.StreamId, (uint)InitialCredit));
+                        }
+
                         continue;
                     }
 

@@ -23,6 +23,50 @@ public interface IAcceptedArticleQueue
     /// </returns>
     bool TryEnqueue(AcceptedArticle article);
 
+    /// <summary>Maximum bytes queued plus reserved.</summary>
+    long MaxQueuedBytes { get; }
+
+    /// <summary>Bytes occupied by articles already in the queue.</summary>
+    long QueuedBytes { get; }
+
+    /// <summary>Bytes reserved for admitted transfers that are not yet queued.</summary>
+    long ReservedBytes { get; }
+
+    /// <summary>Queued bytes plus reserved bytes. Both count toward <see cref="MaxQueuedBytes"/>.</summary>
+    long AccountedBytes { get; }
+
+    /// <summary>Admission requests waiting for reserved bytes. They do not hold a reservation yet.</summary>
+    int AdmissionWaiters { get; }
+
+    /// <summary>
+    /// Reserves <paramref name="bytes"/> when no admission is waiting and the reservation fits.
+    /// A false result reserves nothing. Callers that must wait use <see cref="ReserveAsync"/>.
+    /// </summary>
+    /// <param name="bytes">Article body length. Must be at least 1.</param>
+    /// <param name="reservation">The reservation when the method returns <see langword="true"/>.</param>
+    bool TryReserve(int bytes, out QueueReservation reservation);
+
+    /// <summary>
+    /// Reserves <paramref name="bytes"/> immediately or in FIFO order when capacity is short.
+    /// Returns null when the queue is completed or <paramref name="bytes"/> can never fit.
+    /// Cancellation removes the waiter and does not leave a reservation.
+    /// </summary>
+    /// <param name="bytes">Article body length. Must be at least 1.</param>
+    /// <param name="cancellationToken">Cancels the wait. Does not cancel a reservation already returned.</param>
+    ValueTask<QueueReservation?> ReserveAsync(int bytes, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Moves <paramref name="reservation"/> into the queue as <paramref name="article"/>.
+    /// The byte total does not increase. A false result releases the reservation.
+    /// </summary>
+    /// <param name="reservation">An outstanding reservation.</param>
+    /// <param name="article">The received article. Its size must match the reservation.</param>
+    bool TryCommit(QueueReservation reservation, AcceptedArticle article);
+
+    /// <summary>Releases a reservation once. A second release is a no-op.</summary>
+    /// <param name="reservation">The reservation to drop.</param>
+    void Release(QueueReservation reservation);
+
     /// <summary>Articles currently in the queue.</summary>
     int QueuedCount { get; }
 
