@@ -19,6 +19,9 @@
     <InternalsVisibleTo Include="VectorNNTP.StorageServer.Tests" />
     <InternalsVisibleTo Include="VectorNNTP.StorageServer.PersistenceBench" />
     <InternalsVisibleTo Include="VectorNNTP.StorageQualification" />
+    <!-- Storage smoke builds a pre-ingestion record with internal TryCreate(..., ArticlePathMode.Normalize).
+         Public TryCreate always traverses and would prepend an application hop. Normalize stays internal. -->
+    <InternalsVisibleTo Include="VectorNNTP.StorageSmoke" />
   </ItemGroup>
 
   <ItemGroup>

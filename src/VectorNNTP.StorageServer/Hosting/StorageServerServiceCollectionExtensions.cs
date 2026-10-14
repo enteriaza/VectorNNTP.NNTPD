@@ -205,7 +205,7 @@ public static class StorageServerServiceCollectionExtensions
             var dns = provider.GetRequiredService<CloudflareDnsReconciliationService>();
             return new StorageVatpListenerService(
                 provider.GetRequiredService<StorageServerRuntimeOptionsSource>(),
-                provider.GetRequiredService<VectorNNTP.Common.Networking.Certificates.ITlsCertificateContextProvider>(),
+                provider.GetRequiredService<Common.Networking.Certificates.ITlsCertificateContextProvider>(),
                 provider.GetRequiredService<IStorageArticleOpenBoundary>(),
                 provider.GetRequiredService<IAcmeCertificateReadiness>(),
                 provider.GetRequiredService<ILogger<StorageVatpListenerService>>(),

@@ -19,7 +19,7 @@ internal static partial class SegmentPoolLogMessages
 
     [LoggerMessage(
         EventId = 5610,
-        Level = LogLevel.Debug,
+        Level = LogLevel.Trace,
         Message = "Block device sample device={DeviceId} pools={Pools} readBytesPerSecond={ReadBytesPerSecond} writeBytesPerSecond={WriteBytesPerSecond} readIops={ReadIops} writeIops={WriteIops} totalIops={TotalIops} readLatencyMilliseconds={ReadLatencyMilliseconds} writeLatencyMilliseconds={WriteLatencyMilliseconds} activeTimePercent={ActiveTimePercent} averageQueueDepth={AverageQueueDepth} currentQueueDepth={CurrentQueueDepth} intervalMilliseconds={IntervalMilliseconds} counterResets={CounterResets}")]
     public static partial void DeviceSample(
         ILogger logger,
