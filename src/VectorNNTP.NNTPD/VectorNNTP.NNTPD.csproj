@@ -34,7 +34,7 @@
     <PackageReference Include="Serilog.Sinks.File" Version="8.0.0-nblumhardt-02322" />
     <PackageReference Include="StackExchange.Redis" Version="3.3.1" />
     <!-- Sole MySQL provider: maintained ADO.NET driver with net10.0 support. No MySql.Data / EF. -->
-    <PackageReference Include="MySqlConnector" Version="2.6.2" />
+    <PackageReference Include="MySqlConnector" Version="3.0.0" />
     <PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="11.0.0-rc.1.26425.128" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" Version="11.0.0-rc.1.26425.128" />
